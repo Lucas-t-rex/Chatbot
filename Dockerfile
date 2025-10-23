@@ -13,5 +13,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copiar todo o resto do seu projeto para dentro do contêiner
 COPY . .
 
+# INFORMA AO KOYEB QUAL PORTA O APLICATIVO USA
+EXPOSE 5000
+
 # Comando para executar sua aplicação quando o contêiner iniciar
 CMD ["python", "main.py"]
