@@ -14,7 +14,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # INFORMA AO KOYEB QUAL PORTA O APLICATIVO USA
-EXPOSE 5000
+EXPOSE 8000
 
 # Comando para executar sua aplicação quando o contêiner iniciar
 CMD ["python", "main.py"]
