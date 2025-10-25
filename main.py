@@ -6,7 +6,6 @@ from flask import Flask, request, jsonify
 from datetime import datetime
 from dotenv import load_dotenv
 from urllib.parse import urlparse
-from pydub import AudioSegment
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
