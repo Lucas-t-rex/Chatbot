@@ -102,7 +102,7 @@ def receive_webhook():
         if key_info.get('fromMe'):
             return jsonify({"status": "ignored_from_me"}), 200
 
-        sender_number_full = key_info.get('remoteJid')
+        sender_number_full = key_info.get('senderPn') or key_info.get('remoteJid')
         if not sender_number_full:
             print("Ignorando webhook sem 'remoteJid'")
             return jsonify({"status": "ignored_no_sender"}), 200
