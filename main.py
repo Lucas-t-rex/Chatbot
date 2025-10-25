@@ -301,8 +301,8 @@ def receive_webhook():
                 print("❌ 'directPath' do áudio não encontrado no webhook.")
                 return jsonify({"status": "error", "message": "Audio path not found"}), 400
 
-            base_evolution_url = EVOLUTION_API_URL.replace('/message/sendText', '')
-            media_url = f"{base_evolution_url}/media/download"
+            parsed_url = urlparse(EVOLUTION_API_URL)
+            media_url = f"{parsed_url.scheme}://{parsed_url.netloc}/media/download"
             
             headers = {"apikey": EVOLUTION_API_KEY}
             payload = {"path": direct_path}
