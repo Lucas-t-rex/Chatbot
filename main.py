@@ -258,8 +258,20 @@ app = Flask(__name__)
 def receive_webhook():
     """Recebe as mensagens do WhatsApp enviadas pela Evolution API."""
     data = request.json
+    
+    # --- DIAGNÓSTICO "CAIXA-PRETA" ---
+    # Esta linha vai nos mostrar exatamente o que o Koyeb está recebendo.
+    print(f"📦 DADO BRUTO RECEBIDO NO WEBHOOK: {data}")
+    # --- FIM DO DIAGNÓSTICO ---
+
     try:
+        # A API Evolution pode aninhar os dados dentro de uma chave 'data'. Vamos pegar essa chave.
         message_data = data.get('data', {})
+
+        # Se 'data' estiver vazio, talvez o payload principal já seja o que queremos.
+        if not message_data:
+             message_data = data
+
         key_info = message_data.get('key', {})
 
         if key_info.get('fromMe'):
@@ -289,8 +301,6 @@ def receive_webhook():
                 print("❌ 'directPath' do áudio não encontrado no webhook.")
                 return jsonify({"status": "error", "message": "Audio path not found"}), 400
 
-            # --- CORREÇÃO IMPORTANTE APLICADA ---
-            # Remove a parte final da URL para obter a base correta da API Evolution
             base_evolution_url = EVOLUTION_API_URL.replace('/message/sendText', '')
             media_url = f"{base_evolution_url}/media/download"
             
@@ -299,14 +309,14 @@ def receive_webhook():
             
             try:
                 print(f"📥 Baixando áudio via POST para: {media_url}")
-                audio_response = requests.post(media_url, json=payload, headers=headers)
+                audio_response = requests.post(media_url, json=payload, headers=headers, timeout=20)
                 audio_response.raise_for_status()
 
-                # Salva o áudio .ogg diretamente, sem conversão
-                temp_audio_path = f"/tmp/audio_{clean_number}.ogg" # Usando /tmp para Koyeb
+                temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
                 with open(temp_audio_path, 'wb') as f:
                     f.write(audio_response.content)
                 
+                print("✅ Áudio baixado com sucesso. Enviando para transcrição.")
                 transcribed_text = transcrever_audio_gemini(temp_audio_path)
                 
                 os.remove(temp_audio_path)
@@ -314,34 +324,32 @@ def receive_webhook():
                 if transcribed_text:
                     user_message_content = transcribed_text
                 else:
-                    # --- MELHORIA APLICADA ---
                     print("⚠️ A transcrição falhou ou retornou vazia. Avisando o usuário.")
                     send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o seu áudio. Pode tentar novamente? 🎧")
                     return jsonify({"status": "audio_transcription_failed"}), 200
                     
+            except requests.exceptions.HTTPError as e:
+                print(f"❌ ERRO HTTP ao baixar o áudio: {e.response.status_code} - {e.response.text}")
             except requests.exceptions.RequestException as e:
-                print(f"❌ Erro ao baixar o áudio: {e}")
+                print(f"❌ Erro de conexão ao baixar o áudio: {e}")
             except Exception as e:
                 print(f"❌ Erro no processamento do áudio: {e}")
         
         if user_message_content:
-            print("\n----------- NOVA MENSAGEM A PROCESSAR -----------")
-            print(f"De: {sender_name} ({clean_number})")
+            print(f"\n----------- NOVA MENSAGEM A PROCESSAR ({sender_name}) -----------")
             print(f"Conteúdo: {user_message_content}")
-            print("----------------------------------------------")
+            print("----------------------------------------------------------")
 
-            print("🤖 Processando com a Inteligência Artificial...")
             ai_reply = gerar_resposta_ia(clean_number, sender_name, user_message_content)
             print(f"🤖 Resposta gerada: {ai_reply}")
 
             send_whatsapp_message(sender_number_full, ai_reply)
         else:
-            # Esta linha agora só será impressa para tipos de msg que não são texto nem áudio
-            print("➡️ Mensagem ignorada (não é texto ou o áudio já foi tratado).")
+            print("➡️ Mensagem ignorada (não é texto ou o processamento do áudio falhou/foi tratado).")
 
     except Exception as e:
         print(f"❌ Erro inesperado no webhook: {e}")
-        print("DADO RECEBIDO QUE CAUSOU ERRO:", data)
+        print("DADO QUE CAUSOU ERRO:", data)
 
     return jsonify({"status": "success"}), 200
 
