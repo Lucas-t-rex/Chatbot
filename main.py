@@ -294,9 +294,9 @@ def receive_webhook():
             print(f"💬 Mensagem de texto recebida de {sender_name}.")
 
         # ---- LÓGICA DO ÁUDIO CORRIGIDA ----
-        elif message.get('audioMessage') and message['audioMessage'].get('base64'):
+        elif message.get('audioMessage') and message.get('base64'):
             print(f"🎤 Mensagem de áudio com base64 recebida de {sender_name}. Processando...")
-            audio_base64 = message['audioMessage']['base64']
+            audio_base64 = message['base64']
             
             try:
                 print("🔧 Decodificando áudio a partir do base64...")
