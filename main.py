@@ -6,6 +6,7 @@ from flask import Flask, request, jsonify
 from datetime import datetime
 from dotenv import load_dotenv
 from urllib.parse import urlparse
+from pydub import AudioSegment
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
@@ -274,16 +275,12 @@ def receive_webhook():
         sender_name = message_data.get('pushName') or 'Desconhecido'
         
         message = message_data.get('message', {})
-        user_message_content = None # Variável para guardar o texto final
+        user_message_content = None
 
-        # --- LÓGICA PARA IDENTIFICAR O TIPO DE MENSAGEM ---
-
-        # 1. SE FOR MENSAGEM DE TEXTO
         if message.get('conversation') or message.get('extendedTextMessage'):
             user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
             print(f"💬 Mensagem de texto recebida de {sender_name}.")
 
-        # 2. SE FOR MENSAGEM DE ÁUDIO
         elif message.get('audioMessage'):
             print(f"🎤 Mensagem de áudio recebida de {sender_name}. Processando...")
             audio_message = message['audioMessage']
@@ -293,44 +290,41 @@ def receive_webhook():
                 print("❌ 'directPath' do áudio não encontrado no webhook.")
                 return jsonify({"status": "error", "message": "Audio path not found"}), 400
 
-            # Constrói a URL completa para download
-            parsed_url = urlparse(EVOLUTION_API_URL)
-            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
-            media_url = f"{base_url}{direct_path}"
+            # --- CORREÇÃO IMPORTANTE APLICADA ---
+            # Remove a parte final da URL para obter a base correta da API Evolution
+            base_evolution_url = EVOLUTION_API_URL.replace('/message/sendText', '')
+            media_url = f"{base_evolution_url}/media/download"
             
             headers = {"apikey": EVOLUTION_API_KEY}
+            payload = {"path": direct_path}
             
             try:
-                print(f"📥 Baixando áudio de: {media_url}")
-                audio_response = requests.get(media_url, headers=headers)
+                print(f"📥 Baixando áudio via POST para: {media_url}")
+                audio_response = requests.post(media_url, json=payload, headers=headers)
                 audio_response.raise_for_status()
 
-                # Salva o áudio em um arquivo temporário
-                temp_audio_path = f"temp_audio_{clean_number}.ogg"
+                # Salva o áudio .ogg diretamente, sem conversão
+                temp_audio_path = f"/tmp/audio_{clean_number}.ogg" # Usando /tmp para Koyeb
                 with open(temp_audio_path, 'wb') as f:
                     f.write(audio_response.content)
                 
-                # Transcreve o áudio para texto usando a nova função
                 transcribed_text = transcrever_audio_gemini(temp_audio_path)
                 
-                # Apaga o arquivo de áudio temporário do seu servidor
                 os.remove(temp_audio_path)
 
                 if transcribed_text:
-                    user_message_content = transcribed_text # Usa o texto transcrito como mensagem
+                    user_message_content = transcribed_text
                 else:
-                    print("⚠️ A transcrição falhou ou retornou vazia. Ignorando a mensagem.")
-                    # Opcional: Enviar uma mensagem de erro ao usuário
-                    # send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o seu áudio. Pode tentar novamente?")
+                    # --- MELHORIA APLICADA ---
+                    print("⚠️ A transcrição falhou ou retornou vazia. Avisando o usuário.")
+                    send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o seu áudio. Pode tentar novamente? 🎧")
+                    return jsonify({"status": "audio_transcription_failed"}), 200
                     
             except requests.exceptions.RequestException as e:
                 print(f"❌ Erro ao baixar o áudio: {e}")
             except Exception as e:
                 print(f"❌ Erro no processamento do áudio: {e}")
         
-        # --- FIM DA LÓGICA DE IDENTIFICAÇÃO ---
-
-        # 3. SE TIVER UMA MENSAGEM (DE TEXTO OU ÁUDIO TRANSCRITO), PROCESSA COM A IA
         if user_message_content:
             print("\n----------- NOVA MENSAGEM A PROCESSAR -----------")
             print(f"De: {sender_name} ({clean_number})")
@@ -343,7 +337,8 @@ def receive_webhook():
 
             send_whatsapp_message(sender_number_full, ai_reply)
         else:
-            print("➡️ Mensagem não é de texto nem de áudio válido. Ignorando.")
+            # Esta linha agora só será impressa para tipos de msg que não são texto nem áudio
+            print("➡️ Mensagem ignorada (não é texto ou o áudio já foi tratado).")
 
     except Exception as e:
         print(f"❌ Erro inesperado no webhook: {e}")
