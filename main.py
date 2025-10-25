@@ -262,9 +262,12 @@ def receive_webhook():
     print(f"📦 DADO BRUTO RECEBIDO NO WEBHOOK: {data}")
 
     try:
+        # A API Evolution aninha os dados dentro de uma chave 'data'. Vamos pegar essa chave.
         message_data = data.get('data', {})
+
+        # Se 'data' estiver vazio (acontece em alguns eventos), usamos o payload principal.
         if not message_data:
-            message_data = data
+             message_data = data
 
         key_info = message_data.get('key', {})
 
@@ -282,21 +285,19 @@ def receive_webhook():
         message = message_data.get('message', {})
         user_message_content = None
 
+        if not message: # Se o objeto 'message' não existir, ignora
+            print("➡️ Evento sem objeto 'message' (ex: reação, status, etc). Ignorando.")
+            return jsonify({"status": "ignored_no_message"}), 200
+
         if message.get('conversation') or message.get('extendedTextMessage'):
             user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
             print(f"💬 Mensagem de texto recebida de {sender_name}.")
 
-        elif message.get('audioMessage'):
-            print(f"🎤 Mensagem de áudio recebida de {sender_name}. Processando...")
-            audio_message = message['audioMessage']
+        # ---- LÓGICA DO ÁUDIO CORRIGIDA ----
+        elif message.get('audioMessage') and message['audioMessage'].get('base64'):
+            print(f"🎤 Mensagem de áudio com base64 recebida de {sender_name}. Processando...")
+            audio_base64 = message['audioMessage']['base64']
             
-            # --- LÓGICA DE DECODIFICAÇÃO CORRIGIDA ---
-            audio_base64 = audio_message.get('base64')
-
-            if not audio_base64:
-                print("❌ 'base64' do áudio não encontrado no webhook.")
-                return jsonify({"status": "error", "message": "Audio base64 not found"}), 400
-
             try:
                 print("🔧 Decodificando áudio a partir do base64...")
                 audio_data = base64.b64decode(audio_base64)
@@ -330,7 +331,7 @@ def receive_webhook():
 
             send_whatsapp_message(sender_number_full, ai_reply)
         else:
-            print("➡️ Mensagem ignorada (não é texto ou o áudio já foi tratado).")
+            print("➡️ Mensagem ignorada (não é texto ou o processamento do áudio falhou/foi tratado).")
 
     except Exception as e:
         print(f"❌ Erro inesperado no webhook: {e}")
