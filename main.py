@@ -7,6 +7,7 @@ from datetime import datetime
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 import base64
+import threading
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
@@ -258,89 +259,85 @@ def send_whatsapp_message(number, text_message):
 
 app = Flask(__name__)
 
+processed_messages = set()  # para evitar loops
+
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
-    """Recebe as mensagens do WhatsApp enviadas pela Evolution API."""
+    """Recebe mensagens do WhatsApp enviadas pela Evolution API."""
     data = request.json
     print(f"📦 DADO BRUTO RECEBIDO NO WEBHOOK: {data}")
 
     try:
-        # A API Evolution aninha os dados dentro de uma chave 'data'. Vamos pegar essa chave.
-        message_data = data.get('data', {})
-
-        # Se 'data' estiver vazio (acontece em alguns eventos), usamos o payload principal.
-        if not message_data:
-             message_data = data
-
+        message_data = data.get('data', {}) or data
         key_info = message_data.get('key', {})
 
+        # --- 1️⃣ Ignora mensagens enviadas por você mesmo ---
         if key_info.get('fromMe'):
             return jsonify({"status": "ignored_from_me"}), 200
 
-        sender_number_full = key_info.get('senderPn') or key_info.get('remoteJid')
-        if not sender_number_full:
-            print("Ignorando webhook sem 'remoteJid'")
-            return jsonify({"status": "ignored_no_sender"}), 200
-        
-        clean_number = sender_number_full.split('@')[0]
-        sender_name = message_data.get('pushName') or 'Desconhecido'
-        
-        message = message_data.get('message', {})
-        user_message_content = None
+        # --- 2️⃣ Pega o ID único da mensagem ---
+        message_id = key_info.get('id')
+        if not message_id:
+            return jsonify({"status": "ignored_no_id"}), 200
 
-        if not message: # Se o objeto 'message' não existir, ignora
-            print("➡️ Evento sem objeto 'message' (ex: reação, status, etc). Ignorando.")
-            return jsonify({"status": "ignored_no_message"}), 200
+        # --- 3️⃣ Se já processou esta mensagem, ignora ---
+        if message_id in processed_messages:
+            print(f"⚠️ Mensagem {message_id} já processada, ignorando.")
+            return jsonify({"status": "ignored_duplicate"}), 200
+        processed_messages.add(message_id)
+        if len(processed_messages) > 1000:
+            processed_messages.clear()
 
-        if message.get('conversation') or message.get('extendedTextMessage'):
-            user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
-            print(f"💬 Mensagem de texto recebida de {sender_name}.")
 
-        # ---- LÓGICA DO ÁUDIO CORRIGIDA ----
-        elif message.get('audioMessage') and message.get('base64'):
-            print(f"🎤 Mensagem de áudio com base64 recebida de {sender_name}. Processando...")
-            audio_base64 = message['base64']
-            
-            try:
-                print("🔧 Decodificando áudio a partir do base64...")
-                audio_data = base64.b64decode(audio_base64)
-
-                temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
-                with open(temp_audio_path, 'wb') as f:
-                    f.write(audio_data)
-                
-                print("✅ Áudio salvo temporariamente. Enviando para transcrição.")
-                transcribed_text = transcrever_audio_gemini(temp_audio_path)
-                
-                os.remove(temp_audio_path)
-
-                if transcribed_text:
-                    user_message_content = transcribed_text
-                else:
-                    print("⚠️ A transcrição falhou ou retornou vazia. Avisando o usuário.")
-                    send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o seu áudio. Pode tentar novamente? 🎧")
-                    return jsonify({"status": "audio_transcription_failed"}), 200
-                    
-            except Exception as e:
-                print(f"❌ Erro no processamento do áudio: {e}")
-        
-        if user_message_content:
-            print(f"\n----------- NOVA MENSAGEM A PROCESSAR ({sender_name}) -----------")
-            print(f"Conteúdo: {user_message_content}")
-            print("----------------------------------------------------------")
-
-            ai_reply = gerar_resposta_ia(clean_number, sender_name, user_message_content)
-            print(f"🤖 Resposta gerada: {ai_reply}")
-
-            send_whatsapp_message(sender_number_full, ai_reply)
-        else:
-            print("➡️ Mensagem ignorada (não é texto ou o processamento do áudio falhou/foi tratado).")
+        # --- 4️⃣ Retorna imediatamente 200 para evitar reenvio da Evolution ---
+        threading.Thread(target=process_message, args=(message_data,)).start()
+        return jsonify({"status": "received"}), 200
 
     except Exception as e:
         print(f"❌ Erro inesperado no webhook: {e}")
         print("DADO QUE CAUSOU ERRO:", data)
+        return jsonify({"status": "error"}), 500
 
-    return jsonify({"status": "success"}), 200
+
+def process_message(message_data):
+    """Processa a mensagem real (texto ou áudio)."""
+    try:
+        sender_number_full = message_data.get('key', {}).get('senderPn') or message_data.get('key', {}).get('remoteJid')
+        if not sender_number_full:
+            return
+
+        clean_number = sender_number_full.split('@')[0]
+        sender_name = message_data.get('pushName') or 'Desconhecido'
+        message = message_data.get('message', {})
+
+        user_message_content = None
+
+        # --- TEXTO ---
+        if message.get('conversation') or message.get('extendedTextMessage'):
+            user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
+
+        # --- ÁUDIO ---
+        elif message.get('audioMessage') and message.get('base64'):
+            print(f"🎤 Mensagem de áudio recebida de {sender_name}.")
+            audio_base64 = message['base64']
+            audio_data = base64.b64decode(audio_base64)
+            temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
+            with open(temp_audio_path, 'wb') as f:
+                f.write(audio_data)
+            transcribed_text = transcrever_audio_gemini(temp_audio_path)
+            os.remove(temp_audio_path)
+            user_message_content = transcribed_text or "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧"
+
+        if user_message_content:
+            print(f"\n🧠 Processando mensagem de {sender_name}: {user_message_content}")
+            ai_reply = gerar_resposta_ia(clean_number, sender_name, user_message_content)
+            print(f"🤖 Resposta: {ai_reply}")
+            send_whatsapp_message(sender_number_full, ai_reply)
+        else:
+            print("➡️ Mensagem ignorada (sem conteúdo útil).")
+
+    except Exception as e:
+        print(f"❌ Erro ao processar mensagem: {e}")
 
 if __name__ == '__main__':
     if modelo_ia:
