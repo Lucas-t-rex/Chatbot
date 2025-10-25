@@ -222,7 +222,10 @@ def transcrever_audio_gemini(caminho_do_audio):
 
     print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição no Gemini...")
     try:
-        audio_file = genai.upload_file(path=caminho_do_audio)
+        audio_file = genai.upload_file(
+            path=caminho_do_audio, 
+            mime_type="audio/ogg"
+        )
         
         # Pedimos ao modelo para transcrever o áudio
         response = modelo_ia.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
