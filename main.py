@@ -5,6 +5,7 @@ import os
 from flask import Flask, request, jsonify
 from datetime import datetime
 from dotenv import load_dotenv
+from urllib.parse import urlparse
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
@@ -127,6 +128,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
             - Mantenha sempre um tom positivo e proativo.
             - Ajude o cliente a resolver dúvidas e tomar decisões.
             - Entender a nessecidade e vender o plano ideal para a pessoa.
+            - Se a pessoa tiver objeção para não fechar tente enteder o porque.
             - Sempre usar quebra de objeções quando o cliente não querer fechar.
             - Se depois de tentar usar as quebras de objeção a pessoa ainda não querer fechar, ofereça uma semana gratis.
             - Se mesmo oferecendo uma semana gratis, use agradecimentos e despedidas.
@@ -171,6 +173,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
             - Estilo: humano, prestativo e simpático.
             - Emojis: usar com moderação, sempre com propósito.
             - Curiosidade: se o cliente parecer indeciso, ofereça ajuda com sugestões.
+            - Converssas: Não use muitas palavras para não ser cansativo.
 
             =====================================================
             🧩 EXEMPLO DE COMPORTAMENTO
@@ -206,6 +209,36 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
         del conversations[contact_id]
         return "Tive um pequeno problema para processar sua mensagem e precisei reiniciar nossa conversa. Você poderia repetir, por favor?"
 
+def transcrever_audio_gemini(caminho_do_audio):
+    """
+    Envia um arquivo de áudio para a API do Gemini e retorna a transcrição em texto.
+    """
+    global modelo_ia # Vamos reutilizar o modelo Gemini que já foi iniciado
+
+    if not modelo_ia:
+        print("❌ Modelo de IA não inicializado. Impossível transcrever.")
+        return None
+
+    print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição no Gemini...")
+    try:
+        audio_file = genai.upload_file(path=caminho_do_audio)
+        
+        # Pedimos ao modelo para transcrever o áudio
+        response = modelo_ia.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
+        
+        # Opcional, mas recomendado: deletar o arquivo do servidor do Google após o uso
+        genai.delete_file(audio_file.name)
+        
+        if response.text:
+            print(f"✅ Transcrição recebida: '{response.text}'")
+            return response.text
+        else:
+            print("⚠️ A IA não retornou texto para o áudio. Pode ser um áudio sem falas.")
+            return None
+    except Exception as e:
+        print(f"❌ Erro ao transcrever áudio com Gemini: {e}")
+        return None
+
 def send_whatsapp_message(number, text_message):
     """Envia uma mensagem de texto para um número via Evolution API."""
     clean_number = number.split('@')[0]
@@ -238,29 +271,82 @@ def receive_webhook():
             return jsonify({"status": "ignored_no_sender"}), 200
         
         clean_number = sender_number_full.split('@')[0]
+        sender_name = message_data.get('pushName') or 'Desconhecido'
+        
+        message = message_data.get('message', {})
+        user_message_content = None # Variável para guardar o texto final
 
-        message_text = (
-            message_data.get('message', {}).get('conversation') or
-            message_data.get('message', {}).get('extendedTextMessage', {}).get('text')
-        )
+        # --- LÓGICA PARA IDENTIFICAR O TIPO DE MENSAGEM ---
 
-        if message_text:
-            sender_name = message_data.get('pushName') or 'Desconhecido'
+        # 1. SE FOR MENSAGEM DE TEXTO
+        if message.get('conversation') or message.get('extendedTextMessage'):
+            user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
+            print(f"💬 Mensagem de texto recebida de {sender_name}.")
+
+        # 2. SE FOR MENSAGEM DE ÁUDIO
+        elif message.get('audioMessage'):
+            print(f"🎤 Mensagem de áudio recebida de {sender_name}. Processando...")
+            audio_message = message['audioMessage']
+            direct_path = audio_message.get('directPath')
+
+            if not direct_path:
+                print("❌ 'directPath' do áudio não encontrado no webhook.")
+                return jsonify({"status": "error", "message": "Audio path not found"}), 400
+
+            # Constrói a URL completa para download
+            parsed_url = urlparse(EVOLUTION_API_URL)
+            base_url = f"{parsed_url.scheme}://{parsed_url.netloc}"
+            media_url = f"{base_url}{direct_path}"
             
-            print("\n----------- NOVA MENSAGEM RECEBIDA -----------")
+            headers = {"apikey": EVOLUTION_API_KEY}
+            
+            try:
+                print(f"📥 Baixando áudio de: {media_url}")
+                audio_response = requests.get(media_url, headers=headers)
+                audio_response.raise_for_status()
+
+                # Salva o áudio em um arquivo temporário
+                temp_audio_path = f"temp_audio_{clean_number}.ogg"
+                with open(temp_audio_path, 'wb') as f:
+                    f.write(audio_response.content)
+                
+                # Transcreve o áudio para texto usando a nova função
+                transcribed_text = transcrever_audio_gemini(temp_audio_path)
+                
+                # Apaga o arquivo de áudio temporário do seu servidor
+                os.remove(temp_audio_path)
+
+                if transcribed_text:
+                    user_message_content = transcribed_text # Usa o texto transcrito como mensagem
+                else:
+                    print("⚠️ A transcrição falhou ou retornou vazia. Ignorando a mensagem.")
+                    # Opcional: Enviar uma mensagem de erro ao usuário
+                    # send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o seu áudio. Pode tentar novamente?")
+                    
+            except requests.exceptions.RequestException as e:
+                print(f"❌ Erro ao baixar o áudio: {e}")
+            except Exception as e:
+                print(f"❌ Erro no processamento do áudio: {e}")
+        
+        # --- FIM DA LÓGICA DE IDENTIFICAÇÃO ---
+
+        # 3. SE TIVER UMA MENSAGEM (DE TEXTO OU ÁUDIO TRANSCRITO), PROCESSA COM A IA
+        if user_message_content:
+            print("\n----------- NOVA MENSAGEM A PROCESSAR -----------")
             print(f"De: {sender_name} ({clean_number})")
-            print(f"Mensagem: {message_text}")
+            print(f"Conteúdo: {user_message_content}")
             print("----------------------------------------------")
 
             print("🤖 Processando com a Inteligência Artificial...")
-            ai_reply = gerar_resposta_ia(clean_number, sender_name, message_text)
+            ai_reply = gerar_resposta_ia(clean_number, sender_name, user_message_content)
             print(f"🤖 Resposta gerada: {ai_reply}")
 
             send_whatsapp_message(sender_number_full, ai_reply)
+        else:
+            print("➡️ Mensagem não é de texto nem de áudio válido. Ignorando.")
 
     except Exception as e:
         print(f"❌ Erro inesperado no webhook: {e}")
-        # Logar o dado recebido para depuração
         print("DADO RECEBIDO QUE CAUSOU ERRO:", data)
 
     return jsonify({"status": "success"}), 200
