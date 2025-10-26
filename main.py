@@ -363,12 +363,21 @@ def receive_webhook():
 
 
 def process_message(message_data):
-    """Processa a mensagem real (texto ou áudio)."""
+    """Processa a mensagem real (texto ou áudio), agora com filtro de grupo."""
     try:
-        sender_number_full = message_data.get('key', {}).get('senderPn') or message_data.get('key', {}).get('remoteJid')
+        # Pega o JID completo, que pode ser de um usuário ou de um grupo
+        sender_number_full = message_data.get('key', {}).get('remoteJid')
+        
         if not sender_number_full:
             return
 
+        # --- FILTRO ANTI-GRUPO ---
+        # Verifica se o JID termina com '@g.us', indicando que é uma mensagem de grupo.
+        if sender_number_full.endswith('@g.us'):
+            print(f"➡️  Mensagem recebida do grupo {sender_number_full}. Ignorando.")
+            return # Sai da função imediatamente, não processa mais nada.
+        
+        # O resto do código só será executado se NÃO for uma mensagem de grupo.
         clean_number = sender_number_full.split('@')[0]
         sender_name = message_data.get('pushName') or 'Desconhecido'
         message = message_data.get('message', {})
@@ -387,9 +396,15 @@ def process_message(message_data):
             temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
             with open(temp_audio_path, 'wb') as f:
                 f.write(audio_data)
+            
             transcribed_text = transcrever_audio_gemini(temp_audio_path)
             os.remove(temp_audio_path)
-            user_message_content = transcribed_text or "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧"
+            
+            # Melhoria: Se a transcrição falhar, avisa o usuário e para a execução.
+            if not transcribed_text:
+                send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
+                return 
+            user_message_content = transcribed_text
 
         if user_message_content:
             print(f"\n🧠 Processando mensagem de {sender_name}: {user_message_content}")
