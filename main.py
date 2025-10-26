@@ -108,20 +108,21 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
     Gera uma resposta usando a IA, carregando/salvando o histórico no banco de dados
     e usando um cache para conversas ativas.
     """
-    global modelo_ia, conversations_cache # Alterado de 'conversations' para 'conversations_cache'
+    global modelo_ia, conversations_cache
 
     if not modelo_ia:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
 
     if contact_id not in conversations_cache:
-        loaded_history = load_conversation_from_db(contact_id)
+        # A variável aqui se chama `loaded_conversation` para ficar mais claro
+        loaded_conversation = load_conversation_from_db(contact_id)
         
-        if loaded_history:
-            chat = modelo_ia.start_chat(history=loaded_history)
-
+        # Verifica se a conversa foi carregada E se ela contém a chave 'history'
+        if loaded_conversation and 'history' in loaded_conversation:
+            # <<< CORREÇÃO AQUI >>> Passamos apenas a LISTA de histórico para a IA
+            chat = modelo_ia.start_chat(history=loaded_conversation['history'])
         else:
             print(f"Iniciando nova sessão de chat para o contato: {sender_name} ({contact_id})")
-            
    
             horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             historico_anterior = "Nenhum histórico encontrado para esta sessão."
