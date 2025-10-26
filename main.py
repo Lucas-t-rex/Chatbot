@@ -3,12 +3,18 @@ import google.generativeai as genai
 import requests
 import os
 from flask import Flask, request, jsonify
-from datetime import datetime
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
 from urllib.parse import urlparse
 import base64
 import threading
 from pymongo import MongoClient
+from sendgrid import SendGridAPIClient
+from sendgrid.helpers.mail import Mail
+from apscheduler.schedulers.background import BackgroundScheduler
+
+
+CLIENT_NAME = "Neuro Soluções em Tecnologia"
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
@@ -19,9 +25,13 @@ MONGO_DB_URI = os.environ.get("MONGO_DB_URI")
 
 try:
     client = MongoClient(MONGO_DB_URI)
-    db = client.chatbot_db # Nome do banco de dados
-    conversation_collection = db.conversations # Nome da "tabela"
-    print("✅ Conectado ao MongoDB Atlas com sucesso.")
+    
+    db_name = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
+    
+    db = client[db_name] # Conecta ao banco de dados específico do cliente
+    conversation_collection = db.conversations
+    
+    print(f"✅ Conectado ao MongoDB para o cliente: '{CLIENT_NAME}' no banco de dados '{db_name}'")
 except Exception as e:
     print(f"❌ ERRO: Não foi possível conectar ao MongoDB. Erro: {e}")
 
@@ -44,22 +54,26 @@ except Exception as e:
     print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
 
 # ADICIONE ESTE BLOCO NOVO
-def save_conversation_to_db(contact_id, sender_name, chat_session):
-    """Salva ou atualiza o histórico da conversa no MongoDB."""
+def save_conversation_to_db(contact_id, sender_name, chat_session, tokens_used):
+    """Salva o histórico e atualiza a contagem de tokens no MongoDB."""
     try:
         history_list = [
             {'role': msg.role, 'parts': [part.text for part in msg.parts]}
             for msg in chat_session.history
         ]
-        # O comando update_one com upsert=True é perfeito:
-        # ele atualiza se o contato existir, ou insere um novo se não existir.
+        
         conversation_collection.update_one(
             {'_id': contact_id},
-            {'$set': {
-                'sender_name': sender_name,
-                'history': history_list,
-                'last_interaction': datetime.now()
-            }},
+            {
+                '$set': {
+                    'sender_name': sender_name,
+                    'history': history_list,
+                    'last_interaction': datetime.now()
+                },
+                '$inc': {
+                    'total_tokens_consumed': tokens_used
+                }
+            },
             upsert=True
         )
     except Exception as e:
@@ -257,18 +271,27 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
     
     try:
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
+        
+        # --- NOVA LÓGICA DE CONTAGEM DE TOKENS ---
+        # 1. Conta os tokens de entrada (histórico + nova mensagem)
+        input_tokens = modelo_ia.count_tokens(chat_session.history + [{'role':'user', 'parts': [user_message]}]).total_tokens
+        
+        # 2. Envia a mensagem para a IA
         resposta = chat_session.send_message(user_message)
-
-        # --- LÓGICA DE SALVAMENTO (SAVING LOGIC) ---
-        # 5. Após a IA responder, salvamos IMEDIATAMENTE o histórico atualizado no banco de dados.
-        save_conversation_to_db(contact_id, sender_name, chat_session)
+        
+        # 3. Conta os tokens da resposta gerada pela IA
+        output_tokens = modelo_ia.count_tokens(resposta.text).total_tokens
+        total_tokens_na_interacao = input_tokens + output_tokens
+        
+        print(f"📊 Consumo de Tokens: Entrada={input_tokens}, Saída={output_tokens}, Total={total_tokens_na_interacao}")
+        
+        # 4. Salva o histórico E a nova contagem de tokens no banco de dados
+        save_conversation_to_db(contact_id, sender_name, chat_session, total_tokens_na_interacao)
         
         return resposta.text
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
 
-        # Se der erro na comunicação com a IA, limpamos o cache para forçar
-        # o recarregamento do banco de dados na próxima tentativa.
         if contact_id in conversations_cache:
             del conversations_cache[contact_id]
         
@@ -319,6 +342,64 @@ def send_whatsapp_message(number, text_message):
         print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n")
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro ao enviar mensagem para {clean_number}: {e}")
+
+
+def gerar_e_enviar_relatorio_semanal():
+    """Calcula um RESUMO do uso de tokens e envia por e-mail usando SendGrid."""
+    print(f"🗓️ Gerando relatório semanal para o cliente: {CLIENT_NAME}...")
+    
+    SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
+    EMAIL_RELATORIOS = os.environ.get('EMAIL_RELATORIOS')
+
+    if not all([SENDGRID_API_KEY, EMAIL_RELATORIOS]):
+        print("⚠️ Variáveis SENDGRID_API_KEY e EMAIL_RELATORIOS não configuradas. Relatório não pode ser enviado.")
+        return
+
+    hoje = datetime.now()
+    
+    try:
+        usuarios_do_bot = list(conversation_collection.find({}))
+        numero_de_contatos = len(usuarios_do_bot)
+        total_geral_tokens = 0
+        media_por_contato = 0
+
+        if numero_de_contatos > 0:
+            for usuario in usuarios_do_bot:
+                total_geral_tokens += usuario.get('total_tokens_consumed', 0)
+            media_por_contato = total_geral_tokens / numero_de_contatos
+        
+        corpo_email_texto = f"""
+        Relatório de Consumo Acumulado do Cliente: '{CLIENT_NAME}'
+        Data do Relatório: {hoje.strftime('%d/%m/%Y')}
+
+        --- RESUMO GERAL DE USO ---
+
+        👤 Número de Contatos Únicos: {numero_de_contatos}
+        🔥 Consumo Total de Tokens (Acumulado): {total_geral_tokens}
+        📊 Média de Tokens por Contato: {media_por_contato:.0f}
+
+        ---------------------------
+        Atenciosamente,
+        Seu Sistema de Monitoramento.
+        """
+
+        message = Mail(
+            from_email=EMAIL_RELATORIOS,
+            to_emails=EMAIL_RELATORIOS,
+            subject=f"Relatório Semanal de Tokens - {CLIENT_NAME} - {hoje.strftime('%d/%m')}",
+            plain_text_content=corpo_email_texto
+        )
+        
+        sendgrid_client = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sendgrid_client.send(message)
+        
+        if response.status_code == 202:
+             print(f"✅ Relatório semanal para '{CLIENT_NAME}' enviado com sucesso via SendGrid!")
+        else:
+             print(f"❌ Erro ao enviar e-mail via SendGrid. Status: {response.status_code}. Body: {response.body}")
+
+    except Exception as e:
+        print(f"❌ Erro ao gerar ou enviar relatório para '{CLIENT_NAME}': {e}")
 
 app = Flask(__name__)
 
@@ -421,9 +502,20 @@ if __name__ == '__main__':
     if modelo_ia:
         print("\n=============================================")
         print("   CHATBOT WHATSAPP COM IA INICIADO")
+        print(f"   CLIENTE: {CLIENT_NAME}") # Mostra para qual cliente este bot está rodando
         print("=============================================")
         print("Servidor aguardando mensagens no webhook...")
+
+        scheduler = BackgroundScheduler(daemon=True, timezone='America/Sao_Paulo') 
+        # Agenda a função para rodar todo Domingo às 08:00 da manhã
+        scheduler.add_job(gerar_e_enviar_relatorio_semanal, 'cron', day_of_week='sun', hour=8, minute=0)
+        scheduler.start()
+        print("⏰ Agendador de relatórios iniciado. O relatório será enviado todo Domingo às 08:00.")
+        
+        # Garante que o agendador seja desligado corretamente ao sair
+        import atexit
+        atexit.register(lambda: scheduler.shutdown())
         
         app.run(host='0.0.0.0', port=8000)
     else:
-        print("\n encerrando o programa devido a erros na inicialização.")
+        print("\nEncerrando o programa devido a erros na inicialização.")
