@@ -163,7 +163,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
                 missão: {{Facilitar e organizar as empresas de clientes.}}
                 valores: {{Organização, trasparencia,persistencia e ascenção.}}
                 horário de atendimento: {{De segunda-feira a sexta-feira das 8:00 as 18:00}}
-                contatos: {{44991676564}} 
                 endereço: {{R. Pioneiro Alfredo José da Costa, 157 - Jardim Alvorada, Maringá - PR, 87035-270}}
 
                 =====================================================
@@ -286,9 +285,8 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
             
             chat = modelo_ia.start_chat(history=[
                 {'role': 'user', 'parts': [prompt_inicial]},
-                {'role': 'model', 'parts': [f"Entendido. Perfil de personalidade e todas as regras assimiladas. Olá, {sender_name}! Como posso te ajudar?"]}
+                {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro de Intervenção Humana é a prioridade máxima. Estou pronto. Olá, {sender_name}! Como posso te ajudar?"]}
             ])
-        
         # 4. Adicionamos a conversa (nova ou carregada) ao cache para acesso rápido.
         conversations_cache[contact_id] = {'ai_chat_session': chat, 'name': sender_name}
 
