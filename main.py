@@ -470,25 +470,79 @@ def receive_webhook():
         return jsonify({"status": "error"}), 500
 
 
+def handle_responsible_command(message_content, responsible_number):
+    """
+    Processa comandos enviados pelo número do responsável.
+    Retorna True se um comando foi reconhecido e tratado, senão False.
+    """
+    print(f"⚙️ Processando comando do responsável: '{message_content}'")
+    
+    command_parts = message_content.lower().strip().split()
+    
+    # Comando: reativar <numero>
+    if len(command_parts) == 2 and command_parts[0] == "reativar":
+        customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
+        
+        try:
+            # Tenta encontrar o cliente para ver se ele existe
+            customer = conversation_collection.find_one({'_id': customer_number_to_reactivate})
+
+            if not customer:
+                send_whatsapp_message(responsible_number, f"⚠️ *Atenção:* O cliente com o número `{customer_number_to_reactivate}` não foi encontrado no banco de dados.")
+                return True # Comando reconhecido, mas com erro
+
+            # Atualiza o status de intervenção do cliente para False
+            result = conversation_collection.update_one(
+                {'_id': customer_number_to_reactivate},
+                {'$set': {'intervention_active': False}}
+            )
+
+            if result.modified_count > 0:
+                print(f"✅ Sucesso! Automação reativada para {customer_number_to_reactivate}.")
+                # Envia confirmação para o responsável
+                send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
+                # Notifica o cliente que o bot está de volta
+                send_whatsapp_message(customer_number_to_reactivate, "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
+            else:
+                send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi feita.")
+
+        except Exception as e:
+            print(f"❌ Erro ao tentar reativar cliente: {e}")
+            send_whatsapp_message(responsible_number, f"❌ Ocorreu um erro técnico ao tentar reativar o cliente. Verifique o log do sistema.")
+            
+        return True # Indica que o comando foi tratado
+
+    # Se não for um comando conhecido, envia ajuda
+    else:
+        print("⚠️ Comando não reconhecido do responsável.")
+        help_message = (
+            "Comando não reconhecido.\n\n"
+            "Para reativar o atendimento automático de um cliente, envie a mensagem no formato exato:\n"
+            "`reativar <numero_do_cliente>`\n\n"
+            "*Exemplo:*\n`reativar 554491018419`"
+        )
+        send_whatsapp_message(responsible_number, help_message)
+        return True # Indica que a mensagem do responsável foi tratada (mesmo sendo inválida)
+
+
 def process_message(message_data):
     """Processa a mensagem (texto ou áudio) com a nova lógica de intervenção humana."""
     try:
         key_info = message_data.get('key', {})
-        
-        # Lógica final para pegar o número de telefone correto
         sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
 
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
 
         clean_number = sender_number_full.split('@')[0]
-        sender_name = message_data.get('pushName') or 'Desconhecido'
+        sender_name = message_data.get('pushName') or 'Cliente'
         message = message_data.get('message', {})
         user_message_content = None
 
         if message.get('conversation') or message.get('extendedTextMessage'):
             user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
         elif message.get('audioMessage') and message.get('base64'):
+            # (Sua lógica de transcrição de áudio permanece a mesma aqui)
             print(f"🎤 Mensagem de áudio recebida de {sender_name}.")
             audio_base64 = message['base64']
             audio_data = base64.b64decode(audio_base64)
@@ -506,43 +560,29 @@ def process_message(message_data):
             print("➡️ Mensagem ignorada (sem conteúdo útil).")
             return
 
-        # <<< CORREÇÃO DEFINITIVA: LÓGICA DE COMANDO DO RESPONSÁVEL (BLOQUEIO ADMINISTRATIVO) >>>
+        # =================================================================
+        # <<< MUDANÇA CRÍTICA: VERIFICAÇÃO DO RESPONSÁVEL PRIMEIRO >>>
+        # =================================================================
+        # Adicione um print para depuração, para ter certeza dos números
+        print(f"DEBUG: Mensagem de '{clean_number}'. Número do responsável é '{RESPONSIBLE_NUMBER}'.")
+        
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
-            print(f"⚙️ Mensagem recebida do número do responsável: '{user_message_content}'")
-            command_parts = user_message_content.lower().strip().split()
-            
-            if len(command_parts) == 2 and command_parts[0] == "reativar":
-                customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
-                print(f"⚙️ Executando comando para reativar: {customer_number_to_reactivate}")
-                
-                # Atualiza o banco de dados
-                conversation_collection.update_one(
-                    {'_id': customer_number_to_reactivate},
-                    {'$set': {'intervention_active': False}},
-                )
-                
-                # Envia confirmações
-                send_whatsapp_message(RESPONSIBLE_NUMBER, f"✅ Atendimento automático reativado para o cliente {customer_number_to_reactivate}.")
-                send_whatsapp_message(customer_number_to_reactivate, "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
-            else:
-                # Se for qualquer outra mensagem do responsável, avisa sobre o comando correto.
-                print("⚠️ Comando não reconhecido do responsável. Enviando instrução.")
-                send_whatsapp_message(RESPONSIBLE_NUMBER, f"Comando não reconhecido. Para reativar um cliente, por favor, envie a mensagem no formato exato: `reativar <numero_do_cliente>`")
+            handle_responsible_command(user_message_content, clean_number)
+            return # <-- MUITO IMPORTANTE: Para a execução aqui.
 
-            # A linha mais importante: para a execução AQUI para qualquer mensagem do responsável, quebrando o loop.
-            return
-
-        # --- LÓGICA NORMAL PARA CLIENTES (SÓ EXECUTA SE NÃO FOR O RESPONSÁVEL) ---
+        # =================================================================
+        # <<< LÓGICA PARA CLIENTES NORMAIS (SÓ EXECUTA SE NÃO FOR O RESPONSÁVEL) >>>
+        # =================================================================
         conversation_status = conversation_collection.find_one({'_id': clean_number})
         if conversation_status and conversation_status.get('intervention_active', False):
-            print(f"⏸️ Conversa com {sender_name} ({clean_number}) está em modo de intervenção humana. Mensagem ignorada.")
+            print(f"⏸️ Conversa com {sender_name} ({clean_number}) está em modo de intervenção humana. Mensagem do cliente ignorada.")
             return
 
         print(f"\n🧠 Processando mensagem de {sender_name}: {user_message_content}")
         ai_reply = gerar_resposta_ia(clean_number, sender_name, user_message_content)
 
-        if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
-            # (O resto da sua lógica de intervenção permanece exatamente a mesma)
+        if ai_reply and ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
+            # (Sua lógica de notificação de intervenção humana permanece a mesma aqui)
             print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name} ({clean_number})")
             
             conversation_collection.update_one(
@@ -557,10 +597,9 @@ def process_message(message_data):
                 reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                 conversa_db = load_conversation_from_db(clean_number)
                 
+                history_summary = "Nenhum histórico de conversa encontrado."
                 if conversa_db and 'history' in conversa_db:
                     history_summary = get_last_messages_summary(conversa_db['history'])
-                else:
-                    history_summary = "Nenhum histórico de conversa encontrado."
 
                 notification_msg = (
                     f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
@@ -571,13 +610,11 @@ def process_message(message_data):
                     f"-----------------------------------\n"
                     f"*AÇÃO NECESSÁRIA:*\nEntre em contato com o cliente. Após resolver, envie para *ESTE NÚMERO* o comando:\n`reativar {clean_number}`"
                 )
-                
                 send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
-            else:
-                print("⚠️ RESPONSIBLE_NUMBER não definido. Não é possível notificar.")
         else:
-            print(f"🤖 Resposta: {ai_reply}")
-            send_whatsapp_message(sender_number_full, ai_reply)
+            print(f"🤖 Resposta da IA: {ai_reply}")
+            if ai_reply:
+                send_whatsapp_message(sender_number_full, ai_reply)
 
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
