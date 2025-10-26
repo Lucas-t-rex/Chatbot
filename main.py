@@ -15,6 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 
 CLIENT_NAME = "Neuro Soluções em Tecnologia"
+RESPONSIBLE_NUMBER = "5548998389781"
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
@@ -53,7 +54,6 @@ try:
 except Exception as e:
     print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
 
-# ADICIONE ESTE BLOCO NOVO
 def save_conversation_to_db(contact_id, sender_name, chat_session, tokens_used):
     """Salva o histórico e atualiza a contagem de tokens no MongoDB."""
     try:
@@ -85,10 +85,23 @@ def load_conversation_from_db(contact_id):
         result = conversation_collection.find_one({'_id': contact_id})
         if result:
             print(f"🧠 Histórico anterior encontrado e carregado para {contact_id}.")
-            return result['history']
+            return result
     except Exception as e:
         print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
     return None
+
+# <<< NOVO >>> Função para pegar as últimas mensagens e formatar para a notificação
+def get_last_messages_summary(history, max_messages=6):
+    """Formata as últimas mensagens de um histórico para um resumo legível."""
+    summary = []
+    # Pega as últimas `max_messages` do histórico, ignorando o prompt inicial.
+    relevant_history = history[-max_messages:]
+    for message in relevant_history:
+        role = "Cliente" if message['role'] == 'user' else "Bot"
+        text = message['parts'][0].strip()
+        if not text.startswith("Entendido. Perfil de personalidade"): # Ignora a confirmação inicial do bot
+             summary.append(f"*{role}:* {text}")
+    return "\n".join(summary)
 
 def gerar_resposta_ia(contact_id, sender_name, user_message):
     """
@@ -100,20 +113,16 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
     if not modelo_ia:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
 
-    # --- LÓGICA DE CARREGAMENTO (LOADING LOGIC) ---
-    # 1. Se a conversa não está no cache de memória RAM, vamos buscá-la no banco de dados.
     if contact_id not in conversations_cache:
         loaded_history = load_conversation_from_db(contact_id)
         
-        # 2. Se um histórico foi encontrado no banco de dados...
         if loaded_history:
-            # ...iniciamos o chat da IA com esse histórico antigo. A IA "se lembrará" de tudo.
             chat = modelo_ia.start_chat(history=loaded_history)
-        # 3. Se não há histórico no banco de dados, é um usuário completamente novo.
+
         else:
             print(f"Iniciando nova sessão de chat para o contato: {sender_name} ({contact_id})")
             
-            # Mantivemos seu prompt inicial exatamente como estava.
+   
             horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             historico_anterior = "Nenhum histórico encontrado para esta sessão."
             prompt_inicial = f"""
@@ -187,6 +196,28 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
                 Plano Secretário: {{R$500,00 mensal}}
                 plano avançado: {{Em analise}}
                 observações: {{ex: valores podem variar conforme personalização ou integrações extras.}}
+
+                =====================================================
+                🆘 REGRAS DE INTERVENÇÃO HUMANA
+                =====================================================
+                - Sua principal tarefa é identificar quando o cliente PRECISA falar com um humano.
+                - Se o cliente pedir explicitamente para "falar com o dono", "falar com o responsável", "falar com um humano", ou fizer uma pergunta muito complexa que você não sabe responder (ex: um pedido de produto totalmente novo, um desconto muito específico, uma reclamação grave), você DEVE acionar a intervenção humana.
+                - Para acionar a intervenção, sua ÚNICA resposta deve seguir este formato EXATO:
+                  [HUMAN_INTERVENTION] Motivo: [Escreva aqui um resumo curto do porquê o cliente precisa de ajuda]
+                - NÃO responda ao cliente que você vai chamar alguém. O sistema fará isso. Sua única tarefa é retornar a palavra-chave e o motivo.
+
+                - Exemplo 1:
+                  Cliente: "Quero falar com o dono da Neuro Soluções"
+                  Sua Resposta: [HUMAN_INTERVENTION] Motivo: O cliente pediu para falar com o dono.
+
+                - Exemplo 2:
+                  Cliente: "Vocês conseguem fazer um plano com X, Y e Z que não está na lista e me dar um preço especial?"
+                  Sua Resposta: [HUMAN_INTERVENTION] Motivo: O cliente solicita um plano e preço personalizados.
+                  
+                - Exemplo 3:
+                  Cliente: "Obrigado, era só isso."
+                  Sua Resposta: (Você responde normalmente, pois não precisa de intervenção) "De nada! Se precisar de algo mais, estou à disposição.! "
+
                 =====================================================
                 🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO
                 =====================================================
@@ -272,21 +303,17 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
     try:
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
-        # --- NOVA LÓGICA DE CONTAGEM DE TOKENS ---
-        # 1. Conta os tokens de entrada (histórico + nova mensagem)
         input_tokens = modelo_ia.count_tokens(chat_session.history + [{'role':'user', 'parts': [user_message]}]).total_tokens
         
-        # 2. Envia a mensagem para a IA
         resposta = chat_session.send_message(user_message)
-        
-        # 3. Conta os tokens da resposta gerada pela IA
+    
         output_tokens = modelo_ia.count_tokens(resposta.text).total_tokens
         total_tokens_na_interacao = input_tokens + output_tokens
         
         print(f"📊 Consumo de Tokens: Entrada={input_tokens}, Saída={output_tokens}, Total={total_tokens_na_interacao}")
         
-        # 4. Salva o histórico E a nova contagem de tokens no banco de dados
-        save_conversation_to_db(contact_id, sender_name, chat_session, total_tokens_na_interacao)
+        if not resposta.text.strip().startswith("[HUMAN_INTERVENTION]"):
+            save_conversation_to_db(contact_id, sender_name, chat_session, total_tokens_na_interacao)
         
         return resposta.text
     except Exception as e:
@@ -444,32 +471,24 @@ def receive_webhook():
 
 
 def process_message(message_data):
-    """Processa a mensagem real (texto ou áudio), agora com filtro de grupo."""
+    """Processa a mensagem (texto ou áudio) com a nova lógica de intervenção humana."""
     try:
-        # Pega o JID completo, que pode ser de um usuário ou de um grupo
         sender_number_full = message_data.get('key', {}).get('remoteJid')
         
-        if not sender_number_full:
+        if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
 
-        # --- FILTRO ANTI-GRUPO ---
-        # Verifica se o JID termina com '@g.us', indicando que é uma mensagem de grupo.
-        if sender_number_full.endswith('@g.us'):
-            print(f"➡️  Mensagem recebida do grupo {sender_number_full}. Ignorando.")
-            return # Sai da função imediatamente, não processa mais nada.
-        
-        # O resto do código só será executado se NÃO for uma mensagem de grupo.
         clean_number = sender_number_full.split('@')[0]
         sender_name = message_data.get('pushName') or 'Desconhecido'
         message = message_data.get('message', {})
-
         user_message_content = None
 
+        # --- INÍCIO DA LÓGICA UNIFICADA (TEXTO E ÁUDIO) ---
         # --- TEXTO ---
         if message.get('conversation') or message.get('extendedTextMessage'):
             user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
 
-        # --- ÁUDIO ---
+        # --- ÁUDIO (SEU CÓDIGO ORIGINAL INTEGRADO) ---
         elif message.get('audioMessage') and message.get('base64'):
             print(f"🎤 Mensagem de áudio recebida de {sender_name}.")
             audio_base64 = message['base64']
@@ -481,38 +500,102 @@ def process_message(message_data):
             transcribed_text = transcrever_audio_gemini(temp_audio_path)
             os.remove(temp_audio_path)
             
-            # Melhoria: Se a transcrição falhar, avisa o usuário e para a execução.
             if not transcribed_text:
                 send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
                 return 
             user_message_content = transcribed_text
+        # --- FIM DA LÓGICA UNIFICADA ---
 
-        if user_message_content:
-            print(f"\n🧠 Processando mensagem de {sender_name}: {user_message_content}")
-            ai_reply = gerar_resposta_ia(clean_number, sender_name, user_message_content)
+        # Se, após checar texto e áudio, não houver conteúdo, ignora.
+        if not user_message_content:
+            print("➡️ Mensagem ignorada (sem conteúdo útil).")
+            return
+
+        # --- LÓGICA DE INTERVENÇÃO (INICIA AQUI) ---
+        # Comando para o responsável reativar o bot
+        if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
+            command_parts = user_message_content.lower().strip().split()
+            if len(command_parts) == 2 and command_parts[0] == "reativar":
+                customer_number_to_reactivate = command_parts[1]
+                print(f"⚙️ Comando recebido do responsável para reativar: {customer_number_to_reactivate}")
+                
+                conversation_collection.update_one(
+                    {'_id': customer_number_to_reactivate},
+                    {'$set': {'intervention_active': False}},
+                    upsert=True
+                )
+                
+                send_whatsapp_message(sender_number_full, f"✅ Atendimento automático reativado para o cliente {customer_number_to_reactivate}.")
+                send_whatsapp_message(f"{customer_number_to_reactivate}@s.whatsapp.net", "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
+                return
+
+        # Verifica se a conversa está em modo de intervenção humana
+        conversation_status = conversation_collection.find_one({'_id': clean_number})
+        if conversation_status and conversation_status.get('intervention_active', False):
+            print(f"⏸️ Conversa com {sender_name} ({clean_number}) está em modo de intervenção humana. Mensagem ignorada.")
+            return
+
+        # Lógica principal de processamento da IA
+        print(f"\n🧠 Processando mensagem de {sender_name}: {user_message_content}")
+        ai_reply = gerar_resposta_ia(clean_number, sender_name, user_message_content)
+
+        # Se a IA pediu intervenção, executa a lógica de transbordo
+        if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
+            print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name} ({clean_number})")
+            
+            conversation_collection.update_one(
+                {'_id': clean_number},
+                {'$set': {'intervention_active': True}},
+                upsert=True
+            )
+            
+            send_whatsapp_message(sender_number_full, "Entendido. Vou notificar um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
+            
+            if RESPONSIBLE_NUMBER:
+                reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
+                conversa_db = load_conversation_from_db(clean_number)
+                history_summary = "Nenhum histórico recente encontrado."
+                if conversa_db and 'history' in conversa_db:
+                    history_summary = get_last_messages_summary(conversa_db['history'])
+
+                notification_msg = (
+                    f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
+                    f"👤 *Cliente:* {sender_name}\n"
+                    f"📞 *Número:* `{clean_number}`\n\n"
+                    f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
+                    f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
+                    f"-----------------------------------\n"
+                    f"*AÇÃO NECESSÁRIA:*\nEntre em contato com o cliente. Após resolver, envie para *ESTE NÚMERO* o comando:\n`reativar {clean_number}`"
+                )
+                
+                send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
+            else:
+                print("⚠️ RESPONSIBLE_NUMBER não definido. Não é possível notificar.")
+        else:
+            # Se não for intervenção, envia a resposta normal da IA
             print(f"🤖 Resposta: {ai_reply}")
             send_whatsapp_message(sender_number_full, ai_reply)
-        else:
-            print("➡️ Mensagem ignorada (sem conteúdo útil).")
 
     except Exception as e:
-        print(f"❌ Erro ao processar mensagem: {e}")
+        print(f"❌ Erro fatal ao processar mensagem: {e}")
 
 if __name__ == '__main__':
     if modelo_ia:
         print("\n=============================================")
         print("   CHATBOT WHATSAPP COM IA INICIADO")
-        print(f"   CLIENTE: {CLIENT_NAME}") # Mostra para qual cliente este bot está rodando
+        print(f"   CLIENTE: {CLIENT_NAME}")
+        if not RESPONSIBLE_NUMBER:
+            print("   AVISO: 'RESPONSIBLE_NUMBER' não configurado. O recurso de intervenção humana não notificará ninguém.")
+        else:
+            print(f"   Intervenção Humana notificará: {RESPONSIBLE_NUMBER}")
         print("=============================================")
         print("Servidor aguardando mensagens no webhook...")
 
         scheduler = BackgroundScheduler(daemon=True, timezone='America/Sao_Paulo') 
-        # Agenda a função para rodar todo Domingo às 08:00 da manhã
         scheduler.add_job(gerar_e_enviar_relatorio_semanal, 'cron', day_of_week='sun', hour=8, minute=0)
         scheduler.start()
         print("⏰ Agendador de relatórios iniciado. O relatório será enviado todo Domingo às 08:00.")
         
-        # Garante que o agendador seja desligado corretamente ao sair
         import atexit
         atexit.register(lambda: scheduler.shutdown())
         
