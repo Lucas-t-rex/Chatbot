@@ -512,17 +512,20 @@ def process_message(message_data):
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
             command_parts = user_message_content.lower().strip().split()
             if len(command_parts) == 2 and command_parts[0] == "reativar":
-                customer_number_to_reactivate = command_parts[1]
+                customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
                 print(f"⚙️ Comando recebido do responsável para reativar: {customer_number_to_reactivate}")
-                
+
+                # Atualiza o banco
                 conversation_collection.update_one(
                     {'_id': customer_number_to_reactivate},
                     {'$set': {'intervention_active': False}},
                 )
-                
-                send_whatsapp_message(sender_number_full, f"✅ Atendimento automático reativado para o cliente {customer_number_to_reactivate}.")
-                send_whatsapp_message(f"{customer_number_to_reactivate}@s.whatsapp.net", "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
+
+                # Envia confirmações
+                send_whatsapp_message(RESPONSIBLE_NUMBER, f"✅ Atendimento automático reativado para o cliente {customer_number_to_reactivate}.")
+                send_whatsapp_message(customer_number_to_reactivate, "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
                 return
+
 
         conversation_status = conversation_collection.find_one({'_id': clean_number})
         if conversation_status and conversation_status.get('intervention_active', False):
