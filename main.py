@@ -124,16 +124,11 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
 
     if contact_id not in conversations_cache:
-        # A variável aqui se chama `loaded_conversation` para ficar mais claro
-        loaded_conversation = load_conversation_from_db(contact_id)
-        
-        # Verifica se a conversa foi carregada E se ela contém a chave 'history'
-        if contact_id not in conversations_cache:
         # <<< MUDANÇA CRÍTICA: Lógica anti-contaminação de memória >>>
         
         # 1. Sempre criamos o prompt inicial com as regras mais recentes.
-            horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            prompt_inicial = f"""
+        horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        prompt_inicial = f"""
                 A data e hora atuais são: {horario_atual}.
                 O nome do usuário com quem você está falando é: {sender_name}.
 
@@ -287,7 +282,8 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
                 Quando o cliente enviar uma mensagem, cumprimente e inicie o atendimento de forma natural, usando o nome do cliente se disponível, tente entender o que ele precisa e sempre coloque o cliente em primeiro lugar.
                 """
             
-            convo_start = [
+        # 2. Construímos o início da conversa com as regras certas.
+        convo_start = [
             {'role': 'user', 'parts': [prompt_inicial]},
             {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro de Intervenção Humana é a prioridade máxima. Estou pronto. Olá, {sender_name}! Como posso te ajudar?"]}
         ]
