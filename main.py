@@ -128,33 +128,27 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
         loaded_conversation = load_conversation_from_db(contact_id)
         
         # Verifica se a conversa foi carregada E se ela contém a chave 'history'
-        if loaded_conversation and 'history' in loaded_conversation:
-            # <<< CORREÇÃO AQUI >>> Passamos apenas a LISTA de histórico para a IA
-            chat = modelo_ia.start_chat(history=loaded_conversation['history'])
-        else:
-            print(f"Iniciando nova sessão de chat para o contato: {sender_name} ({contact_id})")
-   
+        if contact_id not in conversations_cache:
+        # <<< MUDANÇA CRÍTICA: Lógica anti-contaminação de memória >>>
+        
+        # 1. Sempre criamos o prompt inicial com as regras mais recentes.
             horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            historico_anterior = "Nenhum histórico encontrado para esta sessão."
             prompt_inicial = f"""
                 A data e hora atuais são: {horario_atual}.
                 O nome do usuário com quem você está falando é: {sender_name}.
-                Histórico anterior: {historico_anterior}.
-                Voce é o atendente.
+
                 =====================================================
                 🆘 REGRA DE OURO: ANÁLISE DE INTENÇÃO E INTERVENÇÃO HUMANA (PRIORIDADE MÁXIMA)
                 =====================================================
                 - SUA TAREFA MAIS IMPORTANTE É ANALISAR A INTENÇÃO DO CLIENTE. Se a intenção for falar com um humano, sua única ação é acionar a intervenção. ESTA REGRA SOBREPÕE TODAS AS OUTRAS REGRAS DE COMPORTAMENTO.
                 - CASOS PARA INTERVENÇÃO OBRIGATÓRIA:
-                  - Pedidos explícitos: "falar com o dono", "falar com o responsável", "quero falar com um humano", "falar com o proprietário", "quero fazer um investimento".
-                  - Perguntas complexas sem resposta: Pedidos de produtos/planos que não existem, reclamações graves, negociações de preços especiais.
+                - Pedidos explícitos: "falar com o dono", "falar com o responsável", "quero falar com um humano", "falar com o proprietário", "quero fazer um investimento".
+                - Perguntas complexas sem resposta: Pedidos de produtos/planos que não existem, reclamações graves, negociações de preços especiais.
                 - COMO ACIONAR: Sua ÚNICA resposta DEVE ser a tag abaixo, sem saudações, sem explicações.
-                  [HUMAN_INTERVENTION] Motivo: [Resumo do motivo do cliente]
-                
+                [HUMAN_INTERVENTION] Motivo: [Resumo do motivo do cliente]
                 - O QUE NÃO FAZER (ERRO CRÍTICO):
-                  - ERRADO: Cliente diz "Quero falar com o dono" e você responde "Compreendo, para isso, ligue para o número X...".
-                  - CORRETO: Cliente diz "Quero falar com o dono" e sua resposta é APENAS: [HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o dono.
-                
+                - ERRADO: Cliente diz "Quero falar com o dono" e você responde "Compreendo, para isso, ligue para o número X...".
+                - CORRETO: Cliente diz "Quero falar com o dono" e sua resposta é APENAS: [HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o dono.
                 - Se a intenção do cliente NÃO se encaixar nos casos acima, você deve seguir as regras de atendimento normais abaixo.
                 =====================================================
                 🏷️ IDENTIDADE DO ATENDENTE
@@ -293,23 +287,31 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
                 Quando o cliente enviar uma mensagem, cumprimente e inicie o atendimento de forma natural, usando o nome do cliente se disponível, tente entender o que ele precisa e sempre coloque o cliente em primeiro lugar.
                 """
             
-            chat = modelo_ia.start_chat(history=[
-                {'role': 'user', 'parts': [prompt_inicial]},
-                {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro de Intervenção Humana é a prioridade máxima. Estou pronto. Olá, {sender_name}! Como posso te ajudar?"]}
-            ])
-        # 4. Adicionamos a conversa (nova ou carregada) ao cache para acesso rápido.
+            convo_start = [
+            {'role': 'user', 'parts': [prompt_inicial]},
+            {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro de Intervenção Humana é a prioridade máxima. Estou pronto. Olá, {sender_name}! Como posso te ajudar?"]}
+        ]
+
+        # 3. Tentamos carregar o histórico antigo SE ele existir.
+        loaded_conversation = load_conversation_from_db(contact_id)
+        if loaded_conversation and 'history' in loaded_conversation:
+            print(f"Iniciando chat para {sender_name} com histórico anterior.")
+            # Filtramos o histórico antigo para remover o prompt antigo que estava salvo
+            old_history = [msg for msg in loaded_conversation['history'] if not msg['parts'][0].strip().startswith("A data e hora atuais são:")]
+            chat = modelo_ia.start_chat(history=convo_start + old_history)
+        else:
+            print(f"Iniciando novo chat para {sender_name}.")
+            chat = modelo_ia.start_chat(history=convo_start)
+            
         conversations_cache[contact_id] = {'ai_chat_session': chat, 'name': sender_name}
 
-    # A partir daqui, o código usa a sessão que está no cache.
     chat_session = conversations_cache[contact_id]['ai_chat_session']
     
     try:
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
         input_tokens = modelo_ia.count_tokens(chat_session.history + [{'role':'user', 'parts': [user_message]}]).total_tokens
-        
         resposta = chat_session.send_message(user_message)
-    
         output_tokens = modelo_ia.count_tokens(resposta.text).total_tokens
         total_tokens_na_interacao = input_tokens + output_tokens
         
@@ -319,12 +321,11 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
             save_conversation_to_db(contact_id, sender_name, chat_session, total_tokens_na_interacao)
         
         return resposta.text
+    
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
-
         if contact_id in conversations_cache:
             del conversations_cache[contact_id]
-        
         return "Tive um pequeno problema para processar sua mensagem e precisei reiniciar nossa conversa. Você poderia repetir, por favor?"
     
 def transcrever_audio_gemini(caminho_do_audio):
@@ -478,10 +479,11 @@ def process_message(message_data):
     try:
         key_info = message_data.get('key', {})
         
-        # <<< CORREÇÃO 3: Lógica para pegar o número de telefone correto >>>
-        # Prioriza o 'participant' (em grupos) ou o 'remoteJid' (em DMs).
-        # Isso ajuda a evitar o problema de números com @lid, pegando o JID real da conversa.
-        sender_number_full = key_info.get('participant') or key_info.get('remoteJid')
+        # <<< MUDANÇA CRÍTICA: Lógica final para pegar o número de telefone correto >>>
+        # Prioridade 1: 'senderPn' (Phone Number, a melhor fonte)
+        # Prioridade 2: 'participant' (Geralmente o número real)
+        # Prioridade 3: 'remoteJid' (Como último recurso)
+        sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
 
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
@@ -491,7 +493,6 @@ def process_message(message_data):
         message = message_data.get('message', {})
         user_message_content = None
 
-        # --- Lógica de Texto e Áudio (sem alterações) ---
         if message.get('conversation') or message.get('extendedTextMessage'):
             user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
         elif message.get('audioMessage') and message.get('base64'):
@@ -512,7 +513,6 @@ def process_message(message_data):
             print("➡️ Mensagem ignorada (sem conteúdo útil).")
             return
 
-        # --- LÓGICA DE INTERVENÇÃO (INICIA AQUI) ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
             command_parts = user_message_content.lower().strip().split()
             if len(command_parts) == 2 and command_parts[0] == "reativar":
@@ -526,9 +526,7 @@ def process_message(message_data):
                 
                 send_whatsapp_message(sender_number_full, f"✅ Atendimento automático reativado para o cliente {customer_number_to_reactivate}.")
                 send_whatsapp_message(f"{customer_number_to_reactivate}@s.whatsapp.net", "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
-                
-                # <<< CORREÇÃO 4: Impede o loop de reativação >>>
-                return # Termina a execução aqui para não ser processado pela IA
+                return
 
         conversation_status = conversation_collection.find_one({'_id': clean_number})
         if conversation_status and conversation_status.get('intervention_active', False):
@@ -547,19 +545,16 @@ def process_message(message_data):
                 upsert=True
             )
             
-            # <<< CORREÇÃO 1: Mensagem para o cliente aguardar >>>
             send_whatsapp_message(sender_number_full, "Entendido. Já notifiquei um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
             
             if RESPONSIBLE_NUMBER:
                 reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                 conversa_db = load_conversation_from_db(clean_number)
                 
-                # <<< CORREÇÃO 2: Usa a nova função para um resumo limpo >>>
                 if conversa_db and 'history' in conversa_db:
                     history_summary = get_last_messages_summary(conversa_db['history'])
                 else:
                     history_summary = "Nenhum histórico de conversa encontrado."
-# ...
 
                 notification_msg = (
                     f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
@@ -568,7 +563,7 @@ def process_message(message_data):
                     f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
                     f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
                     f"-----------------------------------\n"
-                    f"*AÇÃO NECESSÁRIA:*\nEntre em contato com o cliente. Após resolver, envie para *ESTE NÚMER* o comando:\n`reativar {clean_number}`"
+                    f"*AÇÃO NECESSÁRIA:*\nEntre em contato com o cliente. Após resolver, envie para *ESTE NÚMERO* o comando:\n`reativar {clean_number}`"
                 )
                 
                 send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
