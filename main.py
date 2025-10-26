@@ -91,16 +91,26 @@ def load_conversation_from_db(contact_id):
     return None
 
 # <<< NOVO >>> Função para pegar as últimas mensagens e formatar para a notificação
-def get_last_messages_summary(history, max_messages=6):
-    """Formata as últimas mensagens de um histórico para um resumo legível."""
+def get_last_messages_summary(history, max_messages=8):
+    """Formata as últimas mensagens de um histórico para um resumo legível, ignorando prompts do sistema."""
     summary = []
-    # Pega as últimas `max_messages` do histórico, ignorando o prompt inicial.
+    # Pega as últimas mensagens do histórico
     relevant_history = history[-max_messages:]
+    
     for message in relevant_history:
+        # Ignora as mensagens iniciais do sistema e do bot que não são parte da conversa real
+        if message['role'] == 'user' and message['parts'][0].strip().startswith("A data e hora atuais são:"):
+            continue # Pula o prompt inicial
+        if message['role'] == 'model' and message['parts'][0].strip().startswith("Entendido. A Regra de Ouro"):
+            continue # Pula a confirmação inicial do bot
+
         role = "Cliente" if message['role'] == 'user' else "Bot"
         text = message['parts'][0].strip()
-        if not text.startswith("Entendido. Perfil de personalidade"): # Ignora a confirmação inicial do bot
-             summary.append(f"*{role}:* {text}")
+        summary.append(f"*{role}:* {text}")
+        
+    if not summary:
+        return "Nenhum histórico de conversa encontrado."
+        
     return "\n".join(summary)
 
 def gerar_resposta_ia(contact_id, sender_name, user_message):
@@ -466,8 +476,13 @@ def receive_webhook():
 def process_message(message_data):
     """Processa a mensagem (texto ou áudio) com a nova lógica de intervenção humana."""
     try:
-        sender_number_full = message_data.get('key', {}).get('remoteJid')
+        key_info = message_data.get('key', {})
         
+        # <<< CORREÇÃO 3: Lógica para pegar o número de telefone correto >>>
+        # Prioriza o 'participant' (em grupos) ou o 'remoteJid' (em DMs).
+        # Isso ajuda a evitar o problema de números com @lid, pegando o JID real da conversa.
+        sender_number_full = key_info.get('participant') or key_info.get('remoteJid')
+
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
 
@@ -476,12 +491,9 @@ def process_message(message_data):
         message = message_data.get('message', {})
         user_message_content = None
 
-        # --- INÍCIO DA LÓGICA UNIFICADA (TEXTO E ÁUDIO) ---
-        # --- TEXTO ---
+        # --- Lógica de Texto e Áudio (sem alterações) ---
         if message.get('conversation') or message.get('extendedTextMessage'):
             user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
-
-        # --- ÁUDIO (SEU CÓDIGO ORIGINAL INTEGRADO) ---
         elif message.get('audioMessage') and message.get('base64'):
             print(f"🎤 Mensagem de áudio recebida de {sender_name}.")
             audio_base64 = message['base64']
@@ -489,23 +501,18 @@ def process_message(message_data):
             temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
             with open(temp_audio_path, 'wb') as f:
                 f.write(audio_data)
-            
             transcribed_text = transcrever_audio_gemini(temp_audio_path)
             os.remove(temp_audio_path)
-            
             if not transcribed_text:
                 send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
                 return 
             user_message_content = transcribed_text
-        # --- FIM DA LÓGICA UNIFICADA ---
 
-        # Se, após checar texto e áudio, não houver conteúdo, ignora.
         if not user_message_content:
             print("➡️ Mensagem ignorada (sem conteúdo útil).")
             return
 
         # --- LÓGICA DE INTERVENÇÃO (INICIA AQUI) ---
-        # Comando para o responsável reativar o bot
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
             command_parts = user_message_content.lower().strip().split()
             if len(command_parts) == 2 and command_parts[0] == "reativar":
@@ -515,24 +522,22 @@ def process_message(message_data):
                 conversation_collection.update_one(
                     {'_id': customer_number_to_reactivate},
                     {'$set': {'intervention_active': False}},
-                    upsert=True
                 )
                 
                 send_whatsapp_message(sender_number_full, f"✅ Atendimento automático reativado para o cliente {customer_number_to_reactivate}.")
                 send_whatsapp_message(f"{customer_number_to_reactivate}@s.whatsapp.net", "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
-                return
+                
+                # <<< CORREÇÃO 4: Impede o loop de reativação >>>
+                return # Termina a execução aqui para não ser processado pela IA
 
-        # Verifica se a conversa está em modo de intervenção humana
         conversation_status = conversation_collection.find_one({'_id': clean_number})
         if conversation_status and conversation_status.get('intervention_active', False):
             print(f"⏸️ Conversa com {sender_name} ({clean_number}) está em modo de intervenção humana. Mensagem ignorada.")
             return
 
-        # Lógica principal de processamento da IA
         print(f"\n🧠 Processando mensagem de {sender_name}: {user_message_content}")
         ai_reply = gerar_resposta_ia(clean_number, sender_name, user_message_content)
 
-        # Se a IA pediu intervenção, executa a lógica de transbordo
         if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
             print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name} ({clean_number})")
             
@@ -542,14 +547,19 @@ def process_message(message_data):
                 upsert=True
             )
             
-            send_whatsapp_message(sender_number_full, "Entendido. Vou notificar um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
+            # <<< CORREÇÃO 1: Mensagem para o cliente aguardar >>>
+            send_whatsapp_message(sender_number_full, "Entendido. Já notifiquei um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
             
             if RESPONSIBLE_NUMBER:
                 reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                 conversa_db = load_conversation_from_db(clean_number)
-                history_summary = "Nenhum histórico recente encontrado."
+                
+                # <<< CORREÇÃO 2: Usa a nova função para um resumo limpo >>>
                 if conversa_db and 'history' in conversa_db:
                     history_summary = get_last_messages_summary(conversa_db['history'])
+                else:
+                    history_summary = "Nenhum histórico de conversa encontrado."
+# ...
 
                 notification_msg = (
                     f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
@@ -558,14 +568,13 @@ def process_message(message_data):
                     f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
                     f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
                     f"-----------------------------------\n"
-                    f"*AÇÃO NECESSÁRIA:*\nEntre em contato com o cliente. Após resolver, envie para *ESTE NÚMERO* o comando:\n`reativar {clean_number}`"
+                    f"*AÇÃO NECESSÁRIA:*\nEntre em contato com o cliente. Após resolver, envie para *ESTE NÚMER* o comando:\n`reativar {clean_number}`"
                 )
                 
                 send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
             else:
                 print("⚠️ RESPONSIBLE_NUMBER não definido. Não é possível notificar.")
         else:
-            # Se não for intervenção, envia a resposta normal da IA
             print(f"🤖 Resposta: {ai_reply}")
             send_whatsapp_message(sender_number_full, ai_reply)
 
