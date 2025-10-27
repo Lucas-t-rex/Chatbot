@@ -487,10 +487,12 @@ def handle_responsible_command(message_content, responsible_number):
     """
     print(f"⚙️  Processando comando do responsável: '{message_content}'")
     
+    # Converte a mensagem para minúsculas para não diferenciar "ok", "OK", "Ok", etc.
     command_parts = message_content.lower().strip().split()
     
-    # --- Comando: reativar <numero> ---
-    if len(command_parts) == 2 and command_parts[0] == "OK":
+    # --- Comando: ok <numero> ---
+    # A verificação agora é feita com "ok" em minúsculas
+    if len(command_parts) == 2 and command_parts[0] == "ok":
         customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
         
         try:
@@ -507,7 +509,7 @@ def handle_responsible_command(message_content, responsible_number):
                 {'$set': {'intervention_active': False}}
             )
 
-            # <<< PONTO CRÍTICO: Limpa o cache da conversa para forçar a releitura do status >>>
+            # Limpa o cache da conversa para forçar a releitura do status
             if customer_number_to_reactivate in conversations_cache:
                 del conversations_cache[customer_number_to_reactivate]
                 print(f"🗑️  Cache da conversa do cliente {customer_number_to_reactivate} limpo com sucesso.")
@@ -516,7 +518,7 @@ def handle_responsible_command(message_content, responsible_number):
                  # Envia confirmação para o responsável
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
                 # Notifica o cliente que o bot está de volta
-                send_whatsapp_message(customer_number_to_reactivate, "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar😊")
+                send_whatsapp_message(customer_number_to_reactivate, "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
 
@@ -643,23 +645,24 @@ def process_message(message_data):
             
             # Notifica o responsável com os detalhes
             if RESPONSIBLE_NUMBER:
-                reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
-                conversa_db = load_conversation_from_db(clean_number)
-                
-                history_summary = "Nenhum histórico de conversa encontrado."
-                if conversa_db and 'history' in conversa_db:
-                    history_summary = get_last_messages_summary(conversa_db['history'])
+                  reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
+                  conversa_db = load_conversation_from_db(clean_number)
+                  
+                  history_summary = "Nenhum histórico de conversa encontrado."
+                  if conversa_db and 'history' in conversa_db:
+                      history_summary = get_last_messages_summary(conversa_db['history'])
 
-                notification_msg = (
-                    f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
-                    f"👤 *Cliente:* {sender_name}\n"
-                    f"📞 *Número:* `{clean_number}`\n\n"
-                    f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
-                    f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
-                    f"-----------------------------------\n"
-                    f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`reativar {clean_number}`"
-                )
-                send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
+                  notification_msg = (
+                      f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
+                      f"👤 *Cliente:* {sender_name}\n"
+                      f"📞 *Número:* `{clean_number}`\n\n"
+                      f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
+                      f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
+                      f"-----------------------------------\n"
+                      # Altere a linha abaixo para usar "ok"
+                      f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`"
+                  )
+                  send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
         
         # Se for uma resposta normal da IA...
         elif ai_reply:
