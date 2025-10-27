@@ -15,7 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 
 CLIENT_NAME = "Neuro Soluções em Tecnologia"
-RESPONSIBLE_NUMBER = "5548998389781"
+RESPONSIBLE_NUMBER = "554898389781"
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
