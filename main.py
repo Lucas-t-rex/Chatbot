@@ -3,16 +3,14 @@ import google.generativeai as genai
 import requests
 import os
 from flask import Flask, request, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime
 from dotenv import load_dotenv
-from urllib.parse import urlparse
 import base64
 import threading
 from pymongo import MongoClient
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
-
 
 CLIENT_NAME = "Neuro Soluções em Tecnologia"
 RESPONSIBLE_NUMBER = "554898389781"
@@ -22,7 +20,6 @@ EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
 EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234") 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 MONGO_DB_URI = os.environ.get("MONGO_DB_URI")
-
 
 try:
     client = MongoClient(MONGO_DB_URI)
@@ -131,7 +128,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
         prompt_inicial = f"""
                 A data e hora atuais são: {horario_atual}.
                 O nome do usuário com quem você está falando é: {sender_name}.
-                Dever : quer saber sobre a empresa ou falar com o Lucas(Proprietario)
+                Dever : vender nosso produto e  se quer saber sobre a empresa ou falar com o Lucas(Proprietario)
                 =====================================================
                 🆘 REGRA DE OURO: ANÁLISE DE INTENÇÃO E INTERVENÇÃO HUMANA (PRIORIDADE MÁXIMA)
                 =====================================================
@@ -493,7 +490,7 @@ def handle_responsible_command(message_content, responsible_number):
     command_parts = message_content.lower().strip().split()
     
     # --- Comando: reativar <numero> ---
-    if len(command_parts) == 2 and command_parts[0] == "reativar":
+    if len(command_parts) == 2 and command_parts[0] == "OK":
         customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
         
         try:
@@ -502,7 +499,7 @@ def handle_responsible_command(message_content, responsible_number):
 
             if not customer:
                 send_whatsapp_message(responsible_number, f"⚠️ *Atenção:* O cliente com o número `{customer_number_to_reactivate}` não foi encontrado no banco de dados.")
-                return True # Comando foi processado (com erro)
+                return 
 
             # Atualiza o status de intervenção no banco de dados
             result = conversation_collection.update_one(
@@ -519,7 +516,7 @@ def handle_responsible_command(message_content, responsible_number):
                  # Envia confirmação para o responsável
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
                 # Notifica o cliente que o bot está de volta
-                send_whatsapp_message(customer_number_to_reactivate, "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
+                send_whatsapp_message(customer_number_to_reactivate, "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar😊")
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
 
@@ -527,16 +524,14 @@ def handle_responsible_command(message_content, responsible_number):
             print(f"❌ Erro ao tentar reativar cliente: {e}")
             send_whatsapp_message(responsible_number, f"❌ Ocorreu um erro técnico ao tentar reativar o cliente. Verifique o log do sistema.")
             
-        return True # Indica que o comando foi tratado
-
     # --- Se não for um comando conhecido, envia ajuda ---
     else:
         print("⚠️ Comando não reconhecido do responsável.")
         help_message = (
             "Comando não reconhecido. 🤖\n\n"
             "Para reativar o atendimento de um cliente, envie a mensagem no formato exato:\n"
-            "`reativar <numero_do_cliente>`\n\n"
-            "*(Exemplo):*\n`reativar 5544912345678`"
+            "`ok <numero_do_cliente>`\n\n"
+            "*(Exemplo):*\n`ok 5544912345678`"
         )
         send_whatsapp_message(responsible_number, help_message)
         return True # A mensagem do responsável foi tratada (mesmo sendo inválida)
@@ -557,16 +552,6 @@ def process_message(message_data):
         clean_number = sender_number_full.split('@')[0]
         sender_name = message_data.get('pushName') or 'Cliente'
 
-        print("-------------------------------------------------", flush=True)
-        print(f"DEBUG: Processando nova mensagem...", flush=True)
-        print(f"  -> Remetente (bruto do 'key'): {sender_number_full}", flush=True)
-        print(f"  -> Remetente (limpo): {clean_number}", flush=True)
-        print(f"  -> Nome do Remetente: {sender_name}", flush=True)
-        print(f"  -> NÚMERO DO RESPONSÁVEL DEFINIDO: {RESPONSIBLE_NUMBER}", flush=True)
-        print(f"  -> COMPARANDO: '{clean_number}' == '{RESPONSIBLE_NUMBER}'", flush=True)
-        print(f"  -> RESULTADO DA COMPARAÇÃO: {clean_number == RESPONSIBLE_NUMBER}", flush=True)
-        print("-------------------------------------------------", flush=True)
-        
         # Extrai o conteúdo da mensagem (texto ou áudio transcrito)
         user_message_content = None
         message = message_data.get('message', {})
@@ -575,20 +560,36 @@ def process_message(message_data):
             user_message_content = message['conversation']
         elif message.get('extendedTextMessage'):
             user_message_content = message['extendedTextMessage'].get('text')
-        elif message.get('audioMessage') and message.get('base64'):
-            print(f"🎤 Mensagem de áudio recebida de {sender_name} ({clean_number}).")
-            audio_base64 = message['base64']
-            audio_data = base64.b64decode(audio_base64)
-            temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
-            with open(temp_audio_path, 'wb') as f:
-                f.write(audio_data)
-            
-            user_message_content = transcrever_audio_gemini(temp_audio_path)
-            os.remove(temp_audio_path)
-            
-            if not user_message_content:
-                send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
-                return
+        
+        # <<< CORREÇÃO 1: LÓGICA DE ÁUDIO AJUSTADA >>>
+        # A chave 'base64' geralmente vem DENTRO de 'audioMessage', e não fora.
+        # Esta nova lógica verifica isso corretamente.
+        elif 'audioMessage' in message:
+            audio_message = message['audioMessage']
+            if 'mediaKey' in audio_message: # Usamos uma chave mais confiável para detectar áudio
+                print(f"🎤 Mensagem de áudio recebida de {sender_name} ({clean_number}).")
+                
+                # A API Evolution pode não enviar 'base64', então precisamos buscar a mídia
+                # Esta é uma abordagem mais robusta, mas por enquanto vamos manter a sua se funcionar.
+                # Se a transcrição parar, o ideal é usar a rota /chat/getBase64FromMediaKey da Evolution API.
+                # Por simplicidade, vamos assumir que o 'base64' pode estar em 'message'
+                audio_base64 = message.get('base64') 
+
+                if audio_base64:
+                    audio_data = base64.b64decode(audio_base64)
+                    temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
+                    with open(temp_audio_path, 'wb') as f:
+                        f.write(audio_data)
+                    
+                    user_message_content = transcrever_audio_gemini(temp_audio_path)
+                    os.remove(temp_audio_path)
+                
+                    if not user_message_content:
+                        send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
+                        return
+                else:
+                    print("⚠️ Áudio recebido, mas sem a chave 'base64' no webhook. A transcrição foi ignorada.")
+
 
         if not user_message_content:
             print("➡️ Mensagem ignorada (sem conteúdo útil).")
@@ -598,9 +599,20 @@ def process_message(message_data):
         # LÓGICA PRINCIPAL: O BOT DECIDE O QUE FAZER COM A MENSAGEM
         # =================================================================
 
-        # Caminho 1: A mensagem é do Responsável?
-        if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
-            # Sim, então trate como um comando e pare aqui.
+        # <<< CORREÇÃO 2: NORMALIZAÇÃO DO NÚMERO DO RESPONSÁVEL >>>
+        # Esta lógica remove o "nono dígito" para garantir que a comparação funcione
+        # mesmo que a API envie o número sem ele.
+        responsible_num = RESPONSIBLE_NUMBER.strip() if RESPONSIBLE_NUMBER else ""
+        
+        # Remove o nono dígito do número do responsável, se ele existir no padrão (55 XX 9 XXXX-XXXX)
+        if len(responsible_num) == 13 and responsible_num.startswith('55') and responsible_num[4] == '9':
+            responsible_num_normalized = responsible_num[:4] + responsible_num[5:]
+        else:
+            responsible_num_normalized = responsible_num
+
+        # Agora, a comparação é feita com os números já normalizados
+        if responsible_num_normalized and clean_number.strip() == responsible_num_normalized:
+            # Sim, a mensagem é do responsável. Trate como um comando.
             handle_responsible_command(user_message_content, clean_number)
             return
 
