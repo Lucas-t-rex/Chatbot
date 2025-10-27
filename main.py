@@ -556,6 +556,16 @@ def process_message(message_data):
 
         clean_number = sender_number_full.split('@')[0]
         sender_name = message_data.get('pushName') or 'Cliente'
+
+        print("-------------------------------------------------", flush=True)
+        print(f"DEBUG: Processando nova mensagem...", flush=True)
+        print(f"  -> Remetente (bruto do 'key'): {sender_number_full}", flush=True)
+        print(f"  -> Remetente (limpo): {clean_number}", flush=True)
+        print(f"  -> Nome do Remetente: {sender_name}", flush=True)
+        print(f"  -> NÚMERO DO RESPONSÁVEL DEFINIDO: {RESPONSIBLE_NUMBER}", flush=True)
+        print(f"  -> COMPARANDO: '{clean_number}' == '{RESPONSIBLE_NUMBER}'", flush=True)
+        print(f"  -> RESULTADO DA COMPARAÇÃO: {clean_number == RESPONSIBLE_NUMBER}", flush=True)
+        print("-------------------------------------------------", flush=True)
         
         # Extrai o conteúdo da mensagem (texto ou áudio transcrito)
         user_message_content = None
