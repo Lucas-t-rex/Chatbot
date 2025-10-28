@@ -11,6 +11,7 @@ from pymongo import MongoClient
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
+import time
 
 CLIENT_NAME = "Neuro Soluções em Tecnologia"
 RESPONSIBLE_NUMBER = "554898389781"
@@ -20,6 +21,7 @@ EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
 EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234") 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 MONGO_DB_URI = os.environ.get("MONGO_DB_URI")
+
 
 try:
     client = MongoClient(MONGO_DB_URI)
@@ -42,6 +44,8 @@ else:
     print("AVISO: A variável de ambiente GEMINI_API_KEY não foi definida.")
 
 conversations_cache = {}
+message_buffer = {}
+message_timers = {}
 
 modelo_ia = None
 try:
@@ -369,8 +373,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
     
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
-        if contact_id in conversations_cache:
-            del conversations_cache[contact_id]
         return "Tive um pequeno problema para processar sua mensagem e precisei reiniciar nossa conversa. Você poderia repetir, por favor?"
     
 def transcrever_audio_gemini(caminho_do_audio):
@@ -512,7 +514,7 @@ def receive_webhook():
         if len(processed_messages) > 1000:
             processed_messages.clear()
 
-        threading.Thread(target=process_message, args=(message_data,)).start()
+        threading.Thread(target=handle_message_buffering, args=(message_data,)).start()
         return jsonify({"status": "received"}), 200
 
     except Exception as e:
@@ -569,9 +571,9 @@ def handle_responsible_command(message_content, responsible_number):
         send_whatsapp_message(responsible_number, help_message)
         return True 
     
-def process_message(message_data):
+def handle_message_buffering(message_data):
     """
-    Processa a mensagem, buscando dados do cliente antes de chamar a IA.
+    Esta função recebe a mensagem, a coloca em um buffer e gerencia um timer.
     """
     try:
         key_info = message_data.get('key', {})
@@ -581,8 +583,7 @@ def process_message(message_data):
             return
 
         clean_number = sender_number_full.split('@')[0]
-        sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
-
+        
         user_message_content = None
         message = message_data.get('message', {})
         
@@ -591,79 +592,107 @@ def process_message(message_data):
         elif message.get('extendedTextMessage'):
             user_message_content = message['extendedTextMessage'].get('text')
         elif message.get('audioMessage') and message.get('base64'):
-            print(f"🎤 Mensagem de áudio recebida de {sender_name_from_wpp} ({clean_number}).")
+            # O tratamento de áudio continua o mesmo
+            print(f"🎤 Mensagem de áudio recebida de {clean_number}. Aguardando timer para transcrever.")
             audio_base64 = message['base64']
             audio_data = base64.b64decode(audio_base64)
             temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
             with open(temp_audio_path, 'wb') as f:
                 f.write(audio_data)
-            
             user_message_content = transcrever_audio_gemini(temp_audio_path)
             os.remove(temp_audio_path)
-            
             if not user_message_content:
                 send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
                 return
-
-        if not user_message_content:
-            print("➡️ Mensagem ignorada (sem conteúdo útil).")
-            return
-
-        if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
-            handle_responsible_command(user_message_content, clean_number)
-            return
-
-        conversation_status = conversation_collection.find_one({'_id': clean_number})
-
-        if conversation_status and conversation_status.get('intervention_active', False):
-            print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
-            return
-
-        known_customer_name = conversation_status.get('customer_name') if conversation_status else None
-        if known_customer_name:
-            print(f"👤 Cliente já conhecido: {known_customer_name} ({clean_number})")
-        else:
-            print(f"👤 Novo cliente ou nome desconhecido. Usando nome do WPP: {sender_name_from_wpp} ({clean_number})")
-
-        print(f"\n🧠  Processando mensagem de {sender_name_from_wpp} ({clean_number}): '{user_message_content}'")
-        ai_reply = gerar_resposta_ia(clean_number, sender_name_from_wpp, user_message_content, known_customer_name)
-
-
-        if ai_reply and ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
-            print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
-            
-            conversation_collection.update_one(
-                {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
-            )
-            
-            send_whatsapp_message(sender_number_full, "Entendido. Já notifiquei um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
-            
-            if RESPONSIBLE_NUMBER:
-                reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
-                display_name = known_customer_name or sender_name_from_wpp
-                
-                conversa_db = load_conversation_from_db(clean_number)
-                history_summary = "Nenhum histórico de conversa encontrado."
-                if conversa_db and 'history' in conversa_db:
-                    history_summary = get_last_messages_summary(conversa_db['history'])
-
-                notification_msg = (
-                    f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
-                    f"👤 *Cliente:* {display_name}\n"
-                    f"📞 *Número:* `{clean_number}`\n\n"
-                    f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
-                    f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
-                    f"-----------------------------------\n"
-                    f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`"
-                )
-                send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
         
-        elif ai_reply:
-            print(f"🤖  Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
-            send_whatsapp_message(sender_number_full, ai_reply)
+        if not user_message_content:
+            return
+
+        # Adiciona a nova mensagem ao buffer do usuário
+        if clean_number not in message_buffer:
+            message_buffer[clean_number] = []
+        message_buffer[clean_number].append(user_message_content)
+        print(f"📥 Mensagem de {clean_number} adicionada ao buffer. Buffer atual: {message_buffer[clean_number]}")
+
+        # Se já existe um timer para este usuário, cancele-o
+        if clean_number in message_timers:
+            message_timers[clean_number].cancel()
+
+        # Inicia um novo timer de 15 segundos
+        # Quando o timer acabar, ele chamará a função _trigger_ai_processing
+        timer = threading.Timer(15.0, _trigger_ai_processing, args=[message_data])
+        message_timers[clean_number] = timer
+        timer.start()
+        print(f"⏳ Timer de 15s iniciado/reiniciado para {clean_number}.")
 
     except Exception as e:
-        print(f"❌ Erro fatal ao processar mensagem: {e}")
+        print(f"❌ Erro ao gerenciar buffer da mensagem: {e}")
+
+def _trigger_ai_processing(message_data):
+    """
+    Esta função é chamada pelo timer. Ela pega todas as mensagens do buffer,
+    junta-as e envia para a IA.
+    """
+    key_info = message_data.get('key', {})
+    sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
+    clean_number = sender_number_full.split('@')[0]
+    sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
+    
+    # Verifica se ainda há mensagens no buffer (poderiam ter sido processadas)
+    if clean_number not in message_buffer:
+        return
+        
+    # Junta todas as mensagens do buffer com uma quebra de linha
+    full_user_message = "\n".join(message_buffer[clean_number])
+    
+    # Limpa o buffer para este usuário
+    del message_buffer[clean_number]
+    del message_timers[clean_number]
+    
+    print(f"⏰ Timer finalizado! Processando mensagem completa de {clean_number}: '{full_user_message}'")
+
+    # A partir daqui, a lógica é a mesma que a sua antiga process_message
+    if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
+        handle_responsible_command(full_user_message, clean_number)
+        return
+
+    conversation_status = conversation_collection.find_one({'_id': clean_number})
+
+    if conversation_status and conversation_status.get('intervention_active', False):
+        print(f"⏸️ Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
+        return
+
+    known_customer_name = conversation_status.get('customer_name') if conversation_status else None
+    
+    ai_reply = gerar_resposta_ia(clean_number, sender_name_from_wpp, full_user_message, known_customer_name)
+
+    if ai_reply and ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
+        # Lógica de intervenção humana (mantida igual)
+        print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
+        conversation_collection.update_one(
+            {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
+        )
+        send_whatsapp_message(sender_number_full, "Entendido. Já notifiquei um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
+        if RESPONSIBLE_NUMBER:
+            reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
+            display_name = known_customer_name or sender_name_from_wpp
+            conversa_db = load_conversation_from_db(clean_number)
+            history_summary = "Nenhum histórico de conversa encontrado."
+            if conversa_db and 'history' in conversa_db:
+                history_summary = get_last_messages_summary(conversa_db['history'])
+            notification_msg = (
+                f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
+                f"👤 *Cliente:* {display_name}\n"
+                f"📞 *Número:* `{clean_number}`\n\n"
+                f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
+                f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
+                f"-----------------------------------\n"
+                f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`"
+            )
+            send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
+    elif ai_reply:
+        print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
+        send_whatsapp_message(sender_number_full, ai_reply)
 
 if __name__ == '__main__':
     if modelo_ia:
