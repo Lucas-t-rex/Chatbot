@@ -26,7 +26,7 @@ try:
     
     db_name = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
     
-    db = client[db_name] # Conecta ao banco de dados específico do cliente
+    db = client[db_name] 
     conversation_collection = db.conversations
     
     print(f"✅ Conectado ao MongoDB para o cliente: '{CLIENT_NAME}' no banco de dados '{db_name}'")
@@ -41,7 +41,6 @@ if GEMINI_API_KEY:
 else:
     print("AVISO: A variável de ambiente GEMINI_API_KEY não foi definida.")
 
-# Cache para conversas ativas (para evitar ler o DB a cada mensagem)
 conversations_cache = {}
 
 modelo_ia = None
@@ -51,22 +50,27 @@ try:
 except Exception as e:
     print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
 
-def save_conversation_to_db(contact_id, sender_name, chat_session, tokens_used):
-    """Salva o histórico e atualiza a contagem de tokens no MongoDB."""
+def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session, tokens_used):
+    """Salva o histórico, nomes e atualiza a contagem de tokens no MongoDB."""
     try:
         history_list = [
             {'role': msg.role, 'parts': [part.text for part in msg.parts]}
             for msg in chat_session.history
         ]
         
+        update_payload = {
+            'sender_name': sender_name, # Nome do contato no WhatsApp (Ex: Gauchão)
+            'history': history_list,
+            'last_interaction': datetime.now()
+        }
+        # Adiciona o nome real do cliente ao payload se ele for conhecido
+        if customer_name:
+            update_payload['customer_name'] = customer_name
+
         conversation_collection.update_one(
             {'_id': contact_id},
             {
-                '$set': {
-                    'sender_name': sender_name,
-                    'history': history_list,
-                    'last_interaction': datetime.now()
-                },
+                '$set': update_payload,
                 '$inc': {
                     'total_tokens_consumed': tokens_used
                 }
@@ -88,7 +92,7 @@ def load_conversation_from_db(contact_id):
     return None
 
 # <<< NOVO >>> Função para pegar as últimas mensagens e formatar para a notificação
-def get_last_messages_summary(history, max_messages=8):
+def get_last_messages_summary(history, max_messages=4):
     """Formata as últimas mensagens de um histórico para um resumo legível, ignorando prompts do sistema."""
     summary = []
     # Pega as últimas mensagens do histórico
@@ -110,10 +114,9 @@ def get_last_messages_summary(history, max_messages=8):
         
     return "\n".join(summary)
 
-def gerar_resposta_ia(contact_id, sender_name, user_message):
+def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name):
     """
-    Gera uma resposta usando a IA, carregando/salvando o histórico no banco de dados
-    e usando um cache para conversas ativas.
+    Gera uma resposta usando a IA, com lógica para perguntar e salvar o nome do cliente.
     """
     global modelo_ia, conversations_cache
 
@@ -121,14 +124,31 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
 
     if contact_id not in conversations_cache:
-        # <<< MUDANÇA CRÍTICA: Lógica anti-contaminação de memória >>>
-        
-        # 1. Sempre criamos o prompt inicial com as regras mais recentes.
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        prompt_name_instruction = ""
+        final_user_name_for_prompt = ""
+
+        if known_customer_name:
+            final_user_name_for_prompt = known_customer_name
+            prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}."
+        else:
+            final_user_name_for_prompt = sender_name # Usamos o nome do contato só na primeira saudação
+            prompt_name_instruction = f"""
+            IMPORTANTE: O nome real do cliente é DESCONHECIDO. O nome de contato '{sender_name}' pode ser um apelido.
+            Sua primeira e única tarefa nesta conversa é descobrir o nome do cliente.
+            1.  PERGUNTE O NOME: Inicie a conversa de forma amigável e pergunte como pode chamá-lo.
+            2.  EXTRAIA E CONFIRME: Após o cliente responder ("Meu nome é João", "Pode me chamar de Maria", etc.), sua PRÓXIMA resposta DEVE OBRIGATORIAMENTE começar com a tag especial: [NOME_CLIENTE]O nome do cliente é: [Nome Extraído].
+            3.  CONTINUE NORMALMENTE: Logo após a tag, continue a conversa respondendo à pergunta original do cliente.
+
+            EXEMPLO DE RESPOSTA SUA APÓS O CLIENTE DIZER O NOME:
+            [NOME_CLIENTE]O nome do cliente é: João. Perfeito, João! Sobre os nossos planos, temos as seguintes opções...
+            """
+
         prompt_inicial = f"""
                 A data e hora atuais são: {horario_atual}.
-                O nome do usuário com quem você está falando é: {sender_name}.
-                Dever : vender nosso produto e  se quer saber sobre a empresa ou falar com o Lucas(Proprietario)
+                {prompt_name_instruction}
+                Dever : vender nosso produto e se quer saber sobre a empresa ou falar com o Lucas(Proprietario)
                 =====================================================
                 🆘 REGRA DE OURO: ANÁLISE DE INTENÇÃO E INTERVENÇÃO HUMANA (PRIORIDADE MÁXIMA)
                 =====================================================
@@ -192,7 +212,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
                                   Faz agendamentos, alterações e cancelamentos de horários ou serviços, conforme solicitado pelo cliente.
 
                                   🔔 Avisos Automáticos:
-                                  Envia notificações e lembretes para o telefone do responsável sempre que houver mudança ou novo agendamento.
+                                  Envia notificações e lembretes para o telefone do responsável sempre que houver mudança ou novo agredamento.
 
                                   💻 Agenda Integrada:
                                   Acompanha um software externo conectado ao WhatsApp, permitindo manter todos os dados organizados e atualizados exatamente como negociado.}}
@@ -261,7 +281,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
                 - Ritmo de conversa: natural e fluido.
                 - Estilo: humano, prestativo e simpático.
                 - Emojis: usar com moderação, sempre com propósito.
-                - Curiosidade: se o cliente parecer indeciso, ofereça ajuda com sugestões.
+                - Curiosidade: se o cliente parecer indecso, ofereça ajuda com sugestões.
                 - Converssas: Não use muitas palavras para não ser cansativo.
 
                 =====================================================
@@ -278,28 +298,26 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
                 =====================================================
                 Quando o cliente enviar uma mensagem, cumprimente e inicie o atendimento de forma natural, usando o nome do cliente se disponível, tente entender o que ele precisa e sempre coloque o cliente em primeiro lugar.
                 """
-            
-        # 2. Construímos o início da conversa com as regras certas.
+
         convo_start = [
             {'role': 'user', 'parts': [prompt_inicial]},
-            {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro de Intervenção Humana é a prioridade máxima. Estou pronto. Olá, {sender_name}! Como posso te ajudar?"]}
+            {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro e a captura do nome do cliente são prioridades. Estou pronto. Olá, {final_user_name_for_prompt}! Como posso te ajudar?"]}
         ]
 
-        # 3. Tentamos carregar o histórico antigo SE ele existir.
         loaded_conversation = load_conversation_from_db(contact_id)
         if loaded_conversation and 'history' in loaded_conversation:
             print(f"Iniciando chat para {sender_name} com histórico anterior.")
-            # Filtramos o histórico antigo para remover o prompt antigo que estava salvo
             old_history = [msg for msg in loaded_conversation['history'] if not msg['parts'][0].strip().startswith("A data e hora atuais são:")]
             chat = modelo_ia.start_chat(history=convo_start + old_history)
         else:
             print(f"Iniciando novo chat para {sender_name}.")
             chat = modelo_ia.start_chat(history=convo_start)
             
-        conversations_cache[contact_id] = {'ai_chat_session': chat, 'name': sender_name}
+        conversations_cache[contact_id] = {'ai_chat_session': chat, 'name': sender_name, 'customer_name': known_customer_name}
 
     chat_session = conversations_cache[contact_id]['ai_chat_session']
-    
+    customer_name_in_cache = conversations_cache[contact_id].get('customer_name')
+
     try:
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
@@ -310,22 +328,44 @@ def gerar_resposta_ia(contact_id, sender_name, user_message):
         
         print(f"📊 Consumo de Tokens: Entrada={input_tokens}, Saída={output_tokens}, Total={total_tokens_na_interacao}")
         
-        if not resposta.text.strip().startswith("[HUMAN_INTERVENTION]"):
-            save_conversation_to_db(contact_id, sender_name, chat_session, total_tokens_na_interacao)
+        ai_reply = resposta.text
+
+        if ai_reply.strip().startswith("[NOME_CLIENTE]"):
+            print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
+            try:
+                name_part = ai_reply.split("O nome do cliente é:")[1].strip()
+                extracted_name = name_part.rstrip('.!?,')
+                
+                conversation_collection.update_one(
+                    {'_id': contact_id},
+                    {'$set': {'customer_name': extracted_name}},
+                    upsert=True
+                )
+                conversations_cache[contact_id]['customer_name'] = extracted_name
+                customer_name_in_cache = extracted_name
+                print(f"✅ Nome '{extracted_name}' salvo para o cliente {contact_id}.")
+                
+                ai_reply = ai_reply.split(name_part)[1].strip()
+
+            except Exception as e:
+                print(f"❌ Erro ao extrair o nome da tag: {e}")
+                ai_reply = ai_reply.replace("[NOME_CLIENTE]", "").strip()
+
+        if not ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
+            save_conversation_to_db(contact_id, sender_name, customer_name_in_cache, chat_session, total_tokens_na_interacao)
         
-        return resposta.text
+        return ai_reply
     
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
         if contact_id in conversations_cache:
             del conversations_cache[contact_id]
         return "Tive um pequeno problema para processar sua mensagem e precisei reiniciar nossa conversa. Você poderia repetir, por favor?"
-    
 def transcrever_audio_gemini(caminho_do_audio):
     """
     Envia um arquivo de áudio para a API do Gemini e retorna a transcrição em texto.
     """
-    global modelo_ia # Vamos reutilizar o modelo Gemini que já foi iniciado
+    global modelo_ia 
 
     if not modelo_ia:
         print("❌ Modelo de IA não inicializado. Impossível transcrever.")
@@ -338,10 +378,7 @@ def transcrever_audio_gemini(caminho_do_audio):
             mime_type="audio/ogg"
         )
         
-        # Pedimos ao modelo para transcrever o áudio
         response = modelo_ia.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
-        
-        # Opcional, mas recomendado: deletar o arquivo do servidor do Google após o uso
         genai.delete_file(audio_file.name)
         
         if response.text:
@@ -366,7 +403,6 @@ def send_whatsapp_message(number, text_message):
         print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n")
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro ao enviar mensagem para {clean_number}: {e}")
-
 
 def gerar_e_enviar_relatorio_semanal():
     """Calcula um RESUMO do uso de tokens e envia por e-mail usando SendGrid."""
@@ -427,7 +463,7 @@ def gerar_e_enviar_relatorio_semanal():
 
 app = Flask(__name__)
 
-processed_messages = set()  # para evitar loops
+processed_messages = set() 
 
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
@@ -439,31 +475,24 @@ def receive_webhook():
         message_data = data.get('data', {}) or data
         key_info = message_data.get('key', {})
 
-        # --- 1️⃣ LÓGICA CORRIGIDA: Ignora mensagens do bot, A MENOS que seja um comando do responsável ---
         if key_info.get('fromMe'):
-            # Pega o número para verificar se é a exceção (o responsável)
             sender_number_full = key_info.get('remoteJid')
             
-            # Por segurança, se não tivermos o número, ignora.
             if not sender_number_full:
                 return jsonify({"status": "ignored_from_me_no_sender"}), 200
 
             clean_number = sender_number_full.split('@')[0]
             
-            # Se o número que enviou a mensagem NÃO for o do responsável, ignora.
-            # Se FOR o do responsável, a função continua.
             if clean_number != RESPONSIBLE_NUMBER:
                 print(f"➡️  Mensagem do próprio bot ignorada (remetente: {clean_number}).")
                 return jsonify({"status": "ignored_from_me"}), 200
             
             print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {clean_number}).")
 
-        # --- 2️⃣ Pega o ID único da mensagem ---
         message_id = key_info.get('id')
         if not message_id:
             return jsonify({"status": "ignored_no_id"}), 200
 
-        # --- 3️⃣ Se já processou esta mensagem, ignora ---
         if message_id in processed_messages:
             print(f"⚠️ Mensagem {message_id} já processada, ignorando.")
             return jsonify({"status": "ignored_duplicate"}), 200
@@ -471,7 +500,6 @@ def receive_webhook():
         if len(processed_messages) > 1000:
             processed_messages.clear()
 
-        # --- 4️⃣ Retorna imediatamente 200 para evitar reenvio da Evolution ---
         threading.Thread(target=process_message, args=(message_data,)).start()
         return jsonify({"status": "received"}), 200
 
@@ -487,38 +515,30 @@ def handle_responsible_command(message_content, responsible_number):
     """
     print(f"⚙️  Processando comando do responsável: '{message_content}'")
     
-    # Converte a mensagem para minúsculas para não diferenciar "ok", "OK", "Ok", etc.
     command_parts = message_content.lower().strip().split()
-    
-    # --- Comando: ok <numero> ---
-    # A verificação agora é feita com "ok" em minúsculas
+
     if len(command_parts) == 2 and command_parts[0] == "ok":
         customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
         
         try:
-            # Tenta encontrar o cliente para garantir que ele existe
             customer = conversation_collection.find_one({'_id': customer_number_to_reactivate})
 
             if not customer:
                 send_whatsapp_message(responsible_number, f"⚠️ *Atenção:* O cliente com o número `{customer_number_to_reactivate}` não foi encontrado no banco de dados.")
                 return 
 
-            # Atualiza o status de intervenção no banco de dados
             result = conversation_collection.update_one(
                 {'_id': customer_number_to_reactivate},
                 {'$set': {'intervention_active': False}}
             )
 
-            # Limpa o cache da conversa para forçar a releitura do status
             if customer_number_to_reactivate in conversations_cache:
                 del conversations_cache[customer_number_to_reactivate]
                 print(f"🗑️  Cache da conversa do cliente {customer_number_to_reactivate} limpo com sucesso.")
 
             if result.modified_count > 0:
-                 # Envia confirmação para o responsável
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
-                # Notifica o cliente que o bot está de volta
-                send_whatsapp_message(customer_number_to_reactivate, "Obrigado por aguardar! Meu assistente virtual já está disponível para continuar nosso atendimento. Como posso te ajudar? 😊")
+                send_whatsapp_message(customer_number_to_reactivate, "Oi sou eu Lyra novamente, voltei pro seu atendimento. se precisar de algo a mais me diga! 😊")
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
 
@@ -526,7 +546,6 @@ def handle_responsible_command(message_content, responsible_number):
             print(f"❌ Erro ao tentar reativar cliente: {e}")
             send_whatsapp_message(responsible_number, f"❌ Ocorreu um erro técnico ao tentar reativar o cliente. Verifique o log do sistema.")
             
-    # --- Se não for um comando conhecido, envia ajuda ---
     else:
         print("⚠️ Comando não reconhecido do responsável.")
         help_message = (
@@ -536,25 +555,22 @@ def handle_responsible_command(message_content, responsible_number):
             "*(Exemplo):*\n`ok 5544912345678`"
         )
         send_whatsapp_message(responsible_number, help_message)
-        return True # A mensagem do responsável foi tratada (mesmo sendo inválida)
+        return True 
     
 def process_message(message_data):
     """
-    Processa a mensagem, primeiro verificando se é um comando do responsável,
-    e somente depois tratando como uma mensagem de cliente.
+    Processa a mensagem, buscando dados do cliente antes de chamar a IA.
     """
     try:
         key_info = message_data.get('key', {})
         sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
 
-        # Ignora mensagens de grupo ou sem remetente
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
 
         clean_number = sender_number_full.split('@')[0]
-        sender_name = message_data.get('pushName') or 'Cliente'
+        sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
-        # Extrai o conteúdo da mensagem (texto ou áudio transcrito)
         user_message_content = None
         message = message_data.get('message', {})
         
@@ -562,111 +578,76 @@ def process_message(message_data):
             user_message_content = message['conversation']
         elif message.get('extendedTextMessage'):
             user_message_content = message['extendedTextMessage'].get('text')
-        
-        # <<< CORREÇÃO 1: LÓGICA DE ÁUDIO AJUSTADA >>>
-        # A chave 'base64' geralmente vem DENTRO de 'audioMessage', e não fora.
-        # Esta nova lógica verifica isso corretamente.
-        elif 'audioMessage' in message:
-            audio_message = message['audioMessage']
-            if 'mediaKey' in audio_message: # Usamos uma chave mais confiável para detectar áudio
-                print(f"🎤 Mensagem de áudio recebida de {sender_name} ({clean_number}).")
-                
-                # A API Evolution pode não enviar 'base64', então precisamos buscar a mídia
-                # Esta é uma abordagem mais robusta, mas por enquanto vamos manter a sua se funcionar.
-                # Se a transcrição parar, o ideal é usar a rota /chat/getBase64FromMediaKey da Evolution API.
-                # Por simplicidade, vamos assumir que o 'base64' pode estar em 'message'
-                audio_base64 = message.get('base64') 
-
-                if audio_base64:
-                    audio_data = base64.b64decode(audio_base64)
-                    temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
-                    with open(temp_audio_path, 'wb') as f:
-                        f.write(audio_data)
-                    
-                    user_message_content = transcrever_audio_gemini(temp_audio_path)
-                    os.remove(temp_audio_path)
-                
-                    if not user_message_content:
-                        send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
-                        return
-                else:
-                    print("⚠️ Áudio recebido, mas sem a chave 'base64' no webhook. A transcrição foi ignorada.")
-
+        elif message.get('audioMessage') and message.get('base64'):
+            print(f"🎤 Mensagem de áudio recebida de {sender_name_from_wpp} ({clean_number}).")
+            audio_base64 = message['base64']
+            audio_data = base64.b64decode(audio_base64)
+            temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
+            with open(temp_audio_path, 'wb') as f:
+                f.write(audio_data)
+            
+            user_message_content = transcrever_audio_gemini(temp_audio_path)
+            os.remove(temp_audio_path)
+            
+            if not user_message_content:
+                send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
+                return
 
         if not user_message_content:
             print("➡️ Mensagem ignorada (sem conteúdo útil).")
             return
 
-        # =================================================================
-        # LÓGICA PRINCIPAL: O BOT DECIDE O QUE FAZER COM A MENSAGEM
-        # =================================================================
-
-        # <<< CORREÇÃO 2: NORMALIZAÇÃO DO NÚMERO DO RESPONSÁVEL >>>
-        # Esta lógica remove o "nono dígito" para garantir que a comparação funcione
-        # mesmo que a API envie o número sem ele.
-        responsible_num = RESPONSIBLE_NUMBER.strip() if RESPONSIBLE_NUMBER else ""
-        
-        # Remove o nono dígito do número do responsável, se ele existir no padrão (55 XX 9 XXXX-XXXX)
-        if len(responsible_num) == 13 and responsible_num.startswith('55') and responsible_num[4] == '9':
-            responsible_num_normalized = responsible_num[:4] + responsible_num[5:]
-        else:
-            responsible_num_normalized = responsible_num
-
-        # Agora, a comparação é feita com os números já normalizados
-        if responsible_num_normalized and clean_number.strip() == responsible_num_normalized:
-            # Sim, a mensagem é do responsável. Trate como um comando.
+        if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
             handle_responsible_command(user_message_content, clean_number)
             return
 
-        # Caminho 2: A mensagem é de um Cliente.
-        # (Esta parte só executa se o 'if' acima for falso)
-        
-        # O bot está pausado para este cliente?
         conversation_status = conversation_collection.find_one({'_id': clean_number})
+
         if conversation_status and conversation_status.get('intervention_active', False):
-            print(f"⏸️  Conversa com {sender_name} ({clean_number}) pausada para atendimento humano.")
+            print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
             return
 
-        # Se não estiver pausado, processe com a IA.
-        print(f"\n🧠  Processando mensagem de {sender_name} ({clean_number}): '{user_message_content}'")
-        ai_reply = gerar_resposta_ia(clean_number, sender_name, user_message_content)
+        known_customer_name = conversation_status.get('customer_name') if conversation_status else None
+        if known_customer_name:
+            print(f"👤 Cliente já conhecido: {known_customer_name} ({clean_number})")
+        else:
+            print(f"👤 Novo cliente ou nome desconhecido. Usando nome do WPP: {sender_name_from_wpp} ({clean_number})")
 
-        # Se a IA pediu ajuda humana...
+        print(f"\n🧠  Processando mensagem de {sender_name_from_wpp} ({clean_number}): '{user_message_content}'")
+        ai_reply = gerar_resposta_ia(clean_number, sender_name_from_wpp, user_message_content, known_customer_name)
+
+
         if ai_reply and ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
-            print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name} ({clean_number})")
+            print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
             
-            # Pausa o bot para este cliente
             conversation_collection.update_one(
                 {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
             )
             
-            # Avisa o cliente
             send_whatsapp_message(sender_number_full, "Entendido. Já notifiquei um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
             
-            # Notifica o responsável com os detalhes
             if RESPONSIBLE_NUMBER:
-                  reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
-                  conversa_db = load_conversation_from_db(clean_number)
-                  
-                  history_summary = "Nenhum histórico de conversa encontrado."
-                  if conversa_db and 'history' in conversa_db:
-                      history_summary = get_last_messages_summary(conversa_db['history'])
+                reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
+                display_name = known_customer_name or sender_name_from_wpp
+                
+                conversa_db = load_conversation_from_db(clean_number)
+                history_summary = "Nenhum histórico de conversa encontrado."
+                if conversa_db and 'history' in conversa_db:
+                    history_summary = get_last_messages_summary(conversa_db['history'])
 
-                  notification_msg = (
-                      f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
-                      f"👤 *Cliente:* {sender_name}\n"
-                      f"📞 *Número:* `{clean_number}`\n\n"
-                      f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
-                      f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
-                      f"-----------------------------------\n"
-                      # Altere a linha abaixo para usar "ok"
-                      f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`"
-                  )
-                  send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
+                notification_msg = (
+                    f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
+                    f"👤 *Cliente:* {display_name}\n"
+                    f"📞 *Número:* `{clean_number}`\n\n"
+                    f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
+                    f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
+                    f"-----------------------------------\n"
+                    f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`reativar {clean_number}`"
+                )
+                send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
         
-        # Se for uma resposta normal da IA...
         elif ai_reply:
-            print(f"🤖  Resposta da IA para {sender_name}: {ai_reply}")
+            print(f"🤖  Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
             send_whatsapp_message(sender_number_full, ai_reply)
 
     except Exception as e:
