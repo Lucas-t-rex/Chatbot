@@ -653,7 +653,7 @@ def process_message(message_data):
                     f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
                     f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
                     f"-----------------------------------\n"
-                    f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`reativar {clean_number}`"
+                    f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`"
                 )
                 send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
         
