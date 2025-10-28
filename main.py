@@ -131,18 +131,24 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
 
         if known_customer_name:
             final_user_name_for_prompt = known_customer_name
-            prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}."
+            prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este nome."
         else:
-            final_user_name_for_prompt = sender_name # Usamos o nome do contato só na primeira saudação
+            # <<< MUDANÇA CRÍTICA NO PROMPT >>>
+            # A instrução agora é muito mais direta e enfática.
+            final_user_name_for_prompt = sender_name
             prompt_name_instruction = f"""
-            IMPORTANTE: O nome real do cliente é DESCONHECIDO. O nome de contato '{sender_name}' pode ser um apelido.
-            Sua primeira e única tarefa nesta conversa é descobrir o nome do cliente.
-            1.  PERGUNTE O NOME: Inicie a conversa de forma amigável e pergunte como pode chamá-lo.
-            2.  EXTRAIA E CONFIRME: Após o cliente responder ("Meu nome é João", "Pode me chamar de Maria", etc.), sua PRÓXIMA resposta DEVE OBRIGATORIAMENTE começar com a tag especial: [NOME_CLIENTE]O nome do cliente é: [Nome Extraído].
-            3.  CONTINUE NORMALMENTE: Logo após a tag, continue a conversa respondendo à pergunta original do cliente.
+            REGRA CRÍTICA - CAPTURA DE NOME (PRIORIDADE MÁXIMA):
+            O nome real do cliente é DESCONHECIDO. O nome de contato '{sender_name}' é um apelido e NÃO deve ser usado.
+            1. Sua primeira tarefa é perguntar o nome do cliente de forma educada.
+            2. Se o cliente responder com o que parece ser um nome (ex: "Meu nome é João", "Pode me chamar de Maria", "Dani"), sua resposta DEVE, OBRIGATORIAMENTE E SEM EXCEÇÃO, seguir este formato exato:
+               [NOME_CLIENTE]O nome do cliente é: [Nome Extraído]. (aqui você continua a conversa normalmente)
+            3. Esta é sua prioridade máxima. Não responda a outras perguntas antes de ter o nome e ter usado a tag.
 
-            EXEMPLO DE RESPOSTA SUA APÓS O CLIENTE DIZER O NOME:
-            [NOME_CLIENTE]O nome do cliente é: João. Perfeito, João! Sobre os nossos planos, temos as seguintes opções...
+            EXEMPLO DE INTERAÇÃO CORRETA:
+            Cliente: "oi"
+            Você: "Olá! Como posso te chamar?"
+            Cliente: "Meu nome é Carlos"
+            Sua Resposta: "[NOME_CLIENTE]O nome do cliente é: Carlos. Prazer em conhecê-lo, Carlos! Como posso ajudar?"
             """
 
         prompt_inicial = f"""
@@ -301,7 +307,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
 
         convo_start = [
             {'role': 'user', 'parts': [prompt_inicial]},
-            {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro e a captura do nome do cliente são prioridades. Estou pronto. Olá, {final_user_name_for_prompt}! Como posso te ajudar?"]}
+            {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro e a captura de nome são prioridades. Estou pronto. Olá, {final_user_name_for_prompt}! Como posso te ajudar?"]}
         ]
 
         loaded_conversation = load_conversation_from_db(contact_id)
@@ -333,7 +339,9 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
         if ai_reply.strip().startswith("[NOME_CLIENTE]"):
             print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
             try:
+                # Extrai a parte da string que contém o nome
                 name_part = ai_reply.split("O nome do cliente é:")[1].strip()
+                # Remove pontuação final para obter o nome limpo
                 extracted_name = name_part.rstrip('.!?,')
                 
                 conversation_collection.update_one(
@@ -345,7 +353,10 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
                 customer_name_in_cache = extracted_name
                 print(f"✅ Nome '{extracted_name}' salvo para o cliente {contact_id}.")
                 
-                ai_reply = ai_reply.split(name_part)[1].strip()
+                # <<< CORREÇÃO NA EXTRAÇÃO DA MENSAGEM >>>
+                # Lógica mais robusta para pegar o resto da mensagem após o nome
+                start_of_message = ai_reply.find(name_part) + len(name_part)
+                ai_reply = ai_reply[start_of_message:].lstrip('.!?, ')
 
             except Exception as e:
                 print(f"❌ Erro ao extrair o nome da tag: {e}")
@@ -361,6 +372,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
         if contact_id in conversations_cache:
             del conversations_cache[contact_id]
         return "Tive um pequeno problema para processar sua mensagem e precisei reiniciar nossa conversa. Você poderia repetir, por favor?"
+    
 def transcrever_audio_gemini(caminho_do_audio):
     """
     Envia um arquivo de áudio para a API do Gemini e retorna a transcrição em texto.
