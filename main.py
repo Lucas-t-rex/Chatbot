@@ -13,8 +13,6 @@ from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
 
 CLIENT_NAME = "Neuro Soluções em Tecnologia"
-RESPONSIBLE_NUMBER = "554898389781"
-
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
 EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234") 
@@ -26,7 +24,7 @@ try:
     
     db_name = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
     
-    db = client[db_name] 
+    db = client[db_name] # Conecta ao banco de dados específico do cliente
     conversation_collection = db.conversations
     
     print(f"✅ Conectado ao MongoDB para o cliente: '{CLIENT_NAME}' no banco de dados '{db_name}'")
@@ -41,6 +39,7 @@ if GEMINI_API_KEY:
 else:
     print("AVISO: A variável de ambiente GEMINI_API_KEY não foi definida.")
 
+# Cache para conversas ativas (para evitar ler o DB a cada mensagem)
 conversations_cache = {}
 
 modelo_ia = None
@@ -50,6 +49,7 @@ try:
 except Exception as e:
     print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
 
+# ADICIONE ESTE BLOCO NOVO
 def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session, tokens_used):
     """Salva o histórico, nomes e atualiza a contagem de tokens no MongoDB."""
     try:
@@ -59,7 +59,7 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session
         ]
         
         update_payload = {
-            'sender_name': sender_name, # Nome do contato no WhatsApp (Ex: Gauchão)
+            'sender_name': sender_name, # Nome do contato no WhatsApp
             'history': history_list,
             'last_interaction': datetime.now()
         }
@@ -85,34 +85,12 @@ def load_conversation_from_db(contact_id):
     try:
         result = conversation_collection.find_one({'_id': contact_id})
         if result:
-            print(f"🧠 Histórico anterior encontrado e carregado para {contact_id}.")
-            return result
+            print(f"🧠 Documento da conversa encontrado e carregado para {contact_id}.")
+            return result 
     except Exception as e:
         print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
     return None
 
-# <<< NOVO >>> Função para pegar as últimas mensagens e formatar para a notificação
-def get_last_messages_summary(history, max_messages=4):
-    """Formata as últimas mensagens de um histórico para um resumo legível, ignorando prompts do sistema."""
-    summary = []
-    # Pega as últimas mensagens do histórico
-    relevant_history = history[-max_messages:]
-    
-    for message in relevant_history:
-        # Ignora as mensagens iniciais do sistema e do bot que não são parte da conversa real
-        if message['role'] == 'user' and message['parts'][0].strip().startswith("A data e hora atuais são:"):
-            continue # Pula o prompt inicial
-        if message['role'] == 'model' and message['parts'][0].strip().startswith("Entendido. A Regra de Ouro"):
-            continue # Pula a confirmação inicial do bot
-
-        role = "Cliente" if message['role'] == 'user' else "Bot"
-        text = message['parts'][0].strip()
-        summary.append(f"*{role}:* {text}")
-        
-    if not summary:
-        return "Nenhum histórico de conversa encontrado."
-        
-    return "\n".join(summary)
 
 def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name):
     """
@@ -153,20 +131,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
         prompt_inicial = f"""
                 A data e hora atuais são: {horario_atual}.
                 {prompt_name_instruction}
-                Dever : vender nosso produto e se quer saber sobre a empresa ou falar com o Lucas(Proprietario)
-                =====================================================
-                🆘 REGRA DE OURO: ANÁLISE DE INTENÇÃO E INTERVENÇÃO HUMANA (PRIORIDADE MÁXIMA)
-                =====================================================
-                - SUA TAREFA MAIS IMPORTANTE É ANALISAR A INTENÇÃO DO CLIENTE. Se a intenção for falar com um humano, sua única ação é acionar a intervenção. ESTA REGRA SOBREPÕE TODAS AS OUTRAS REGRAS DE COMPORTAMENTO.
-                - CASOS PARA INTERVENÇÃO OBRIGATÓRIA:
-                - Pedidos explícitos: "falar com o dono", "falar com o responsável", "quero falar com um humano", "falar com o proprietário", "quero fazer um investimento".
-                - Perguntas complexas sem resposta: Pedidos de produtos/planos que não existem, reclamações graves, negociações de preços especiais.
-                - COMO ACIONAR: Sua ÚNICA resposta DEVE ser a tag abaixo, sem saudações, sem explicações.
-                [HUMAN_INTERVENTION] Motivo: [Resumo do motivo do cliente]
-                - O QUE NÃO FAZER (ERRO CRÍTICO):
-                - ERRADO: Cliente diz "Quero falar com o dono" e você responde "Compreendo, para isso, ligue para o número X...".
-                - CORRETO: Cliente diz "Quero falar com o dono" e sua resposta é APENAS: [HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o dono.
-                - Se a intenção do cliente NÃO se encaixar nos casos acima, você deve seguir as regras de atendimento normais abaixo.
+                Seu dever é atender e tirar todas as duvidas do cliente, vender nossos planos e produtos, e vangloriar a empresa sem parecer esnobe.
                 =====================================================
                 🏷️ IDENTIDADE DO ATENDENTE
                 =====================================================
@@ -377,7 +342,7 @@ def transcrever_audio_gemini(caminho_do_audio):
     """
     Envia um arquivo de áudio para a API do Gemini e retorna a transcrição em texto.
     """
-    global modelo_ia 
+    global modelo_ia # Vamos reutilizar o modelo Gemini que já foi iniciado
 
     if not modelo_ia:
         print("❌ Modelo de IA não inicializado. Impossível transcrever.")
@@ -390,7 +355,10 @@ def transcrever_audio_gemini(caminho_do_audio):
             mime_type="audio/ogg"
         )
         
+        # Pedimos ao modelo para transcrever o áudio
         response = modelo_ia.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
+        
+        # Opcional, mas recomendado: deletar o arquivo do servidor do Google após o uso
         genai.delete_file(audio_file.name)
         
         if response.text:
@@ -415,6 +383,7 @@ def send_whatsapp_message(number, text_message):
         print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n")
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro ao enviar mensagem para {clean_number}: {e}")
+
 
 def gerar_e_enviar_relatorio_semanal():
     """Calcula um RESUMO do uso de tokens e envia por e-mail usando SendGrid."""
@@ -475,7 +444,7 @@ def gerar_e_enviar_relatorio_semanal():
 
 app = Flask(__name__)
 
-processed_messages = set() 
+processed_messages = set()  # para evitar loops
 
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
@@ -487,24 +456,16 @@ def receive_webhook():
         message_data = data.get('data', {}) or data
         key_info = message_data.get('key', {})
 
+        # --- 1️⃣ Ignora mensagens enviadas por você mesmo ---
         if key_info.get('fromMe'):
-            sender_number_full = key_info.get('remoteJid')
-            
-            if not sender_number_full:
-                return jsonify({"status": "ignored_from_me_no_sender"}), 200
+            return jsonify({"status": "ignored_from_me"}), 200
 
-            clean_number = sender_number_full.split('@')[0]
-            
-            if clean_number != RESPONSIBLE_NUMBER:
-                print(f"➡️  Mensagem do próprio bot ignorada (remetente: {clean_number}).")
-                return jsonify({"status": "ignored_from_me"}), 200
-            
-            print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {clean_number}).")
-
+        # --- 2️⃣ Pega o ID único da mensagem ---
         message_id = key_info.get('id')
         if not message_id:
             return jsonify({"status": "ignored_no_id"}), 200
 
+        # --- 3️⃣ Se já processou esta mensagem, ignora ---
         if message_id in processed_messages:
             print(f"⚠️ Mensagem {message_id} já processada, ignorando.")
             return jsonify({"status": "ignored_duplicate"}), 200
@@ -512,6 +473,8 @@ def receive_webhook():
         if len(processed_messages) > 1000:
             processed_messages.clear()
 
+
+        # --- 4️⃣ Retorna imediatamente 200 para evitar reenvio da Evolution ---
         threading.Thread(target=process_message, args=(message_data,)).start()
         return jsonify({"status": "received"}), 200
 
@@ -521,71 +484,19 @@ def receive_webhook():
         return jsonify({"status": "error"}), 500
 
 
-def handle_responsible_command(message_content, responsible_number):
-    """
-    Processa comandos enviados pelo número do responsável.
-    """
-    print(f"⚙️  Processando comando do responsável: '{message_content}'")
-    
-    command_parts = message_content.lower().strip().split()
-
-    if len(command_parts) == 2 and command_parts[0] == "ok":
-        customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
-        
-        try:
-            customer = conversation_collection.find_one({'_id': customer_number_to_reactivate})
-
-            if not customer:
-                send_whatsapp_message(responsible_number, f"⚠️ *Atenção:* O cliente com o número `{customer_number_to_reactivate}` não foi encontrado no banco de dados.")
-                return 
-
-            result = conversation_collection.update_one(
-                {'_id': customer_number_to_reactivate},
-                {'$set': {'intervention_active': False}}
-            )
-
-            if customer_number_to_reactivate in conversations_cache:
-                del conversations_cache[customer_number_to_reactivate]
-                print(f"🗑️  Cache da conversa do cliente {customer_number_to_reactivate} limpo com sucesso.")
-
-            if result.modified_count > 0:
-                send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
-                send_whatsapp_message(customer_number_to_reactivate, "Oi sou eu Lyra novamente, voltei pro seu atendimento. se precisar de algo a mais me diga! 😊")
-            else:
-                send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
-
-        except Exception as e:
-            print(f"❌ Erro ao tentar reativar cliente: {e}")
-            send_whatsapp_message(responsible_number, f"❌ Ocorreu um erro técnico ao tentar reativar o cliente. Verifique o log do sistema.")
-            
-    else:
-        print("⚠️ Comando não reconhecido do responsável.")
-        help_message = (
-            "Comando não reconhecido. 🤖\n\n"
-            "Para reativar o atendimento de um cliente, envie a mensagem no formato exato:\n"
-            "`ok <numero_do_cliente>`\n\n"
-            "*(Exemplo):*\n`ok 5544912345678`"
-        )
-        send_whatsapp_message(responsible_number, help_message)
-        return True 
-    
 def process_message(message_data):
-    """
-    Processa a mensagem, buscando dados do cliente antes de chamar a IA.
-    """
+    """Processa a mensagem, buscando dados do cliente antes de chamar a IA."""
     try:
-        key_info = message_data.get('key', {})
-        sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
-
+        sender_number_full = message_data.get('key', {}).get('remoteJid')
+        
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
 
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
+        message = message_data.get('message', {})
 
         user_message_content = None
-        message = message_data.get('message', {})
-        
         if message.get('conversation'):
             user_message_content = message['conversation']
         elif message.get('extendedTextMessage'):
@@ -609,57 +520,23 @@ def process_message(message_data):
             print("➡️ Mensagem ignorada (sem conteúdo útil).")
             return
 
-        if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
-            handle_responsible_command(user_message_content, clean_number)
-            return
-
-        conversation_status = conversation_collection.find_one({'_id': clean_number})
-
-        if conversation_status and conversation_status.get('intervention_active', False):
-            print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
-            return
-
+        # --- LÓGICA ADICIONADA ---
+        # Busca os dados do cliente no banco ANTES de chamar a IA
+        conversation_status = load_conversation_from_db(clean_number)
         known_customer_name = conversation_status.get('customer_name') if conversation_status else None
+        
         if known_customer_name:
             print(f"👤 Cliente já conhecido: {known_customer_name} ({clean_number})")
         else:
             print(f"👤 Novo cliente ou nome desconhecido. Usando nome do WPP: {sender_name_from_wpp} ({clean_number})")
-
-        print(f"\n🧠  Processando mensagem de {sender_name_from_wpp} ({clean_number}): '{user_message_content}'")
-        ai_reply = gerar_resposta_ia(clean_number, sender_name_from_wpp, user_message_content, known_customer_name)
-
-
-        if ai_reply and ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
-            print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
-            
-            conversation_collection.update_one(
-                {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
-            )
-            
-            send_whatsapp_message(sender_number_full, "Entendido. Já notifiquei um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
-            
-            if RESPONSIBLE_NUMBER:
-                reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
-                display_name = known_customer_name or sender_name_from_wpp
-                
-                conversa_db = load_conversation_from_db(clean_number)
-                history_summary = "Nenhum histórico de conversa encontrado."
-                if conversa_db and 'history' in conversa_db:
-                    history_summary = get_last_messages_summary(conversa_db['history'])
-
-                notification_msg = (
-                    f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
-                    f"👤 *Cliente:* {display_name}\n"
-                    f"📞 *Número:* `{clean_number}`\n\n"
-                    f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
-                    f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
-                    f"-----------------------------------\n"
-                    f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`"
-                )
-                send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
         
-        elif ai_reply:
-            print(f"🤖  Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
+        print(f"\n🧠 Processando mensagem de {sender_name_from_wpp} ({clean_number}): '{user_message_content}'")
+        
+        # Passa o nome conhecido (ou None) para a função da IA
+        ai_reply = gerar_resposta_ia(clean_number, sender_name_from_wpp, user_message_content, known_customer_name)
+        
+        if ai_reply:
+            print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
             send_whatsapp_message(sender_number_full, ai_reply)
 
     except Exception as e:
@@ -669,19 +546,17 @@ if __name__ == '__main__':
     if modelo_ia:
         print("\n=============================================")
         print("   CHATBOT WHATSAPP COM IA INICIADO")
-        print(f"   CLIENTE: {CLIENT_NAME}")
-        if not RESPONSIBLE_NUMBER:
-            print("   AVISO: 'RESPONSIBLE_NUMBER' não configurado. O recurso de intervenção humana não notificará ninguém.")
-        else:
-            print(f"   Intervenção Humana notificará: {RESPONSIBLE_NUMBER}")
+        print(f"   CLIENTE: {CLIENT_NAME}") # Mostra para qual cliente este bot está rodando
         print("=============================================")
         print("Servidor aguardando mensagens no webhook...")
 
         scheduler = BackgroundScheduler(daemon=True, timezone='America/Sao_Paulo') 
+        # Agenda a função para rodar todo Domingo às 08:00 da manhã
         scheduler.add_job(gerar_e_enviar_relatorio_semanal, 'cron', day_of_week='sun', hour=8, minute=0)
         scheduler.start()
         print("⏰ Agendador de relatórios iniciado. O relatório será enviado todo Domingo às 08:00.")
         
+        # Garante que o agendador seja desligado corretamente ao sair
         import atexit
         atexit.register(lambda: scheduler.shutdown())
         
