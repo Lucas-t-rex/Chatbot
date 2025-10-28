@@ -136,6 +136,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             final_user_name_for_prompt = sender_name
             prompt_name_instruction = f"""
             REGRA CRÍTICA - CAPTURA DE NOME (PRIORIDADE MÁXIMA):
+            Seu nome nome: {{Lyra}} você é atendente da nome da empresa: {{Neuro Soluções em Tecnologia}}
             O nome real do cliente é DESCONHECIDO. O nome de contato '{sender_name}' é um apelido e NÃO deve ser usado.
             1. Sua primeira tarefa é perguntar o nome do cliente de forma educada.
             2. Se o cliente responder com o que parece ser um nome (ex: "Meu nome é João", "Pode me chamar de Maria", "Dani"), sua resposta DEVE, OBRIGATORIAMENTE E SEM EXCEÇÃO, seguir este formato exato:
