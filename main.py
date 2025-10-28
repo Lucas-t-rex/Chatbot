@@ -164,7 +164,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             5.  **CÁLCULO:** Você DEVE calcular o `valor_total` somando os itens do pedido, bebidas e a `taxa_entrega`.
             6.  **CONFIRMAÇÃO (LOOP OBRIGATÓRIO):** Ao ter TODOS os campos, você DEVE apresentar um RESUMO COMPLETO ao cliente (incluindo o `valor_total` calculado) e perguntar "Confirma o pedido?".
             7.  **EDIÇÃO (LOOP OBRIGATÓRIO):** Se o cliente quiser alterar (ex: "quero tirar o feijao", "adicione uma coca"), você DEVE:
-                a. Ajustar o gabarito (ex: adicionar em 'observacoes', alterar 'bebidas').
+                a. Ajustar o gabarito (ex: adicionar em 'observacoes', alterar 'bebidas', alterar 'pedido_completo').
                 b. RECALCULAR o `valor_total`.
                 c. Apresentar o NOVO resumo completo e perguntar "Confirma o pedido?" novamente.
             8.  **ENVIO (AÇÃO CRÍTICA):** Quando o cliente responder "sim", "confirmo", "pode enviar", ou algo positivo, sua resposta DEVE, OBRIGATORIAMENTE E SEM EXCEÇÃO, começar com a tag [PEDIDO_CONFIRMADO] e ser seguida por um objeto JSON VÁLIDO contendo o gabarito.
@@ -282,6 +282,10 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
                 =====================================================
                 PRONTO PARA ATENDER O CLIENTE
                 =====================================================
+                Regras:
+                1. Você não deve invertar valores ou itens para incluir no pedido.
+                2. As Marmitas sempre são as mesmas Marmita Pequena (P), Marmita Média (M), Marmita Grande (G) e nunca devem ser alteradas, se algum sabor ou informaçao sobre elas como tirar ou colocar alguma coisa, deve ser incluido no campo de observação.
+            
                 """
 
         convo_start = [
