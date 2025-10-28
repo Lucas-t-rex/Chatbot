@@ -133,8 +133,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             final_user_name_for_prompt = known_customer_name
             prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este nome."
         else:
-            # <<< MUDANÇA CRÍTICA NO PROMPT >>>
-            # A instrução agora é muito mais direta e enfática.
             final_user_name_for_prompt = sender_name
             prompt_name_instruction = f"""
             REGRA CRÍTICA - CAPTURA DE NOME (PRIORIDADE MÁXIMA):
@@ -339,11 +337,17 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
         if ai_reply.strip().startswith("[NOME_CLIENTE]"):
             print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
             try:
-                # Extrai a parte da string que contém o nome
-                name_part = ai_reply.split("O nome do cliente é:")[1].strip()
-                # Remove pontuação final para obter o nome limpo
-                extracted_name = name_part.rstrip('.!?,')
+                # 1. Pega tudo que vem depois de "O nome do cliente é:"
+                full_response_part = ai_reply.split("O nome do cliente é:")[1].strip()
                 
+                # 2. Divide essa parte no primeiro ponto final. A parte 0 é o nome.
+                extracted_name = full_response_part.split('.')[0].strip()
+                
+                # 3. Pega o resto da mensagem de forma segura
+                start_of_message_index = full_response_part.find(extracted_name) + len(extracted_name)
+                ai_reply = full_response_part[start_of_message_index:].lstrip('.!?, ').strip()
+
+                # 4. Salva o nome limpo no banco de dados e no cache
                 conversation_collection.update_one(
                     {'_id': contact_id},
                     {'$set': {'customer_name': extracted_name}},
@@ -352,11 +356,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
                 conversations_cache[contact_id]['customer_name'] = extracted_name
                 customer_name_in_cache = extracted_name
                 print(f"✅ Nome '{extracted_name}' salvo para o cliente {contact_id}.")
-                
-                # <<< CORREÇÃO NA EXTRAÇÃO DA MENSAGEM >>>
-                # Lógica mais robusta para pegar o resto da mensagem após o nome
-                start_of_message = ai_reply.find(name_part) + len(name_part)
-                ai_reply = ai_reply[start_of_message:].lstrip('.!?, ')
 
             except Exception as e:
                 print(f"❌ Erro ao extrair o nome da tag: {e}")
