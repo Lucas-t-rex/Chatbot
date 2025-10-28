@@ -11,7 +11,6 @@ from pymongo import MongoClient
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
-import time
 
 CLIENT_NAME = "Neuro Soluções em Tecnologia"
 RESPONSIBLE_NUMBER = "554898389781"
@@ -128,32 +127,41 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
 
     if contact_id not in conversations_cache:
-        horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        prompt_name_instruction = ""
-        final_user_name_for_prompt = ""
+    # Carregue a conversa do DB ANTES de mais nada
+        loaded_conversation = load_conversation_from_db(contact_id)
+        known_customer_name = loaded_conversation.get('customer_name') if loaded_conversation else None
 
+        horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Agora, a lógica de decisão do prompt
         if known_customer_name:
             final_user_name_for_prompt = known_customer_name
             prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este nome."
         else:
             final_user_name_for_prompt = sender_name
+        # Mantém a sua lógica original para pedir o nome
             prompt_name_instruction = f"""
-            REGRA CRÍTICA - CAPTURA DE NOME (PRIORIDADE MÁXIMA):
-            Seu nome nome: {{Lyra}} você é atendente da nome da empresa: {{Neuro Soluções em Tecnologia}}
-            O nome real do cliente é DESCONHECIDO. O nome de contato '{sender_name}' é um apelido e NÃO deve ser usado.
-            1. Sua primeira tarefa é perguntar o nome do cliente de forma educada.
-            2. Se o cliente responder com o que parece ser um nome (ex: "Meu nome é João", "Pode me chamar de Maria", "Dani"), sua resposta DEVE, OBRIGATORIAMENTE E SEM EXCEÇÃO, seguir este formato exato:
-               [NOME_CLIENTE]O nome do cliente é: [Nome Extraído]. (aqui você continua a conversa normalmente)
-            3. Esta é sua prioridade máxima. Não responda a outras perguntas antes de ter o nome e ter usado a tag.
+            REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
+              Seu nome é {{Lyra}} e você é atendente da {{Neuro Soluções em Tecnologia}}.
+              Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido. No entanto, você deve fazer isso de forma natural.
 
-            EXEMPLO DE INTERAÇÃO CORRETA:
-            Cliente: "oi"
-            Você: "Olá! Como posso te chamar?"
-            Cliente: "Meu nome é Carlos"
-            Sua Resposta: "[NOME_CLIENTE]O nome do cliente é: Carlos. Prazer em conhecê-lo, Carlos! Como posso ajudar?"
+              1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi", "boa noite"), peça o nome dele de forma direta e educada.
+              
+              2. Se a primeira mensagem do cliente já contiver uma pergunta (ex: "oi, qual o preço?", "quero saber como funciona"), você deve:
+                 - Primeiro, acalmar o cliente dizendo que já vai responder.
+                 - Em seguida, peça o nome para personalizar o atendimento.
+                 - **IMPORTANTE**: Você deve guardar a pergunta original do cliente na memória.
+
+              3. Quando o cliente responder com o nome dele (ex: "Meu nome é Marcos"), sua próxima resposta DEVE OBRIGATORIAMENTE:
+                 - Começar com a tag: `[NOME_CLIENTE]O nome do cliente é: [Nome Extraído].`
+                 - Agradecer ao cliente pelo nome.
+                 - **RESPONDER IMEDIATAMENTE à pergunta original que ele fez no início da conversa.** Não o faça perguntar de novo.
+
+              EXEMPLO DE FLUXO IDEAL:
+              Cliente: "boa noite, queria saber o preço do plano secretário"
+              Você: "Boa noite! Claro, já te passo os detalhes do Plano Secretário. Para que nosso atendimento fique mais próximo, como posso te chamar?"
+              Cliente: "pode me chamar de Marcos"
+              Sua Resposta: "[NOME_CLIENTE]O nome do cliente é: Marcos. Prazer em conhecê-lo, Marcos! O Plano Secretário custa R$500,00 por mês, mais a taxa de instalação. Ele é perfeito para quem precisa de agendamentos inteligentes e integrados. Quer saber mais sobre as funcionalidades dele?"
             """
-
         prompt_inicial = f"""
                 A data e hora atuais são: {horario_atual}.
                 {prompt_name_instruction}
@@ -592,11 +600,11 @@ def handle_message_buffering(message_data):
         elif message.get('extendedTextMessage'):
             user_message_content = message['extendedTextMessage'].get('text')
         elif message.get('audioMessage') and message.get('base64'):
-            # O tratamento de áudio continua o mesmo
+            message_id = key_info.get('id')
             print(f"🎤 Mensagem de áudio recebida de {clean_number}. Aguardando timer para transcrever.")
             audio_base64 = message['base64']
             audio_data = base64.b64decode(audio_base64)
-            temp_audio_path = f"/tmp/audio_{clean_number}.ogg"
+            temp_audio_path = f"/tmp/audio_{clean_number}_{message_id}.ogg"
             with open(temp_audio_path, 'wb') as f:
                 f.write(audio_data)
             user_message_content = transcrever_audio_gemini(temp_audio_path)
