@@ -1,20 +1,32 @@
-# Usar uma imagem oficial do Python como base
+# Dockerfile Definitivo (Python + Node.js)
+
+# 1. Começamos com a imagem base do Python
 FROM python:3.10-slim
 
-# Definir o diretório de trabalho dentro do contêiner
+# 2. Define o diretório de trabalho
 WORKDIR /app
 
-# Copiar o arquivo de dependências para dentro do contêiner
-COPY requirements.txt requirements.txt
+# 3. Instala as ferramentas necessárias para baixar Node.js e Git
+RUN apt-get update && apt-get install -y curl git && \
+    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    apt-get install -y nodejs && \
+    npm install -g pm2
 
-# Instalar as dependências
+# 4. Copia e instala as dependências do seu Chatbot Python
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiar todo o resto do seu projeto para dentro do contêiner
+# 5. Clona a Evolution API e instala as dependências dela
+RUN git clone https://github.com/EvolutionAPI/evolution-api.git evolution-api && \
+    cd evolution-api && npm install --only=production
+
+# 6. Copia o resto do seu código (main.py, etc)
 COPY . .
 
-# INFORMA AO KOYEB QUAL PORTA O APLICATIVO USA
+# 7. Informa ao Koyeb a porta que sua aplicação usa
 EXPOSE 8000
 
-# Comando para executar sua aplicação quando o contêiner iniciar
-CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120", "main:app"]
+# 8. Comando final para iniciar os dois processos
+#    - Inicia a Evolution API em segundo plano usando o 'pm2'
+#    - Inicia seu chatbot Python em primeiro plano usando o 'gunicorn'
+CMD ["/bin/bash", "-c", "pm2 start evolution-api/dist/src/server.js --name evolution-api && gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 main:app"]
