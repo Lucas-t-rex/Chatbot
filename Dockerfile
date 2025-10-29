@@ -18,7 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 5. Clona a Evolution API e instala as dependências dela
 RUN git clone https://github.com/EvolutionAPI/evolution-api.git evolution-api && \
-    cd evolution-api && npm install --omit=dev
+    cd evolution-api && npm install && npx prisma generate && npm run build
 
 # 6. Copia o resto do seu código (main.py, etc)
 COPY . .
