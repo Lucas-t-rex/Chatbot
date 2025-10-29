@@ -8,7 +8,7 @@ WORKDIR /app
 
 # 3. Instala as ferramentas necessárias para baixar Node.js e Git
 RUN apt-get update && apt-get install -y curl git && \
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
+    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g pm2
 
