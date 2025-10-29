@@ -1,5 +1,4 @@
 version: "3.8"
-
 services:
   chatbot:
     build: .
@@ -9,6 +8,5 @@ services:
       - EVOLUTION_API_URL=http://evolution-api:8080
     depends_on:
       - evolution-api
-  
   evolution-api:
     image: "evoapicloud/evolution-api:v1.8.7"
