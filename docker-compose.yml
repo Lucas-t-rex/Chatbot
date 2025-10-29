@@ -1,23 +1,14 @@
-# docker-compose.yml (Versão correta para o Koyeb)
-
-version: '3.8'
+version: "3.8"
 
 services:
-  # Serviço 1: Seu Chatbot Python
   chatbot:
-    build: .  # Constrói a imagem do seu chatbot a partir do Dockerfile na pasta atual
+    build: .
     ports:
-      - "8000:8000" # Expõe a porta do seu aplicativo Flask para o Koyeb
+      - "8000:8000"
     environment:
-      # As variáveis serão preenchidas pelos "Secrets" que você configurar no painel do Koyeb.
-      # Deixamos apenas a URL da API aqui, pois ela aponta para o outro serviço.
       - EVOLUTION_API_URL=http://evolution-api:8080
     depends_on:
-      - evolution-api # Garante que a Evolution API inicie antes do seu chatbot
-
-  # Serviço 2: A Evolution API
+      - evolution-api
+  
   evolution-api:
-    # Usando a mesma imagem que você especificou, o que é ótimo!
-    image: evoapicloud/evolution-api:v1.8.7
-    # As variáveis de ambiente (como API_KEY) serão configuradas no painel do Koyeb,
-    # por isso a seção 'environment' aqui pode ficar vazia ou ser removida.
+    image: "evoapicloud/evolution-api:v1.8.7"
