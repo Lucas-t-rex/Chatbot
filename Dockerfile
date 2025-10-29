@@ -29,4 +29,4 @@ EXPOSE 8000
 # 8. Comando final para iniciar os dois processos
 #    - Inicia a Evolution API em segundo plano usando o 'pm2'
 #    - Inicia seu chatbot Python em primeiro plano usando o 'gunicorn'
-CMD ["/bin/bash", "-c", "pm2 start evolution-api/dist/src/server.js --name evolution-api && gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 main:app"]
+CMD ["/bin/bash", "-c", "pm2 start evolution-api/dist/index.js --name evolution-api && gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 main:app"]
