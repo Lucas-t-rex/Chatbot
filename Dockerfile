@@ -1,31 +1,30 @@
+# Dockerfile Definitivo e Correto (v6)
 
+# 1. Imagem base do Python
 FROM python:3.10-slim
 
-# Define o diretório de trabalho
+# 2. Diretório de trabalho
 WORKDIR /app
 
-# Instala Node.js, Git e dependências básicas
-RUN apt-get update && apt-get install -y curl git build-essential ffmpeg && \
+# 3. Instala ferramentas e a versão correta do Node.js
+RUN apt-get update && apt-get install -y curl git && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g pm2
 
-# Copia e instala dependências Python
+# 4. Copia e instala as dependências do Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Clona Evolution API e instala dependências
+# 5. Clona a API, instala, GERA O PRISMA (com o caminho certo) e constrói
 RUN git clone https://github.com/EvolutionAPI/evolution-api.git evolution-api && \
-    cd evolution-api && npm install
+    cd evolution-api && npm install && npx prisma generate --schema=./prisma/schema.prisma && npm run build
 
-# Copia o código do Flask
+# 6. Copia o resto do seu código (main.py)
 COPY . .
 
-# Expõe a porta principal
+# 7. Expõe a porta do seu aplicativo
 EXPOSE 8000
 
-# Inicia Evolution API e Flask juntos
-CMD ["/bin/bash", "-c", "\
-    pm2 start evolution-api/dist/index.js --name evolution-api && \
-    gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 main:app \
-"]
+# 8. Comando final para iniciar os dois processos juntos
+CMD ["/bin/bash", "-c", "pm2 start evolution-api/dist/index.js --name evolution-api && gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 main:app"]
