@@ -1,48 +1,20 @@
-# Dockerfile Definitivo (v17 - Otimização Final para 256MB)
-
-# --- ESTÁGIO 1: O CONSTRUTOR (BUILDER) ---
-# Usamos uma imagem Node.js dedicada apenas para compilar a Evolution API.
-FROM node:20-slim as builder
-
-WORKDIR /build
-
-# Instala apenas o Git, necessário para clonar o repositório
-RUN apt-get update && apt-get install -y git
-
-# A SOLUÇÃO FINAL ESTÁ AQUI:
-# Aumentamos o limite de memória para 224MB, o máximo seguro para uma máquina de 256MB.
-RUN export NODE_OPTIONS="--max-old-space-size=224" && \
-    git clone https://github.com/EvolutionAPI/evolution-api.git . && \
-    export DATABASE_URL="postgresql://user:pass@localhost:5432/db" && \
-    npm install --omit=dev --ignore-scripts && \
-    npm run build
-
-
-# --- ESTÁGIO 2: A IMAGEM FINAL ---
-# Começamos do zero com a imagem Python leve.
+# Usar uma imagem oficial do Python como base
 FROM python:3.10-slim
 
+# Definir o diretório de trabalho dentro do contêiner
 WORKDIR /app
 
-# Instala as ferramentas necessárias (Node.js e PM2) para RODAR a API, não para construir
-RUN apt-get update && apt-get install -y curl && \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    npm install -g pm2
+# Copiar o arquivo de dependências para dentro do contêiner
+COPY requirements.txt requirements.txt
 
-# Copia e instala as dependências do seu Chatbot Python
-COPY requirements.txt .
+# Instalar as dependências
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copiamos a pasta 'dist' e o 'package.json' já prontos do Estágio 1 (builder)
-COPY --from=builder /build/dist ./evolution-api/dist
-COPY --from=builder /build/package.json ./evolution-api/package.json
-
-# Copia o resto do seu código (main.py)
+# Copiar todo o resto do seu projeto para dentro do contêiner
 COPY . .
 
-# Expõe a porta do seu aplicativo
+# INFORMA AO KOYEB QUAL PORTA O APLICATIVO USA
 EXPOSE 8000
 
-# Comando final para iniciar os dois processos juntos
-CMD ["/bin/bash", "-c", "pm2 start evolution-api/dist/index.js --name evolution-api && gunicorn --bind 0.0.0.0:8000 --workers 1 --timeout 120 main:app"]
+# Comando para executar sua aplicação quando o contêiner iniciar
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "2", "--timeout", "120", "main:app"]

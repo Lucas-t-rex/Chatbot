@@ -16,7 +16,7 @@ CLIENT_NAME = "Neuro Soluções em Tecnologia"
 RESPONSIBLE_NUMBER = "554898389781"
 
 load_dotenv()
-EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL", "http://localhost:8080")
+EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
 EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234") 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 MONGO_DB_URI = os.environ.get("MONGO_DB_URI")
