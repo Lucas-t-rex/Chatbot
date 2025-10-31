@@ -1,28 +1,21 @@
-# fly.toml app configuration file generated for chatbot-python-lucas on 2025-10-31T01:11:46-03:00
-#
-# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
-#
-
+# fly.toml para o chatbot-python-lucas
 app = 'chatbot-python-lucas'
 primary_region = 'gru'
-
-[build]
-  builder = "packs/dockerfile"
 
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = false  
+  auto_stop_machines = false
   auto_start_machines = true
-  min_machines_running = 1   
+  min_machines_running = 1
   processes = ['app']
 
-[[http_service.checks]]
+  [[http_service.checks]]
     interval = "15s"
     timeout = "10s"
-    grace_period = "30s" 
+    grace_period = "30s"
     method = "get"
-    path = "/" 
+    path = "/"
 
 [[vm]]
   memory = '256mb'
