@@ -424,9 +424,6 @@ app = Flask(__name__)
 processed_messages = set() 
 
 @app.route('/webhook', methods=['POST'])
-@app.route('/', methods=['GET'])
-def health_check():
-    return "Estou vivo!", 200
 def receive_webhook():
     """Recebe mensagens do WhatsApp enviadas pela Evolution API."""
     data = request.json
@@ -469,6 +466,9 @@ def receive_webhook():
         print("DADO QUE CAUSOU ERRO:", data)
         return jsonify({"status": "error"}), 500
 
+@app.route('/', methods=['GET'])
+def health_check():
+    return "Estou vivo!", 200
 
 def handle_responsible_command(message_content, responsible_number):
     """
