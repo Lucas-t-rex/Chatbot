@@ -1,32 +1,31 @@
-# Dockerfile Definitivo v7 (com o caminho do Prisma 100% correto)
+# Dockerfile Definitivo e Correto (v9 - Final)
 
-# 1. Começamos com a imagem base do Python
+# 1. Imagem base do Python
 FROM python:3.10-slim
 
-# 2. Define o diretório de trabalho
+# 2. Diretório de trabalho
 WORKDIR /app
 
-# 3. Instala as ferramentas e a versão correta do Node.js (v22)
+# 3. Instala ferramentas e a versão correta do Node.js
 RUN apt-get update && apt-get install -y curl git && \
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g pm2
 
-# 4. Copia e instala as dependências do seu Chatbot Python
+# 4. Copia e instala as dependências do Python
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 5. Clona, instala, GERA O PRISMA com o caminho CORRETO e constrói a API
-#    A MUDANÇA ESTÁ AQUI: --schema=./schema.prisma (sem a pasta "prisma/")
+# 5. Clona a API, instala, GERA O PRISMA e constrói
+#    A CORREÇÃO FINAL ESTÁ AQUI: Usando o nome de arquivo correto 'postgresql-schema.prisma'
 RUN git clone https://github.com/EvolutionAPI/evolution-api.git evolution-api && \
-    cd evolution-api && npm install && npx prisma generate --schema=./schema.prisma && npm run build
+    cd evolution-api && npm install && npx prisma generate --schema=./prisma/postgresql-schema.prisma && npm run build
 
-# 6. Copia o resto do seu código (main.py, etc)
+# 6. Copia o resto do seu código (main.py)
 COPY . .
 
-# 7. Informa ao Koyeb a porta que sua aplicação usa
+# 7. Expõe a porta do seu aplicativo
 EXPOSE 8000
 
-# 8. Comando final para iniciar os dois processos
+# 8. Comando final para iniciar os dois processos juntos
 CMD ["/bin/bash", "-c", "pm2 start evolution-api/dist/index.js --name evolution-api && gunicorn --bind 0.0.0.0:8000 --workers 2 --timeout 120 main:app"]
-
