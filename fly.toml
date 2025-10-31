@@ -7,7 +7,7 @@ app = 'chatbot-python-lucas'
 primary_region = 'gru'
 
 [build]
-  builder = "flyio/dockerfile"
+  builder = "packs/dockerfile"
 
 [http_service]
   internal_port = 8000
