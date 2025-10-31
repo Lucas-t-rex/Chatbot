@@ -1,4 +1,4 @@
-# Dockerfile Definitivo (v16 - A Versão Final de Verdade)
+# Dockerfile Definitivo (v17 - Otimização Final para 256MB)
 
 # --- ESTÁGIO 1: O CONSTRUTOR (BUILDER) ---
 # Usamos uma imagem Node.js dedicada apenas para compilar a Evolution API.
@@ -10,8 +10,8 @@ WORKDIR /build
 RUN apt-get update && apt-get install -y git
 
 # A SOLUÇÃO FINAL ESTÁ AQUI:
-# Adicionamos '--ignore-scripts' para pular a execução do 'husky'.
-RUN export NODE_OPTIONS="--max-old-space-size=200" && \
+# Aumentamos o limite de memória para 224MB, o máximo seguro para uma máquina de 256MB.
+RUN export NODE_OPTIONS="--max-old-space-size=224" && \
     git clone https://github.com/EvolutionAPI/evolution-api.git . && \
     export DATABASE_URL="postgresql://user:pass@localhost:5432/db" && \
     npm install --omit=dev --ignore-scripts && \
