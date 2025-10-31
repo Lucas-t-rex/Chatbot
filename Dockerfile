@@ -1,4 +1,4 @@
-# Dockerfile Definitivo e Correto (v9 - Final)
+# Dockerfile Definitivo e Correto (v10 - Final com ENV de Build)
 
 # 1. Imagem base do Python
 FROM python:3.10-slim
@@ -17,9 +17,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 5. Clona a API, instala, GERA O PRISMA e constrói
-#    A CORREÇÃO FINAL ESTÁ AQUI: Usando o nome de arquivo correto 'postgresql-schema.prisma'
+#    A CORREÇÃO ESTÁ AQUI: Adicionamos a 'DATABASE_URL' para o build funcionar
 RUN git clone https://github.com/EvolutionAPI/evolution-api.git evolution-api && \
-    cd evolution-api && npm install && npx prisma generate --schema=./prisma/postgresql-schema.prisma && npm run build
+    cd evolution-api && \
+    export DATABASE_URL="postgresql://user:pass@localhost:5432/db" && \
+    npm install && \
+    npm run build
 
 # 6. Copia o resto do seu código (main.py)
 COPY . .
