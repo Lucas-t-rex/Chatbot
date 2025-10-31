@@ -1,4 +1,4 @@
-# Dockerfile Definitivo e Correto (v10 - Final com ENV de Build)
+# Dockerfile Definitivo e Correto (v11 - Node.js v20)
 
 # 1. Imagem base do Python
 FROM python:3.10-slim
@@ -6,9 +6,10 @@ FROM python:3.10-slim
 # 2. Diretório de trabalho
 WORKDIR /app
 
-# 3. Instala ferramentas e a versão correta do Node.js
+# 3. Instala ferramentas e a versão CORRETA do Node.js (v20)
+#    A CORREÇÃO PRINCIPAL ESTÁ AQUI: Mudamos de 'setup_22.x' para 'setup_20.x'
 RUN apt-get update && apt-get install -y curl git && \
-    curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     npm install -g pm2
 
@@ -17,11 +18,11 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # 5. Clona a API, instala, GERA O PRISMA e constrói
-#    A CORREÇÃO ESTÁ AQUI: Adicionamos a 'DATABASE_URL' para o build funcionar
 RUN git clone https://github.com/EvolutionAPI/evolution-api.git evolution-api && \
     cd evolution-api && \
     export DATABASE_URL="postgresql://user:pass@localhost:5432/db" && \
     npm install && \
+    npx prisma generate --schema=./prisma/postgresql-schema.prisma && \
     npm run build
 
 # 6. Copia o resto do seu código (main.py)
