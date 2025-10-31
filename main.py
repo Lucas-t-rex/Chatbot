@@ -351,12 +351,19 @@ def transcrever_audio_gemini(caminho_do_audio):
 
 def send_whatsapp_message(number, text_message):
     """Envia uma mensagem de texto para um número via Evolution API."""
+    # O nome da sua instância que você já confirmou que é "chatbot"
+    INSTANCE_NAME = "chatbot" 
+    
+    # AQUI ESTÁ A MÁGICA: Juntamos a base da URL com o caminho correto
+    full_url = f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}"
+
     clean_number = number.split('@')[0]
     payload = {"number": clean_number, "textMessage": {"text": text_message}}
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
-    
     try:
-        response = requests.post(EVOLUTION_API_URL, json=payload, headers=headers)
+        # Agora usamos a URL completa e correta
+        print(f"✅ Enviando resposta para a URL: {full_url}") # Adicionei este print para ajudar a debugar
+        response = requests.post(full_url, json=payload, headers=headers)
         response.raise_for_status()
         print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n")
     except requests.exceptions.RequestException as e:
