@@ -139,11 +139,29 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     known_customer_name = None
     old_history = []
     
+    # TRECHO NOVO E CORRIGIDO
     if convo_data:
         known_customer_name = convo_data.get('customer_name')
         if 'history' in convo_data:
-            old_history = [msg for msg in convo_data['history'] if not msg['text'].strip().startswith("A data e hora atuais são:")]
-    
+            
+            # Carrega o histórico salvo no formato {'role': ..., 'text': ...}
+            history_from_db = [msg for msg in convo_data['history'] if not msg['text'].strip().startswith("A data e hora atuais são:")]
+            
+            # --- INÍCIO DA CORREÇÃO CRÍTICA ---
+            # Precisamos converter de volta para o formato que o Gemini entende: {'role': ..., 'parts': [...]}
+            old_history = []
+            for msg in history_from_db:
+                role = msg.get('role', 'user')
+                # A API do Gemini usa 'model', não 'assistant'
+                if role == 'assistant':
+                    role = 'model'
+                
+                if 'text' in msg:
+                    old_history.append({
+                        'role': role,
+                        'parts': [msg['text']]
+                    })
+            # --- FIM DA CORREÇÃO CRÍTICA ---
     if known_customer_name:
         print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
     
@@ -560,15 +578,20 @@ def process_message(message_data):
             clean_number
         )
 
-        # Se houver resposta, salva e envia
-        if ai_reply:
-            append_message_to_db(clean_number, 'assistant', ai_reply)
-            send_whatsapp_message(sender_number_full, ai_reply)
+        # --- LÓGICA DE RESPOSTA E BIFURCAÇÃO CORRIGIDA ---
+        
+        if not ai_reply:
+            # Se a IA não retornou nada, não faz nada
+            return
 
-        # 🔀 Lógica de bifurcação de pedidos
-        if BIFURCACAO_ENABLED and ai_reply and ai_reply.strip().startswith("[PEDIDO_CONFIRMADO]"):
-            print(f"📦 Tag [PEDIDO_CONFIRMADO] detectada. Processando e bifurcando pedido para {clean_number}...")
-            try:
+        try:
+            # 1. Salva a resposta da IA no histórico (antes de modificar)
+            append_message_to_db(clean_number, 'assistant', ai_reply)
+            
+            # 2. Verifica se é um Pedido Confirmado
+            if BIFURCACAO_ENABLED and ai_reply.strip().startswith("[PEDIDO_CONFIRMADO]"):
+                print(f"📦 Tag [PEDIDO_CONFIRMADO] detectada. Processando e bifurcando pedido para {clean_number}...")
+                
                 json_start = ai_reply.find('{')
                 json_end = ai_reply.rfind('}') + 1
                 if json_start == -1 or json_end == 0:
@@ -581,6 +604,7 @@ def process_message(message_data):
 
                 order_data = json.loads(json_string)
 
+                # Monta as mensagens
                 msg_cozinha = f"""
                 --- 🍳 NOVO PEDIDO (COZINHA) 🍳 ---
                 Cliente: {order_data.get('nome_cliente', 'N/A')}
@@ -607,13 +631,13 @@ def process_message(message_data):
                 Valor Total: {order_data.get('valor_total', 'N/A')}
                 """
 
-                # Envia mensagens em threads separadas
+                # Envia para cozinha
                 threading.Thread(
                     target=send_whatsapp_message,
                     args=(f"{COZINHA_WPP_NUMBER}@s.whatsapp.net", msg_cozinha.strip())
                 ).start()
 
-                # Se o pedido for de entrega, também envia para o motoboy
+                # Se for entrega, envia para o motoboy
                 if order_data.get('tipo_pedido') == "Entrega":
                     threading.Thread(
                         target=send_whatsapp_message,
@@ -621,30 +645,30 @@ def process_message(message_data):
                     ).start()
 
                 print(f"✅ Pedido bifurcado com sucesso.")
-                ai_reply = remaining_reply
+                
+                # 3. Envia SÓ a mensagem limpa para o cliente
+                send_whatsapp_message(sender_number_full, remaining_reply)
 
-            except Exception as e:
-                print(f"❌ Erro ao processar bifurcação [PEDIDO_CONFIRMADO]: {e}")
-                ai_reply = ai_reply.replace("[PEDIDO_CONFIRMADO]", "").strip()
-                if '{' in ai_reply and '}' in ai_reply:
-                    ai_reply = "Tive um problema ao enviar seu pedido para a cozinha. Pode confirmar os dados novamente, por favor? (Erro interno: JSON_PARSE)"
+            else:
+                # 3b. Se NÃO for um pedido, apenas envia a resposta normal da IA
+                print(f"🤖 Resposta (normal) da IA para {sender_name_from_wpp}: {ai_reply}")
+                send_whatsapp_message(sender_number_full, ai_reply)
 
-            print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
-            send_whatsapp_message(sender_number_full, ai_reply)
-
-        elif ai_reply:
-            print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
-            send_whatsapp_message(sender_number_full, ai_reply)
+        except Exception as e:
+            print(f"❌ Erro ao processar bifurcação ou envio: {e}")
+            # Envia uma mensagem de erro genérica se tudo mais falhar
+            send_whatsapp_message(sender_number_full, "Desculpe, tive um problema ao processar sua resposta. (Erro interno: SEND_LOGIC)")
 
     except Exception as e:
-        print(f"❌ Erro ao processar mensagem: {e}")
-
+        print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
+        # 4. Libera o Lock (A parte mais importante)
         if 'clean_number' in locals():
             conversation_collection.update_one(
                 {'_id': clean_number},
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
+            print(f"🔓 Lock liberado para {clean_number}.")
 
 if __name__ == '__main__':
     if modelo_ia:
