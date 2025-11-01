@@ -141,7 +141,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     
     if known_customer_name:
         final_user_name_for_prompt = known_customer_name
-        # Instrução EXPLÍCITA para não perguntar o nome novamente
         prompt_name_instruction = f"REGRA DE NOME: O nome do cliente JÁ FOI CAPTURADO. O nome dele é {final_user_name_for_prompt}. NÃO pergunte o nome dele novamente."
     else:
         final_user_name_for_prompt = sender_name
@@ -180,8 +179,10 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         
         7.  **REGRA MESTRA (A MAIS IMPORTANTE DE TODAS):**
             - QUANDO o cliente enviar uma mensagem de confirmação (como "isso mesmo", "sim", "confirmo", "pode ser") LOGO APÓS você apresentar o resumo (Passo 6),
-            - Sua ÚNICA E EXCLUSIVA AÇÃO deve ser gerar a tag [PEDIDO_CONFIRMADO] seguida pelo JSON VÁLIDO e uma curta mensagem de despedida.
-            - **NÃO GERE ` ``` `.** NÃO GERE NADA ALÉM DA TAG E DO JSON.
+            - Sua ÚNICA E EXCLUSIVA AÇÃO deve ser gerar a tag `[PEDIDO_CONFIRMADO]` seguida pelo JSON VÁLIDO.
+            - **IMPORTANTE:** A tag `[PEDIDO_CONFIRMADO]` é um comando de sistema. O cliente não a verá.
+            - **APÓS** a tag e o JSON, você *DEVE* adicionar uma curta mensagem de despedida (ex: "Pedido confirmado, Mateus! Agradecemos a preferência!").
+            - **NÃO GERE ` ``` `.**
             - Se o cliente pedir para editar (ex: "tira o suco"), você DEVE editar o gabarito e voltar ao passo 6 (apresentar novo resumo).
 
         --- GABARITO DE PEDIDO (DEVE SER PREENCHIDO) ---
@@ -197,6 +198,15 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
           "valor_total": "..." (O valor total calculado por você)
         }}
         --- FIM DO GABARITO ---
+        
+        EXEMPLO DE FALHA (ERRADO):
+        Cliente: isso mesmo
+        Você: Pedido confirmado, Mateus! Agradecemos a preferência!
+        (ERRADO! Faltou a tag [PEDIDO_CONFIRMADO] e o JSON)
+
+        EXEMPLO DE SUCESSO (CORRETO):
+        Cliente: isso mesmo
+        Você: [PEDIDO_CONFIRMADO]{{"nome_cliente": "Mateus", "tipo_pedido": "Retirada", ...}}Pedido confirmado, Mateus! Agradecemos a preferência e até logo!
         """
     else:
         prompt_bifurcacao = "O plano de Bifurcação (envio para cozinha) não está ativo."
@@ -306,9 +316,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
-        # --- CORREÇÃO DE ERRO ---
-        # Se o modelo '2.5-flash' (que não existe) causar um erro aqui, 
-        # o bot enviará esta mensagem.
         return "Desculpe, estou com um problema técnico no momento (IA_GEN_FAIL). Por favor, tente novamente em um instante."
     
 def transcrever_audio_gemini(caminho_do_audio):
