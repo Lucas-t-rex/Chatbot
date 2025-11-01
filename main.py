@@ -436,10 +436,28 @@ def receive_webhook():
     data = request.json
     print(f"📦 DADO BRUTO RECEBIDO NO WEBHOOK: {data}")
 
+    # --- AQUI ESTÁ A CORREÇÃO ---
+    # 1. Verifique o TIPO DE EVENTO antes de fazer qualquer coisa
+    event_type = data.get('event')
+    
+    # Se não for um evento de 'nova mensagem', ignore-o.
+    if event_type != 'messages.upsert':
+        print(f"➡️  Ignorando evento: {event_type} (não é uma nova mensagem)")
+        return jsonify({"status": "ignored_event_type"}), 200
+    # --- FIM DA CORREÇÃO ---
+
     try:
-        message_data = data.get('data', {}) or data
+        # 2. Agora prossiga com segurança, sabendo que é um 'messages.upsert'
+        
+        # Você pode pegar o 'data' diretamente, pois sabemos que é um evento de mensagem
+        message_data = data.get('data', {}) 
+        if not message_data:
+            print("➡️  Evento 'messages.upsert' sem 'data'. Ignorando.")
+            return jsonify({"status": "ignored_no_data"}), 200
+            
         key_info = message_data.get('key', {})
 
+        # O resto da sua função continua exatamente igual...
         if key_info.get('fromMe'):
             sender_number_full = key_info.get('remoteJid')
             
