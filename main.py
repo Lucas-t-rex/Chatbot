@@ -58,7 +58,7 @@ message_timers = {}
 
 modelo_ia = None
 try:
-    modelo_ia = genai.GenerativeModel('gemini-1.5-flash') # Recomendo usar o 1.5-flash
+    modelo_ia = genai.GenerativeModel('gemini-2.5-flash') # Recomendo usar o 1.5-flash
     print("✅ Modelo do Gemini inicializado com sucesso.")
 except Exception as e:
     print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
