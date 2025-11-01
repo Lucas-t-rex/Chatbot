@@ -120,19 +120,15 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
         customer_name_in_cache = cached_session_data.get('customer_name')
         print(f"🧠 Sessão para {contact_id} encontrada no cache. Nome em cache: {customer_name_in_cache}")
 
-        # --- CORREÇÃO DE AMNÉSIA (BUG GABRIEL/DANI) ---
-        # Compara o nome do DB (known_customer_name) com o nome do cache (customer_name_in_cache)
         if known_customer_name and customer_name_in_cache != known_customer_name:
             print(f"🔄 Sincronizando nome no cache: de '{customer_name_in_cache}' para '{known_customer_name}'")
             conversations_cache[contact_id]['customer_name'] = known_customer_name
             customer_name_in_cache = known_customer_name
-        # --- FIM DA CORREÇÃO ---
     else:
         print(f"⚠️ Sessão para {contact_id} não encontrada no cache. Reconstruindo...")
         
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # --- 1. LÓGICA DE NOME (Mantida como você pediu) ---
         prompt_name_instruction = ""
         final_user_name_for_prompt = ""
         
@@ -141,67 +137,60 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este nome."
         else:
             final_user_name_for_prompt = sender_name
-            # Esta é a sua regra de intervenção, que você queria manter
             prompt_name_instruction =  f"""
             REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
              Seu nome é {{Lyra}} e você é atendente da {{Marmitaria Sabor do Dia}}.
-             Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido. No entanto, você deve fazer isso de forma natural.
-             Se apresente e apresente a empresa de maneira curta e profissional.
-
-             1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi", "boa noite"), peça o nome dele de forma direta e educada.
-
-             2. Se a primeira mensagem do cliente já contiver uma pergunta (ex: "oi, qual o preço?", "quero saber como funciona"), você deve:
+             Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido.
+             1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi"), se apresente e peça o nome dele.
+             2. Se a primeira mensagem do cliente já contiver uma pergunta (ex: "oi, quanto é?"), você deve:
                 - Primeiro, acalmar o cliente dizendo que já vai responder.
                 - Em seguida, peça o nome para personalizar o atendimento.
                 - **IMPORTANTE**: Você deve guardar a pergunta original do cliente na memória.
-
              3. Quando o cliente responder com o nome dele (ex: "Meu nome é Marcos"), sua próxima resposta DEVE OBRIGATORIAMENTE:
                 - Começar com a tag: `[NOME_CLIENTE]O nome do cliente é: [Nome Extraído].`
                 - Agradecer ao cliente pelo nome.
-                - **RESPONDER IMEDIATAMENTE à pergunta original que ele fez no início da conversa.** Não o faça perguntar de novo.
-
-             EXEMPLO DE FLUXO IDEAL:
-             Cliente: "boa noite, queria saber o preço ?"
-             Você: "Boa noite! Claro, já te passo os detalhes. Para que nosso atendimento fique mais próximo, como posso te chamar?"
-             Cliente: "pode me chamar de Marcos"
-             Sua Resposta: "[NOME_CLIENTE]O nome do cliente é: Marcos. Prazer em conhecê-lo, Marcos! Os detalhes são ..."
+                - **RESPONDER IMEDIATAMENTE à pergunta original que ele fez no início da conversa.**
             """
-        # --- FIM DA LÓGICA DE NOME ---
-
-        # --- Lógica do Prompt de Bifurcação ---
+        
+        # --- PROMPT DE BIFURCAÇÃO MELHORADO (REGRAS MAIS RÍGIDAS) ---
         prompt_bifurcacao = ""
         if BIFURCACAO_ENABLED:
             prompt_bifurcacao = f"""
             =====================================================
             ⚙️ MODO DE BIFURCAÇÃO DE PEDIDOS (PRIORIDADE ALTA)
             =====================================================
-            Esta é a sua principal função. Você DEVE seguir este fluxo para CADA pedido.
+            Esta é a sua principal função. Você DEVE seguir este fluxo com extrema precisão.
 
             1.  **MISSÃO:** Você DEVE preencher TODOS os campos do "Gabarito de Pedido" abaixo.
-            2.  **CARDÁPIO:** Use as informações do cardápio para informar o cliente e calcular os valores.
-            3.  **COLETA:** Faça perguntas UMA de cada vez. Seja persistente. 
-                **NOVO: Você DEVE perguntar se o pedido é para ENTREGA ou RETIRADA NO LOCAL.**
+            2.  **PERSISTÊNCIA:** Você DEVE ser persistente. Se o cliente não fornecer uma informação, pergunte novamente até conseguir.
+            3.  **COLETA DE DADOS (SEQUENCIAL):**
+                a. **Item:** Pergunte o(s) item(ns) e tamanho(s). Ex: "1 Marmita P".
+                b. **Observações:** Pergunte se há modificações. (Ex: "sem salada", "sem feijão"). TUDO deve ir em "observacoes".
+                c. **Bebida:** Ofereça bebidas.
+                d. **Tipo de Pedido:** Pergunte se é "Entrega" ou "Retirada".
+                e. **Endereço (CRÍTICO):** Se for "Entrega", você DEVE obter "Rua", "Número" e "Bairro". Se o cliente enviar picado (uma mensagem para rua, outra para número), você deve coletar todos antes de prosseguir.
+                f. **Pagamento:** Pergunte a forma de pagamento.
             4.  **TELEFONE:** O campo "telefone_contato" JÁ ESTÁ PREENCHIDO. É {contact_phone}. NÃO pergunte o telefone ao cliente.
-            5.  **CÁLCULO:** Você DEVE calcular o `valor_total` somando os itens do pedido, bebidas e a `taxa_entrega` 
-                **(APENAS se o tipo_pedido for 'Entrega'. Se for 'Retirada', a taxa é R$ 0,00).**
-            6.  **CONFIRMAÇÃO (LOOP OBRIGATÓRIO):** Ao ter TODOS os campos, você DEVE apresentar um RESUMO COMPLETO ao cliente (incluindo o `valor_total` calculado) e perguntar "Confirma o pedido?".
-            7.  **EDIÇÃO (LOOP OBRIGATÓRIO):** Se o cliente quiser alterar (ex: "quero tirar o feijao", "adicione uma coca"), você DEVE:
-                a. Ajustar o gabarito (ex: adicionar em 'observacoes', alterar 'bebidas', alterar 'pedido_completo').
-                b. RECALCULAR o `valor_total`.
-                c. Apresentar o NOVO resumo completo e perguntar "Confirma o pedido?" novamente.
-            8.  **ENVIO (AÇÃO CRÍTICA):** Quando o cliente responder "sim", "confirmo", "pode enviar", ou algo positivo, sua resposta DEVE, OBRIGATORIAMENTE E SEM EXCEÇÃO, começar com a tag [PEDIDO_CONFIRMADO] e ser seguida por um objeto JSON VÁLIDO contendo o gabarito.
+            5.  **CÁLCULO:** Você DEVE calcular o `valor_total` somando os itens, bebidas e a `taxa_entrega` (APENAS se o tipo_pedido for 'Entrega'. Se for 'Retirada', a taxa é R$ 0,00).
+            6.  **CONFIRMAÇÃO FINAL (REGRA MESTRA):**
+                - Antes de enviar, você DEVE apresentar um RESUMO COMPLETO ao cliente com TODOS os campos preenchidos (item, observação, endereço, valor total, etc.).
+                - Você DEVE terminar perguntando "Confirma o pedido?".
+            7.  **ENVIO (AÇÃO CRÍTICA):**
+                - O cliente DEVE responder "sim", "confirmo", "pode enviar", ou algo positivo **DEPOIS** de ver o resumo.
+                - SOMENTE APÓS A CONFIRMAÇÃO DO CLIENTE, sua resposta DEVE começar com a tag [PEDIDO_CONFIRMADO] e ser seguida pelo JSON VÁLIDO.
+                - Se o cliente pedir para editar, volte ao passo 6 (apresentar novo resumo).
 
             --- GABARITO DE PEDIDO (DEVE SER PREENCHIDO) ---
             {{
               "nome_cliente": "...", (Use o 'known_customer_name' ou o nome capturado)
               "tipo_pedido": "...", (Deve ser "Entrega" ou "Retirada")
-              "endereco_completo": "...", (Se 'Retirada', preencha com 'Retirada no Local')
+              "endereco_completo": "...", (Deve conter Rua, Número e Bairro. Se 'Retirada', preencha com 'Retirada no Local')
               "telefone_contato": "{contact_phone}", (JÁ PREENCHIDO)
-              "pedido_completo": "...", (Lista de todos os itens, ex: "1 Marmita G, 2 Marmitas M (1 sem feijão), 1 Marmita P")
-              "bebidas": "...", (ex: "1 Coca-Cola 2L", ou "Nenhuma")
+              "pedido_completo": "...", (Lista de todos os itens. Ex: "1 Marmita P")
+              "bebidas": "...", (ex: "1 Coca-Cola Lata", ou "Nenhuma")
               "forma_pagamento": "...", (ex: "Pix", "Cartão na entrega", "Dinheiro (troco para R$ 100)")
-              "observacoes": "...", (ex: "1 das marmitas médias sem feijão", "Mandar sachês de ketchup", ou "Nenhuma")
-              "valor_total": "..." (O valor total calculado por você, incluindo a taxa de entrega SE APLICÁVEL)
+              "observacoes": "...", (CRÍTICO: Deve incluir "sem salada", "sem feijão", etc.)
+              "valor_total": "..." (O valor total calculado por você)
             }}
             --- FIM DO GABARITO ---
             """
@@ -261,12 +250,9 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             =====================================================
             """
 
-        # --- CORREÇÃO DE CONFLITO ---
-        # A mensagem inicial do bot agora é neutra. Ela não tenta vender
-        # e deixa a "REGRA CRÍTICA" funcionar primeiro.
         convo_start = [
             {'role': 'user', 'parts': [prompt_inicial]},
-            {'role': 'model', 'parts': [f"Entendido. Eu sou Lyra, atendente da Marmitaria Sabor do Dia. Minha prioridade é capturar o nome do cliente ({final_user_name_for_prompt}) e depois anotar o pedido. Estou pronta."]}
+            {'role': 'model', 'parts': [f"Entendido. Eu sou Lyra, atendente da Marmitaria Sabor do Dia. Minha prioridade é capturar o nome do cliente ({final_user_name_for_prompt}) e depois anotar o pedido, seguindo rigorosamente as regras. Estou pronta."]}
         ]
 
         loaded_conversation = load_conversation_from_db(contact_id)
@@ -322,12 +308,9 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
                     {'$set': {'customer_name': extracted_name}},
                     upsert=True
                 )
-                # --- CORREÇÃO DE AMNÉSIA ---
-                # Garante que o cache local seja atualizado IMEDIATAMENTE com o nome novo
                 if contact_id in conversations_cache:
                     conversations_cache[contact_id]['customer_name'] = extracted_name
                 customer_name_in_cache = extracted_name
-                # --- FIM DA CORREÇÃO ---
                 print(f"✅ Nome '{extracted_name}' salvo para o cliente {contact_id}.")
 
             except Exception as e:
