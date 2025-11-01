@@ -127,8 +127,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     if known_customer_name:
         print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
     
-    # --- 1. CORREÇÃO DE FUSO HORÁRIO ---
-    # O servidor do Fly.io está em UTC (ex: 18:34). Precisamos converter para o fuso de São Paulo (ex: 15:34).
     try:
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
@@ -137,13 +135,13 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     except Exception as e:
         print(f"⚠️ Erro ao definir fuso horário, usando hora do servidor. Erro: {e}")
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    # --- FIM DA CORREÇÃO ---
     
     prompt_name_instruction = ""
     final_user_name_for_prompt = ""
     
     if known_customer_name:
         final_user_name_for_prompt = known_customer_name
+        # Instrução EXPLÍCITA para não perguntar o nome novamente
         prompt_name_instruction = f"REGRA DE NOME: O nome do cliente JÁ FOI CAPTURADO. O nome dele é {final_user_name_for_prompt}. NÃO pergunte o nome dele novamente."
     else:
         final_user_name_for_prompt = sender_name
@@ -167,22 +165,24 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         1.  **MISSÃO:** Preencher TODOS os campos do "Gabarito de Pedido" abaixo.
         2.  **PERSISTÊNCIA:** Você deve ser um robô persistente. Se o cliente não fornecer uma informação (ex: Bairro), pergunte novamente até conseguir.
         3.  **COLETA DE DADOS (SEQUENCIAL E OBRIGATÓRIA):**
-            a. **Item:** Pergunte o(s) item(ns) e tamanho(s). Ex: "1 Marmita P".
-            b. **Observações:** Pergunte se há modificações (ex: "sem salada"). TUDO deve ir em "observacoes".
+            a. **Item:** Pergunte o(s) item(ns) e tamanho(s).
+            b. **Observações:** Pergunte se há modificações (ex: "sem salada").
             c. **Bebida:** Ofereça bebidas.
             d. **Tipo de Pedido:** Pergunte se é "Entrega" ou "Retirada".
-            e. **Endereço (CRÍTICO):** Se for "Entrega", você DEVE obter "Rua", "Número" e "Bairro". Se o cliente enviar picado (uma mensagem para rua, outra para número), você deve pacientemente coletar todos os 3 dados. NÃO PULE NENHUM.
+            e. **Endereço (CRÍTICO):** Se for "Entrega", você DEVE obter "Rua", "Número" e "Bairro".
             f. **Pagamento:** Pergunte a forma de pagamento.
         4.  **TELEFONE:** O campo "telefone_contato" JÁ ESTÁ PREENCHIDO. É {contact_phone}. NÃO pergunte o telefone.
         5.  **CÁLCULO:** Calcule o `valor_total` somando itens, bebidas e a `taxa_entrega` (APENAS se for 'Entrega'. Se for 'Retirada', a taxa é R$ 0,00).
-        6.  **CONFIRMAÇÃO FINAL (REGRA MESTRA):**
-            - Após ter TODOS os dados (Rua, Número, Bairro, Pagamento, etc.), você DEVE apresentar um RESUMO COMPLETO.
+        6.  **CONFIRMAÇÃO FINAL:**
+            - Após ter TODOS os dados, você DEVE apresentar um RESUMO COMPLETO.
             - O resumo deve ter TODOS os campos: Cliente, Pedido, Obs, Bebidas, Endereço, Pagamento, Valor Total.
             - Você DEVE terminar perguntando "Confirma o pedido?".
-        7.  **ENVIO (AÇÃO CRÍTICA):**
-            - O cliente DEVE responder "sim", "confirmo", "ok" **DEPOIS** de ver o resumo.
-            - SOMENTE APÓS A CONFIRMAÇÃO, sua resposta DEVE começar com a tag [PEDIDO_CONFIRMADO] e ser seguida pelo JSON VÁLIDO.
-            - Se o cliente pedir para editar (ex: "trocar a bebida"), você DEVE editar o gabarito e voltar ao passo 6 (apresentar novo resumo).
+        
+        7.  **REGRA MESTRA (A MAIS IMPORTANTE DE TODAS):**
+            - QUANDO o cliente enviar uma mensagem de confirmação (como "isso mesmo", "sim", "confirmo", "pode ser") LOGO APÓS você apresentar o resumo (Passo 6),
+            - Sua ÚNICA E EXCLUSIVA AÇÃO deve ser gerar a tag [PEDIDO_CONFIRMADO] seguida pelo JSON VÁLIDO e uma curta mensagem de despedida.
+            - **NÃO GERE ` ``` `.** NÃO GERE NADA ALÉM DA TAG E DO JSON.
+            - Se o cliente pedir para editar (ex: "tira o suco"), você DEVE editar o gabarito e voltar ao passo 6 (apresentar novo resumo).
 
         --- GABARITO DE PEDIDO (DEVE SER PREENCHIDO) ---
         {{
@@ -215,8 +215,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         =====================================================
         nome da empresa: {{Marmitaria Sabor do Dia}}
         
-        # --- 2. HORÁRIO DESABILITADO PARA TESTES ---
-        # (Conforme solicitado, a linha abaixo está comentada)
+        # (Horário está desabilitado para testes)
         # horário de atendimento: {{Segunda a Sábado, das 11:00 às 14:00}}
         
         =====================================================
@@ -251,7 +250,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
 
     convo_start = [
         {'role': 'user', 'parts': [prompt_inicial]},
-        {'role': 'model', 'parts': [f"Entendido. Eu sou Lyra. Minha prioridade é capturar o nome do cliente (se eu ainda não souber) e depois anotar o pedido rigorosamente. Estou pronta."]}
+        {'role': 'model', 'parts': [f"Entendido. Eu sou Lyra. Minha prioridade é capturar o nome do cliente (se eu ainda não souber) e depois anotar o pedido rigorosamente, seguindo a REGRA MESTRA. Estou pronta."]}
     ]
     
     chat_session = modelo_ia.start_chat(history=convo_start + old_history)
@@ -307,7 +306,10 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
-        return "Tive um pequeno problema para processar sua mensagem e precisei reiniciar nossa conversa. Você poderia repetir, por favor?"
+        # --- CORREÇÃO DE ERRO ---
+        # Se o modelo '2.5-flash' (que não existe) causar um erro aqui, 
+        # o bot enviará esta mensagem.
+        return "Desculpe, estou com um problema técnico no momento (IA_GEN_FAIL). Por favor, tente novamente em um instante."
     
 def transcrever_audio_gemini(caminho_do_audio):
     global modelo_ia 
