@@ -1,3 +1,4 @@
+
 import google.generativeai as genai
 import requests
 import os
@@ -48,14 +49,9 @@ if GEMINI_API_KEY:
 else:
     print("AVISO: A variável de ambiente GEMINI_API_KEY não foi definida.")
 
-# --- CORRIGIDO ---
-# Removidas variáveis globais de cache e buffer (`conversations_cache`, `message_buffer`, `message_timers`)
-# Elas causam amnésia em ambientes de produção com múltiplos workers (como o Fly.io).
-
 modelo_ia = None
 try:
-    # --- OTIMIZADO ---
-    # Usando 'gemini-1.5-flash' que tem uma janela de contexto e memória muito melhores
+
     modelo_ia = genai.GenerativeModel('gemini-2.5-flash')
     print("✅ Modelo do Gemini (gemini-2.5-flash) inicializado com sucesso.")
 except Exception as e:
@@ -80,16 +76,12 @@ def append_message_to_db(contact_id, role, text, message_id=None):
         return False
     
 def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session, tokens_used):
-    """
-    Atualiza apenas metadados da conversa (nome, tokens, última interação),
-    sem sobrescrever o histórico completo.
-    """
+
     try:
         update_payload = {
             'sender_name': sender_name,
             'last_interaction': datetime.now()
         }
-
         if customer_name:
             update_payload['customer_name'] = customer_name
 
@@ -101,10 +93,8 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session
             },
             upsert=True
         )
-
     except Exception as e:
         print(f"❌ Erro ao salvar metadados da conversa no MongoDB para {contact_id}: {e}")
-
 
 def load_conversation_from_db(contact_id):
     """Carrega o histórico de uma conversa do MongoDB, ordenando por timestamp."""
@@ -128,31 +118,20 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     do MongoDB a cada chamada, garantindo consistência entre os workers.
     """
     global modelo_ia
-
     if not modelo_ia:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
-
     print(f"🧠 Lendo o estado do DB para {contact_id}...")
-    
     convo_data = load_conversation_from_db(contact_id)
-    
     known_customer_name = None
     old_history = []
     
-    # TRECHO NOVO E CORRIGIDO
     if convo_data:
         known_customer_name = convo_data.get('customer_name')
         if 'history' in convo_data:
-            
-            # Carrega o histórico salvo no formato {'role': ..., 'text': ...}
             history_from_db = [msg for msg in convo_data['history'] if not msg['text'].strip().startswith("A data e hora atuais são:")]
-            
-            # --- INÍCIO DA CORREÇÃO CRÍTICA ---
-            # Precisamos converter de volta para o formato que o Gemini entende: {'role': ..., 'parts': [...]}
             old_history = []
             for msg in history_from_db:
                 role = msg.get('role', 'user')
-                # A API do Gemini usa 'model', não 'assistant'
                 if role == 'assistant':
                     role = 'model'
                 
@@ -161,10 +140,8 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
                         'role': role,
                         'parts': [msg['text']]
                     })
-            # --- FIM DA CORREÇÃO CRÍTICA ---
     if known_customer_name:
         print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
-    
     try:
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
@@ -173,13 +150,16 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     except Exception as e:
         print(f"⚠️ Erro ao definir fuso horário, usando hora do servidor. Erro: {e}")
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    
     prompt_name_instruction = ""
     final_user_name_for_prompt = ""
     
     if known_customer_name:
         final_user_name_for_prompt = known_customer_name
-        prompt_name_instruction = f"REGRA DE NOME: O nome do cliente JÁ FOI CAPTURADO. O nome dele é {final_user_name_for_prompt}. NÃO pergunte o nome dele novamente."
+        prompt_name_instruction = f"""
+        REGRA DE NOME: O nome do cliente JÁ FOI CAPTURADO. O nome dele é {final_user_name_for_prompt}.
+        NÃO pergunte o nome dele novamente.
+        (IMPORTANTE: Use o nome dele UMA VEZ por saudação, não em toda frase. Ex: "Certo, {final_user_name_for_prompt}!" e não "Certo, {final_user_name_for_prompt}! Seu pedido, {final_user_name_for_prompt}, é...")
+        """
     else:
         final_user_name_for_prompt = sender_name
         prompt_name_instruction =  f"""
@@ -189,8 +169,9 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
          2. Se a mensagem for uma pergunta (ex: "quero uma marmita"), diga que já vai ajudar, mas primeiro peça o nome para personalizar o atendimento. Guarde a pergunta original.
          3. Quando o cliente responder o nome (ex: "marcelo"), sua resposta DEVE começar com a tag: `[NOME_CLIENTE]O nome do cliente é: [Nome Extraído].`
          4. Imediatamente após a tag, agradeça e RESPONDA A PERGUNTA ORIGINAL que ele fez (ex: "Obrigada, Marcelo! Sobre a marmita, nosso cardápio é...").
+         5. (IMPORTANTE: Ao extrair o nome, NÃO o repita no resto da sua resposta. Agradeça UMA VEZ. Ex: "Obrigada, Marcelo! Sobre a marmita...")
         """
-    
+
     prompt_bifurcacao = ""
     if BIFURCACAO_ENABLED:
         prompt_bifurcacao = f"""
@@ -215,7 +196,14 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
             - O resumo deve ter TODOS os campos: Cliente, Pedido, Obs, Bebidas, Endereço, Pagamento, Valor Total.
             - Você DEVE terminar perguntando "Confirma o pedido?".
         
-        7.  **REGRA MESTRA (A MAIS IMPORTANTE DE TODAS):**
+        # --- CORREÇÃO 2 (Vazamento de JSON) ---
+        7.  **REGRA DE SIGILO (NÃO MOSTRE O GABARITO):**
+            - O "Gabarito de Pedido" e o JSON são seus pensamentos internos e ferramentas de sistema.
+            - O cliente NUNCA deve ver o JSON, a palavra "Gabarito", ou chaves `{{ }}`.
+            - Para o cliente, você escreve apenas o RESUMO formatado de forma amigável (como no Passo 6).
+        # --- FIM DA CORREÇÃO 2 ---
+        
+        8.  **REGRA MESTRA (A MAIS IMPORTANTE DE TODAS):**
             - QUANDO o cliente enviar uma mensagem de confirmação (como "isso mesmo", "sim", "confirmo", "pode ser") LOGO APÓS você apresentar o resumo (Passo 6),
             - Sua ÚNICA E EXCLUSIVA AÇÃO deve ser gerar a tag `[PEDIDO_CONFIRMADO]` seguida pelo JSON VÁLIDO.
             - **IMPORTANTE:** A tag `[PEDIDO_CONFIRMADO]` é um comando de sistema. O cliente não a verá.
@@ -223,7 +211,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
             - **NÃO GERE ` ``` `.**
             - Se o cliente pedir para editar (ex: "tira o suco"), você DEVE editar o gabarito e voltar ao passo 6 (apresentar novo resumo).
 
-        --- GABARITO DE PEDIDO (DEVE SER PREENCHIDO) ---
+        --- GABARITO DE PEDIDO (DEVE SER PREENCHIDO, NÃO MOSTRADO) ---
         {{
           "nome_cliente": "...", (Use o nome que você já sabe)
           "tipo_pedido": "...", (Deve ser "Entrega" ou "Retirada")
@@ -291,6 +279,10 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         - FOCO TOTAL: Seu primeiro objetivo é capturar o nome do cliente (se ainda não souber). Seu segundo objetivo é preencher o "Gabarito de Pedido" e confirmar.
         - MEMÓRIA: Você deve lembrar do que o cliente já disse (nome, itens) e não perguntar de novo.
         - NÃO FAZER: Não inventar pratos ou preços. Não falar sobre "IA" ou "Chatbot". Você é uma ATENDENTE HUMANA (Lyra).
+
+        # --- CORREÇÃO 3 (Confusão de Pedido: 1 coca + 1 agua) ---
+        - ATENÇÃO MÁXIMA: Leia as ÚLTIMAS mensagens do cliente com muito cuidado. Se ele enviar duas mensagens seguidas (ex: "1 coca" e logo depois "1 agua"), ele quer OS DOIS ITENS. Não ignore a segunda mensagem. Preste atenção no histórico recente.
+        
         =====================================================
         PRONTO PARA ATENDER O CLIENTE
         =====================================================
@@ -331,7 +323,14 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
             print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
             try:
                 full_response_part = ai_reply.split("O nome do cliente é:")[1].strip()
+                
+                # Pega o nome e remove qualquer ponto final
                 extracted_name = full_response_part.split('.')[0].strip()
+                
+                # --- CORREÇÃO 1 (Evitar "DaniDani") ---
+                # Garante que estamos pegando apenas o primeiro nome se houver lixo
+                extracted_name = extracted_name.split(' ')[0].strip() 
+                
                 start_of_message_index = full_response_part.find(extracted_name) + len(extracted_name)
                 ai_reply = full_response_part[start_of_message_index:].lstrip('.!?, ').strip()
 
@@ -407,15 +406,12 @@ def send_whatsapp_message(number, text_message):
         print(f"✅ Enviando resposta para a URL: {final_url} (Destino: {clean_number})")
         response = requests.post(final_url, json=payload, headers=headers)
         
-        # Checa se o status é 2xx (sucesso)
         if response.status_code < 400:
             print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n")
         else:
-            # Se a API retornar um erro (4xx, 5xx), imprime o erro
             print(f"❌ ERRO DA API EVOLUTION ao enviar para {clean_number}: {response.status_code} - {response.text}")
             
     except requests.exceptions.RequestException as e:
-        # Erro de rede (não conseguiu conectar)
         print(f"❌ Erro de CONEXÃO ao enviar mensagem para {clean_number}: {e}")
 
 def gerar_e_enviar_relatorio_semanal():
@@ -518,7 +514,6 @@ def receive_webhook():
 def health_check():
     return "Estou vivo! (Marmitaria Bot)", 200
 
-# --- NOVA FUNÇÃO 'process_message' (sem buffer) ---
 def process_message(message_data):
     """
     Processa CADA mensagem individualmente, sem buffer.
@@ -534,20 +529,16 @@ def process_message(message_data):
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
-        # Controle de concorrência (lock)
         now = datetime.now()
 
-        # Tenta pegar lock atualizando um doc existente que não esteja em processamento
         res = conversation_collection.update_one(
             {'_id': clean_number, 'processing': {'$ne': True}},
             {'$set': {'processing': True, 'processing_started_at': now}}
         )
 
         if res.matched_count == 1:
-            # Lock adquirido (doc existente atualizado)
             got_lock = True
         elif res.matched_count == 0:
-            # Não havia doc disponível para atualizar — tenta criar um novo doc com lock
             try:
                 conversation_collection.insert_one({
                     '_id': clean_number,
@@ -557,14 +548,11 @@ def process_message(message_data):
                 })
                 got_lock = True
             except errors.DuplicateKeyError:
-                # Outro worker criou/iniciou processamento concorrente — não processa aqui
                 print(f"⏳ {clean_number} já está sendo processado por outro worker (race). Abandonando esta execução.")
                 return
         else:
             got_lock = False
 
-
-        # Captura a mensagem do usuário
         message = message_data.get('message', {})
         user_message_content = None
 
@@ -590,11 +578,9 @@ def process_message(message_data):
             print(f"➡️  Mensagem ignorada (sem conteúdo de texto ou áudio) de {clean_number}.")
             return
 
-        # Salva a mensagem do usuário no histórico
         append_message_to_db(clean_number, 'user', user_message_content)
         print(f"🧠 Processando mensagem IMEDIATA de {clean_number}: '{user_message_content}'")
 
-        # Gera resposta da IA
         ai_reply = gerar_resposta_ia(
             clean_number,
             sender_name_from_wpp,
@@ -602,17 +588,11 @@ def process_message(message_data):
             clean_number
         )
 
-        # --- LÓGICA DE RESPOSTA E BIFURCAÇÃO CORRIGIDA ---
-        
         if not ai_reply:
-            # Se a IA não retornou nada, não faz nada
             return
-
         try:
-            # 1. Salva a resposta da IA no histórico (antes de modificar)
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
-            # 2. Verifica se é um Pedido Confirmado
             if BIFURCACAO_ENABLED and ai_reply.strip().startswith("[PEDIDO_CONFIRMADO]"):
                 print(f"📦 Tag [PEDIDO_CONFIRMADO] detectada. Processando e bifurcando pedido para {clean_number}...")
                 
@@ -628,7 +608,6 @@ def process_message(message_data):
 
                 order_data = json.loads(json_string)
 
-                # Monta as mensagens
                 msg_cozinha = f"""
                 --- 🍳 NOVO PEDIDO (COZINHA) 🍳 ---
                 Cliente: {order_data.get('nome_cliente', 'N/A')}
@@ -655,13 +634,11 @@ def process_message(message_data):
                 Valor Total: {order_data.get('valor_total', 'N/A')}
                 """
 
-                # Envia para cozinha
                 threading.Thread(
                     target=send_whatsapp_message,
                     args=(f"{COZINHA_WPP_NUMBER}@s.whatsapp.net", msg_cozinha.strip())
                 ).start()
 
-                # Se for entrega, envia para o motoboy
                 if order_data.get('tipo_pedido') == "Entrega":
                     threading.Thread(
                         target=send_whatsapp_message,
@@ -670,23 +647,20 @@ def process_message(message_data):
 
                 print(f"✅ Pedido bifurcado com sucesso.")
                 
-                # 3. Envia SÓ a mensagem limpa para o cliente
+
                 send_whatsapp_message(sender_number_full, remaining_reply)
 
             else:
-                # 3b. Se NÃO for um pedido, apenas envia a resposta normal da IA
                 print(f"🤖 Resposta (normal) da IA para {sender_name_from_wpp}: {ai_reply}")
                 send_whatsapp_message(sender_number_full, ai_reply)
 
         except Exception as e:
             print(f"❌ Erro ao processar bifurcação ou envio: {e}")
-            # Envia uma mensagem de erro genérica se tudo mais falhar
             send_whatsapp_message(sender_number_full, "Desculpe, tive um problema ao processar sua resposta. (Erro interno: SEND_LOGIC)")
 
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
-        # 4. Libera o Lock (A parte mais importante)
         if 'clean_number' in locals():
             conversation_collection.update_one(
                 {'_id': clean_number},
