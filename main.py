@@ -1,6 +1,7 @@
 import google.generativeai as genai
 import requests
 import os
+import pytz
 from flask import Flask, request, jsonify
 from datetime import datetime
 from dotenv import load_dotenv
@@ -113,7 +114,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
 
     print(f"🧠 Lendo o estado do DB para {contact_id}...")
     
-    # 1. SEMPRE carregar do DB. Esta é a nossa única fonte de verdade.
     convo_data = load_conversation_from_db(contact_id)
     
     known_customer_name = None
@@ -122,21 +122,28 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     if convo_data:
         known_customer_name = convo_data.get('customer_name')
         if 'history' in convo_data:
-            # Filtra o prompt antigo para não o enviar duas vezes
             old_history = [msg for msg in convo_data['history'] if not msg['parts'][0].strip().startswith("A data e hora atuais são:")]
     
     if known_customer_name:
         print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
     
-    horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # --- 1. CORREÇÃO DE FUSO HORÁRIO ---
+    # O servidor do Fly.io está em UTC (ex: 18:34). Precisamos converter para o fuso de São Paulo (ex: 15:34).
+    try:
+        fuso_horario_local = pytz.timezone('America/Sao_Paulo')
+        agora_local = datetime.now(fuso_horario_local)
+        horario_atual = agora_local.strftime("%Y-%m-%d %H:%M:%S")
+        print(f"⏰ Hora local (America/Sao_Paulo) definida para: {horario_atual}")
+    except Exception as e:
+        print(f"⚠️ Erro ao definir fuso horário, usando hora do servidor. Erro: {e}")
+        horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # --- FIM DA CORREÇÃO ---
     
-    # 2. Lógica do Prompt (Reforçada para evitar amnésia)
     prompt_name_instruction = ""
     final_user_name_for_prompt = ""
     
     if known_customer_name:
         final_user_name_for_prompt = known_customer_name
-        # Instrução EXPLÍCITA para não perguntar o nome novamente
         prompt_name_instruction = f"REGRA DE NOME: O nome do cliente JÁ FOI CAPTURADO. O nome dele é {final_user_name_for_prompt}. NÃO pergunte o nome dele novamente."
     else:
         final_user_name_for_prompt = sender_name
@@ -149,7 +156,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
          4. Imediatamente após a tag, agradeça e RESPONDA A PERGUNTA ORIGINAL que ele fez (ex: "Obrigada, Marcelo! Sobre a marmita, nosso cardápio é...").
         """
     
-    # 3. Prompt de Bifurcação (Mais Rígido e Detalhado)
     prompt_bifurcacao = ""
     if BIFURCACAO_ENABLED:
         prompt_bifurcacao = f"""
@@ -165,7 +171,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
             b. **Observações:** Pergunte se há modificações (ex: "sem salada"). TUDO deve ir em "observacoes".
             c. **Bebida:** Ofereça bebidas.
             d. **Tipo de Pedido:** Pergunte se é "Entrega" ou "Retirada".
-            e. **Endereço (CRÍTICO):** Se for "Entrega", você DEVE obter "Rua", "Número" e "Bairro". Se o cliente enviar picado (uma mensagem para rua, outra para número), você deve pacientemente coletar todos os 3 dados antes de prosseguir. NÃO PULE NENHUM.
+            e. **Endereço (CRÍTICO):** Se for "Entrega", você DEVE obter "Rua", "Número" e "Bairro". Se o cliente enviar picado (uma mensagem para rua, outra para número), você deve pacientemente coletar todos os 3 dados. NÃO PULE NENHUM.
             f. **Pagamento:** Pergunte a forma de pagamento.
         4.  **TELEFONE:** O campo "telefone_contato" JÁ ESTÁ PREENCHIDO. É {contact_phone}. NÃO pergunte o telefone.
         5.  **CÁLCULO:** Calcule o `valor_total` somando itens, bebidas e a `taxa_entrega` (APENAS se for 'Entrega'. Se for 'Retirada', a taxa é R$ 0,00).
@@ -208,7 +214,11 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         🏢 IDENTIDADE DA EMPRESA
         =====================================================
         nome da empresa: {{Marmitaria Sabor do Dia}}
-        horário de atendimento: {{Segunda a Sábado, das 11:00 às 14:00}}
+        
+        # --- 2. HORÁRIO DESABILITADO PARA TESTES ---
+        # (Conforme solicitado, a linha abaixo está comentada)
+        # horário de atendimento: {{Segunda a Sábado, das 11:00 às 14:00}}
+        
         =====================================================
         🍲 CARDÁPIO E PREÇOS (BASE DO PEDIDO)
         =====================================================
@@ -239,16 +249,13 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         =====================================================
         """
 
-    # 4. Reconstrução da Sessão
     convo_start = [
         {'role': 'user', 'parts': [prompt_inicial]},
         {'role': 'model', 'parts': [f"Entendido. Eu sou Lyra. Minha prioridade é capturar o nome do cliente (se eu ainda não souber) e depois anotar o pedido rigorosamente. Estou pronta."]}
     ]
     
-    # Criamos a sessão de chat A CADA MENSAGEM, usando o histórico do DB
     chat_session = modelo_ia.start_chat(history=convo_start + old_history)
     
-    # 5. Geração da Resposta
     try:
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
@@ -271,9 +278,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         
         ai_reply = resposta.text
         
-        # 6. Lógica de Extração e Salvamento
-        
-        # Esta é a variável que será salva no DB
         customer_name_to_save = known_customer_name 
 
         if ai_reply.strip().startswith("[NOME_CLIENTE]"):
@@ -286,7 +290,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
 
                 customer_name_to_save = extracted_name
                 
-                # Salva o nome NO DB IMEDIATAMENTE
                 conversation_collection.update_one(
                     {'_id': contact_id},
                     {'$set': {'customer_name': extracted_name}},
@@ -298,7 +301,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
                 print(f"❌ Erro ao extrair o nome da tag: {e}")
                 ai_reply = ai_reply.replace("[NOME_CLIENTE]", "").strip()
 
-        # 7. Salva o histórico completo da conversa no DB
         save_conversation_to_db(contact_id, sender_name, customer_name_to_save, chat_session, total_tokens_na_interacao)
         
         return ai_reply
@@ -306,7 +308,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
         return "Tive um pequeno problema para processar sua mensagem e precisei reiniciar nossa conversa. Você poderia repetir, por favor?"
-
+    
 def transcrever_audio_gemini(caminho_do_audio):
     global modelo_ia 
     if not modelo_ia:
