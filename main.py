@@ -381,27 +381,42 @@ def transcrever_audio_gemini(caminho_do_audio):
         return None
 
 def send_whatsapp_message(number, text_message):
-    """Envia uma mensagem de texto para um número via Evolution API."""
+    """Envia uma mensagem de texto via Evolution API, corrigindo a URL dinamicamente."""
+    
+    INSTANCE_NAME = "chatbot" 
     
     clean_number = number.split('@')[0]
-    
     payload = {"number": clean_number, "textMessage": {"text": text_message}}
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
+
+    base_url = EVOLUTION_API_URL
+    api_path = f"/message/sendText/{INSTANCE_NAME}"
     
-    full_url_correta = EVOLUTION_API_URL 
+    final_url = ""
     
+    # Caso 1: A variável de ambiente JÁ é a URL completa
+    if base_url.endswith(api_path):
+        final_url = base_url
+    elif base_url.endswith('/'):
+        final_url = base_url[:-1] + api_path
+    else:
+        final_url = base_url + api_path
+    # --- FIM DA LÓGICA ---
+
     try:
-        print(f"✅ Enviando resposta para a URL: {full_url_correta} (Destino: {clean_number})")
-        response = requests.post(full_url_correta, json=payload, headers=headers)
+        print(f"✅ Enviando resposta para a URL: {final_url} (Destino: {clean_number})")
+        response = requests.post(final_url, json=payload, headers=headers)
         
-        # Isso vai "travar" e mostrar um erro se a API não retornar 200
-        response.raise_for_status() 
-        
-        # Este log SÓ vai aparecer se o response.raise_for_status() PASSAR
-        print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n") 
-        
+        # Checa se o status é 2xx (sucesso)
+        if response.status_code < 400:
+            print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n")
+        else:
+            # Se a API retornar um erro (4xx, 5xx), imprime o erro
+            print(f"❌ ERRO DA API EVOLUTION ao enviar para {clean_number}: {response.status_code} - {response.text}")
+            
     except requests.exceptions.RequestException as e:
-        print(f"❌ Erro ao enviar mensagem para {clean_number}: {e}")
+        # Erro de rede (não conseguiu conectar)
+        print(f"❌ Erro de CONEXÃO ao enviar mensagem para {clean_number}: {e}")
 
 def gerar_e_enviar_relatorio_semanal():
     print(f"🗓️ Gerando relatório semanal para o cliente: {CLIENT_NAME}...")
