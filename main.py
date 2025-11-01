@@ -107,27 +107,32 @@ def load_conversation_from_db(contact_id):
 def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name, contact_phone):
     """
     Gera uma resposta usando a IA, com lógica robusta de cache e fallback para o banco de dados.
-    Agora usa o prompt da MARMITARIA e a lógica de NOME da MARMITARIA.
     """
     global modelo_ia, conversations_cache
 
     if not modelo_ia:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
 
-    # --- LÓGICA DE CACHE E RESTAURAÇÃO (Mantida da sua base) ---
     cached_session_data = conversations_cache.get(contact_id)
 
     if cached_session_data:
         chat_session = cached_session_data['ai_chat_session']
         customer_name_in_cache = cached_session_data.get('customer_name')
-        print(f"🧠 Sessão para {contact_id} encontrada no cache.")
+        print(f"🧠 Sessão para {contact_id} encontrada no cache. Nome em cache: {customer_name_in_cache}")
+
+        # --- CORREÇÃO DE AMNÉSIA (BUG GABRIEL/DANI) ---
+        # Compara o nome do DB (known_customer_name) com o nome do cache (customer_name_in_cache)
+        if known_customer_name and customer_name_in_cache != known_customer_name:
+            print(f"🔄 Sincronizando nome no cache: de '{customer_name_in_cache}' para '{known_customer_name}'")
+            conversations_cache[contact_id]['customer_name'] = known_customer_name
+            customer_name_in_cache = known_customer_name
+        # --- FIM DA CORREÇÃO ---
     else:
         print(f"⚠️ Sessão para {contact_id} não encontrada no cache. Reconstruindo...")
         
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
-        # --- 4. LÓGICA DE NOME (DA MARMITARIA) ---
-        # (Conforme sua solicitação: usa o nome do WPP e não pergunta ativamente)
+        # --- 1. LÓGICA DE NOME (Mantida como você pediu) ---
         prompt_name_instruction = ""
         final_user_name_for_prompt = ""
         
@@ -135,48 +140,35 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             final_user_name_for_prompt = known_customer_name
             prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este nome."
         else:
-            # Se não salvou o nome ainda, usa o nome do WhatsApp
             final_user_name_for_prompt = sender_name
+            # Esta é a sua regra de intervenção, que você queria manter
             prompt_name_instruction =  f"""
-
             REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
+             Seu nome é {{Lyra}} e você é atendente da {{Marmitaria Sabor do Dia}}.
+             Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido. No entanto, você deve fazer isso de forma natural.
+             Se apresente e apresente a empresa de maneira curta e profissional.
 
-              Seu nome é {{Lyra}} e você é atendente da {{Marmitaria Sabor do Dia}}.
-              Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido. No entanto, você deve fazer isso de forma natural.
-              Se apresente e apresente a empresa de maneira curta e profissional.
+             1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi", "boa noite"), peça o nome dele de forma direta e educada.
 
-              1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi", "boa noite"), peça o nome dele de forma direta e educada.
+             2. Se a primeira mensagem do cliente já contiver uma pergunta (ex: "oi, qual o preço?", "quero saber como funciona"), você deve:
+                - Primeiro, acalmar o cliente dizendo que já vai responder.
+                - Em seguida, peça o nome para personalizar o atendimento.
+                - **IMPORTANTE**: Você deve guardar a pergunta original do cliente na memória.
 
-              2. Se a primeira mensagem do cliente já contiver uma pergunta (ex: "oi, qual o preço?", "quero saber como funciona"), você deve:
+             3. Quando o cliente responder com o nome dele (ex: "Meu nome é Marcos"), sua próxima resposta DEVE OBRIGATORIAMENTE:
+                - Começar com a tag: `[NOME_CLIENTE]O nome do cliente é: [Nome Extraído].`
+                - Agradecer ao cliente pelo nome.
+                - **RESPONDER IMEDIATAMENTE à pergunta original que ele fez no início da conversa.** Não o faça perguntar de novo.
 
-                 - Primeiro, acalmar o cliente dizendo que já vai responder.
-
-                 - Em seguida, peça o nome para personalizar o atendimento.
-
-                 - **IMPORTANTE**: Você deve guardar a pergunta original do cliente na memória.
-
-              3. Quando o cliente responder com o nome dele (ex: "Meu nome é Marcos"), sua próxima resposta DEVE OBRIGATORIAMENTE:
-
-                 - Começar com a tag: `[NOME_CLIENTE]O nome do cliente é: [Nome Extraído].`
-
-                 - Agradecer ao cliente pelo nome.
-
-                 - **RESPONDER IMEDIATAMENTE à pergunta original que ele fez no início da conversa.** Não o faça perguntar de novo.
-
-              - **IMPORTANTE**: A simples apresentação do nome do cliente (ex: "meu nome é marcos") NÃO é um motivo para intervenção. Continue a conversa normalmente nesses casos.
-
-              EXEMPLO DE FLUXO IDEAL:
-
-              Cliente: "boa noite, queria saber o preço ?"
-
-              Você: "Boa noite! Claro, já te passo os detalhes. Para que nosso atendimento fique mais próximo, como posso te chamar?"
-              Cliente: "pode me chamar de Marcos"
-              Sua Resposta: "[NOME_CLIENTE]O nome do cliente é: Marcos. Prazer em conhecê-lo, Marcos! Os detalhes são ..."
-
+             EXEMPLO DE FLUXO IDEAL:
+             Cliente: "boa noite, queria saber o preço ?"
+             Você: "Boa noite! Claro, já te passo os detalhes. Para que nosso atendimento fique mais próximo, como posso te chamar?"
+             Cliente: "pode me chamar de Marcos"
+             Sua Resposta: "[NOME_CLIENTE]O nome do cliente é: Marcos. Prazer em conhecê-lo, Marcos! Os detalhes são ..."
             """
         # --- FIM DA LÓGICA DE NOME ---
 
-        # --- Lógica do Prompt de Bifurcação (DA MARMITARIA) ---
+        # --- Lógica do Prompt de Bifurcação ---
         prompt_bifurcacao = ""
         if BIFURCACAO_ENABLED:
             prompt_bifurcacao = f"""
@@ -187,9 +179,11 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
 
             1.  **MISSÃO:** Você DEVE preencher TODOS os campos do "Gabarito de Pedido" abaixo.
             2.  **CARDÁPIO:** Use as informações do cardápio para informar o cliente e calcular os valores.
-            3.  **COLETA:** Faça perguntas UMA de cada vez, de forma natural, até ter todos os dados. Seja persistente.
+            3.  **COLETA:** Faça perguntas UMA de cada vez. Seja persistente. 
+                **NOVO: Você DEVE perguntar se o pedido é para ENTREGA ou RETIRADA NO LOCAL.**
             4.  **TELEFONE:** O campo "telefone_contato" JÁ ESTÁ PREENCHIDO. É {contact_phone}. NÃO pergunte o telefone ao cliente.
-            5.  **CÁLCULO:** Você DEVE calcular o `valor_total` somando os itens do pedido, bebidas e a `taxa_entrega`.
+            5.  **CÁLCULO:** Você DEVE calcular o `valor_total` somando os itens do pedido, bebidas e a `taxa_entrega` 
+                **(APENAS se o tipo_pedido for 'Entrega'. Se for 'Retirada', a taxa é R$ 0,00).**
             6.  **CONFIRMAÇÃO (LOOP OBRIGATÓRIO):** Ao ter TODOS os campos, você DEVE apresentar um RESUMO COMPLETO ao cliente (incluindo o `valor_total` calculado) e perguntar "Confirma o pedido?".
             7.  **EDIÇÃO (LOOP OBRIGATÓRIO):** Se o cliente quiser alterar (ex: "quero tirar o feijao", "adicione uma coca"), você DEVE:
                 a. Ajustar o gabarito (ex: adicionar em 'observacoes', alterar 'bebidas', alterar 'pedido_completo').
@@ -200,35 +194,20 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             --- GABARITO DE PEDIDO (DEVE SER PREENCHIDO) ---
             {{
               "nome_cliente": "...", (Use o 'known_customer_name' ou o nome capturado)
-              "endereco_completo": "...", (Rua, Número, Bairro, Cidade/Estado, Ponto de Referência se houver)
+              "tipo_pedido": "...", (Deve ser "Entrega" ou "Retirada")
+              "endereco_completo": "...", (Se 'Retirada', preencha com 'Retirada no Local')
               "telefone_contato": "{contact_phone}", (JÁ PREENCHIDO)
               "pedido_completo": "...", (Lista de todos os itens, ex: "1 Marmita G, 2 Marmitas M (1 sem feijão), 1 Marmita P")
               "bebidas": "...", (ex: "1 Coca-Cola 2L", ou "Nenhuma")
               "forma_pagamento": "...", (ex: "Pix", "Cartão na entrega", "Dinheiro (troco para R$ 100)")
               "observacoes": "...", (ex: "1 das marmitas médias sem feijão", "Mandar sachês de ketchup", ou "Nenhuma")
-              "valor_total": "..." (O valor total calculado por você, incluindo a taxa de entrega)
+              "valor_total": "..." (O valor total calculado por você, incluindo a taxa de entrega SE APLICÁVEL)
             }}
             --- FIM DO GABARITO ---
-
-            EXEMPLO DE INTERAÇÃO DE ENVIO CORRETA:
-            Cliente: "Isso mesmo, pode confirmar."
-            Sua Resposta: [PEDIDO_CONFIRMADO]{{
-              "nome_cliente": "Gabriel",
-              "endereco_completo": "Rua China, 0, Bairro X, Maringá-PR",
-              "telefone_contato": "{contact_phone}",
-              "pedido_completo": "1 Marmita G (Strogonoff), 1 Marmita M (Strogonoff)",
-              "bebidas": "1 Coca-Cola Lata",
-              "forma_pagamento": "Pix",
-              "observacoes": "Caprichar na batata palha.",
-              "valor_total": "R$ 49,00"
-            }}
-            Pedido confirmado, Gabriel! 😋 Estou enviando para a cozinha. O tempo de entrega é de 40 a 50 minutos. Muito obrigada!
             """
         else:
             prompt_bifurcacao = "O plano de Bifurcação (envio para cozinha) não está ativo."
-        # --- FIM DA LÓGICA DE BIFURCAÇÃO ---
         
-        # --- 5. PROMPT INICIAL (DA MARMITARIA) ---
         prompt_inicial = f"""
             A data e hora atuais são: {horario_atual}.
             {prompt_name_instruction}
@@ -237,7 +216,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             🏷️ IDENTIDADE DO ATENDENTE
             =====================================================
             nome: {{Lyra}}
-            sexo: {{Feminina}}
             função: {{Atendente de restaurante (delivery)}} 
             papel: {{Você deve atender o cliente, apresentar o cardápio, anotar o pedido completo, calcular o valor total e confirmar a entrega.}}
 
@@ -245,8 +223,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             🏢 IDENTIDADE DA EMPRESA
             =====================================================
             nome da empresa: {{Marmitaria Sabor do Dia}}
-            setor: {{Alimentação e Delivery}} 
-            missão: {{Entregar a melhor comida caseira da cidade, com rapidez e sabor.}}
             horário de atendimento: {{Segunda a Sábado, das 11:00 às 14:00}}
             
             =====================================================
@@ -256,7 +232,6 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             --- PRATO DO DIA (Exemplo) ---
             Hoje temos: {{Strogonoff de Frango}}
             Acompanhamentos: {{Arroz branco, Feijão, Batata palha e Salada de alface e tomate.}}
-            (A menos que o cliente peça, todas as marmitas vêm com todos os acompanhamentos. Ex: "sem feijão" deve ir em observações).
 
             --- TAMANHOS E VALORES (Marmitas) ---
             - Marmita Pequena (P): {{R$ 15,00}}
@@ -270,70 +245,37 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             - Suco de Laranja (natural 500ml): {{R$ 8,00}}
 
             --- 🛵 TAXA DE ENTREGA ---
-            - Taxa de Entrega Fixa: {{R$ 6,00}} (Use este valor para CÁLCULO do valor total)
+            - Taxa de Entrega Fixa: {{R$ 6,00}} (Use este valor para CÁLCULO do valor total APENAS PARA ENTREGAS)
+            - Pedidos para Retirada no Local: {{R$ 0,00}} (não há taxa)
 
             {prompt_bifurcacao} 
 
             =====================================================
             🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO
             =====================================================
-            ações:
-            - Responda sempre de forma alegre, educada e um pouco informal (use emojis 😋, 😊, 🛵).
-            - Use frases curtas e diretas.
-            - Mantenha sempre um tom positivo e prestativo.
-            - SEJA PROATIVA: Se o cliente diz "oi", já pergunte se ele quer ver o cardápio do dia.
-            - FOCO TOTAL: Seu objetivo é preencher o "Gabarito de Pedido" e confirmar a entrega.
+            - FOCO TOTAL: Seu primeiro objetivo é capturar o nome do cliente. Seu segundo objetivo é preencher o "Gabarito de Pedido" e confirmar.
+            - não deve fazer: Não inventar pratos ou preços. Não falar sobre "IA" ou "Chatbot". Você é uma ATENDENTE HUMANA (Lyra).
             
-            não deve fazer:
-            - Não inventar pratos ou preços que não estão no cardápio.
-            - Não discutir com o cliente.
-            - Não falar sobre "Neuro Soluções em Tecnologia", "Planos", "IA", "Chatbot". Você é uma ATENDENTE HUMANA (Lyra) da marmitaria.
-
-            =====================================================
-            ⚙️ PERSONALIDADE DO ATENDENTE
-            =====================================================
-            - Tom de voz: {{alegre, acolhedor, prestativo}} 
-            - Estilo: {{Humana, simpática, vendedora (de comida)}}
-            - Emojis: {{use com moderação, para dar tom de apetite 😋}}
-            
-            =====================================================
-            🧩 EXEMPLO DE COMPORTAMENTO
-            =====================================================
-            Cliente: "oi boa noite"
-            Atendente: "Olá, {final_user_name_for_prompt}! Boa noite! 😊 Nosso cardápio hoje está uma delícia! Nosso prato do dia é Strogonoff de Frango, acompanhado de arroz, feijão, batata palha e salada. Vamos pedir hoje? 😋"
-
-            Cliente: "eu quero saber se tem marmita ai ?"
-            Atendente: "Temos sim, {final_user_name_for_prompt}! É a nossa especialidade! 😊 Hoje o prato do dia é Strogonoff de Frango. Temos nos tamanhos P (R$ 15,00), M (R$ 18,00) e G (R$ 22,00). Qual tamanho você prefere?"
-            
-            Cliente: "vou querer uma G. E bebida?"
-            Atendente: "Ótima escolha! 😋 Anotado 1 Marmita G. Para beber, temos Coca-Cola Lata (R$ 5), Guaraná Lata (R$ 5), Água (R$ 3) e Suco de Laranja natural (R$ 8). Qual prefere?"
-
             =====================================================
             PRONTO PARA ATENDER O CLIENTE
             =====================================================
-            Regras:
-            1. Você não deve invertar valores ou itens para incluir no pedido.
-            2. As Marmitas sempre são as mesmas Marmita Pequena (P), Marmita Média (M), Marmita Grande (G) e nunca devem ser alteradas, se algum sabor ou informaçao sobre elas como tirar ou colocar alguma coisa, deve ser incluido no campo de observação.
             """
-        # --- FIM DO PROMPT DA MARMITARIA ---
 
-        # --- RESPOSTA INICIAL (DA MARMITARIA) ---
+        # --- CORREÇÃO DE CONFLITO ---
+        # A mensagem inicial do bot agora é neutra. Ela não tenta vender
+        # e deixa a "REGRA CRÍTICA" funcionar primeiro.
         convo_start = [
             {'role': 'user', 'parts': [prompt_inicial]},
-            {'role': 'model', 'parts': [f"Entendido. Eu sou Lyra, atendente da Marmitaria Sabor do Dia. Minha prioridade é anotar o pedido do cliente ({final_user_name_for_prompt}), preencher o gabarito, calcular o valor total (incluindo R$ 6,00 da entrega) e usar a tag [PEDIDO_CONFIRMADO] no final. Estou pronta! Olá, {final_user_name_for_prompt}! 😊 Nosso prato do dia hoje é Strogonoff de Frango. Vamos fazer um pedido? 😋"]}
+            {'role': 'model', 'parts': [f"Entendido. Eu sou Lyra, atendente da Marmitaria Sabor do Dia. Minha prioridade é capturar o nome do cliente ({final_user_name_for_prompt}) e depois anotar o pedido. Estou pronta."]}
         ]
 
-        # Carrega o histórico da memória de longo prazo (MongoDB)
         loaded_conversation = load_conversation_from_db(contact_id)
         old_history = []
         if loaded_conversation and 'history' in loaded_conversation:
-            # Filtra o prompt antigo para não o enviar duas vezes
             old_history = [msg for msg in loaded_conversation['history'] if not msg['parts'][0].strip().startswith("A data e hora atuais são:")]
         
-        # Inicia o chat combinando o novo prompt com o histórico antigo
         chat_session = modelo_ia.start_chat(history=convo_start + old_history)
         
-        # Salva a sessão reconstruída na memória de curto prazo (cache)
         conversations_cache[contact_id] = {
             'ai_chat_session': chat_session, 
             'name': sender_name, 
@@ -341,21 +283,32 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
         }
         customer_name_in_cache = known_customer_name
 
-    # --- FIM DA LÓGICA DE CACHE ---
+    # --- FIM DA LÓGICA DE CACHE/RECONSTRUÇÃO ---
 
     try:
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
-        input_tokens = modelo_ia.count_tokens(chat_session.history + [{'role':'user', 'parts': [user_message]}]).total_tokens
+        try:
+            input_tokens = modelo_ia.count_tokens(chat_session.history + [{'role':'user', 'parts': [user_message]}]).total_tokens
+        except Exception as e:
+            print(f"Aviso: count_tokens falhou, continuando sem contar. Erro: {e}")
+            input_tokens = 0
+
         resposta = chat_session.send_message(user_message)
-        output_tokens = modelo_ia.count_tokens(resposta.text).total_tokens
+        
+        try:
+            output_tokens = modelo_ia.count_tokens(resposta.text).total_tokens
+        except Exception as e:
+            print(f"Aviso: count_tokens (saída) falhou. Erro: {e}")
+            output_tokens = 0
+            
         total_tokens_na_interacao = input_tokens + output_tokens
         
-        print(f"📊 Consumo de Tokens: Entrada={input_tokens}, Saída={output_tokens}, Total={total_tokens_na_interacao}")
+        if total_tokens_na_interacao > 0:
+             print(f"📊 Consumo de Tokens: Entrada={input_tokens}, Saída={output_tokens}, Total={total_tokens_na_interacao}")
         
         ai_reply = resposta.text
 
-        # Lógica de extração de [NOME_CLIENTE] (mantida para caso o cliente troque o nome)
         if ai_reply.strip().startswith("[NOME_CLIENTE]"):
             print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
             try:
@@ -369,15 +322,18 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
                     {'$set': {'customer_name': extracted_name}},
                     upsert=True
                 )
-                conversations_cache[contact_id]['customer_name'] = extracted_name
+                # --- CORREÇÃO DE AMNÉSIA ---
+                # Garante que o cache local seja atualizado IMEDIATAMENTE com o nome novo
+                if contact_id in conversations_cache:
+                    conversations_cache[contact_id]['customer_name'] = extracted_name
                 customer_name_in_cache = extracted_name
+                # --- FIM DA CORREÇÃO ---
                 print(f"✅ Nome '{extracted_name}' salvo para o cliente {contact_id}.")
 
             except Exception as e:
                 print(f"❌ Erro ao extrair o nome da tag: {e}")
                 ai_reply = ai_reply.replace("[NOME_CLIENTE]", "").strip()
 
-        # Salva a conversa (Lógica de bifurcação será tratada em _trigger_ai_processing)
         save_conversation_to_db(contact_id, sender_name, customer_name_in_cache, chat_session, total_tokens_na_interacao)
         
         return ai_reply
@@ -387,7 +343,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
         if contact_id in conversations_cache:
             del conversations_cache[contact_id]
         return "Tive um pequeno problema para processar sua mensagem e precisei reiniciar nossa conversa. Você poderia repetir, por favor?"
-
+    
 def transcrever_audio_gemini(caminho_do_audio):
     """
     Envia um arquivo de áudio para a API do Gemini e retorna a transcrição em texto.
