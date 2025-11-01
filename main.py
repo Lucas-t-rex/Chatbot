@@ -381,16 +381,25 @@ def transcrever_audio_gemini(caminho_do_audio):
         return None
 
 def send_whatsapp_message(number, text_message):
-    INSTANCE_NAME = "chatbot" 
-    full_url = f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}"
+    """Envia uma mensagem de texto para um número via Evolution API."""
+    
     clean_number = number.split('@')[0]
+    
     payload = {"number": clean_number, "textMessage": {"text": text_message}}
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
+    
+    full_url_correta = EVOLUTION_API_URL 
+    
     try:
-        print(f"✅ Enviando resposta para a URL: {full_url} (Destino: {clean_number})")
-        response = requests.post(full_url, json=payload, headers=headers)
-        response.raise_for_status()
-        print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n")
+        print(f"✅ Enviando resposta para a URL: {full_url_correta} (Destino: {clean_number})")
+        response = requests.post(full_url_correta, json=payload, headers=headers)
+        
+        # Isso vai "travar" e mostrar um erro se a API não retornar 200
+        response.raise_for_status() 
+        
+        # Este log SÓ vai aparecer se o response.raise_for_status() PASSAR
+        print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n") 
+        
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro ao enviar mensagem para {clean_number}: {e}")
 
