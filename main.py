@@ -12,6 +12,7 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
 import json 
+from pymongo import errors
 
 CLIENT_NAME = "Marmitaria Sabor do Dia" 
 
@@ -492,15 +493,34 @@ def process_message(message_data):
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
         # Controle de concorrência (lock)
-        lock_filter = {'_id': clean_number, 'processing': {'$ne': True}}
-        lock_update = {'$set': {'processing': True, 'processing_started_at': datetime.now()}}
-        lock_result = conversation_collection.find_one_and_update(
-            lock_filter, lock_update, upsert=True
+        now = datetime.now()
+
+        # Tenta pegar lock atualizando um doc existente que não esteja em processamento
+        res = conversation_collection.update_one(
+            {'_id': clean_number, 'processing': {'$ne': True}},
+            {'$set': {'processing': True, 'processing_started_at': now}}
         )
 
-        if lock_result is None:
-            print(f"⏳ {clean_number} já está sendo processado por outro worker. Aguardando...")
-            return  # Ignora ou refile a mensagem mais tarde
+        if res.matched_count == 1:
+            # Lock adquirido (doc existente atualizado)
+            got_lock = True
+        elif res.matched_count == 0:
+            # Não havia doc disponível para atualizar — tenta criar um novo doc com lock
+            try:
+                conversation_collection.insert_one({
+                    '_id': clean_number,
+                    'processing': True,
+                    'processing_started_at': now,
+                    'created_at': now
+                })
+                got_lock = True
+            except errors.DuplicateKeyError:
+                # Outro worker criou/iniciou processamento concorrente — não processa aqui
+                print(f"⏳ {clean_number} já está sendo processado por outro worker (race). Abandonando esta execução.")
+                return
+        else:
+            got_lock = False
+
 
         # Captura a mensagem do usuário
         message = message_data.get('message', {})
@@ -623,7 +643,7 @@ def process_message(message_data):
         if 'clean_number' in locals():
             conversation_collection.update_one(
                 {'_id': clean_number},
-                {'$set': {'processing': False}}
+                {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
 
 if __name__ == '__main__':
