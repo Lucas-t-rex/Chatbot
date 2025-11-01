@@ -56,23 +56,39 @@ try:
     # --- OTIMIZADO ---
     # Usando 'gemini-1.5-flash' que tem uma janela de contexto e memória muito melhores
     modelo_ia = genai.GenerativeModel('gemini-2.5-flash')
-    print("✅ Modelo do Gemini (gemini-1.5-flash) inicializado com sucesso.")
+    print("✅ Modelo do Gemini (gemini-2.5-flash) inicializado com sucesso.")
 except Exception as e:
     print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
 
-def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session, tokens_used):
-    """Salva o histórico, nomes e atualiza a contagem de tokens no MongoDB."""
+def append_message_to_db(contact_id, role, text, message_id=None):
     try:
-        history_list = [
-            {'role': msg.role, 'parts': [part.text for part in msg.parts]}
-            for msg in chat_session.history
-        ]
-        
+        tz = pytz.timezone('America/Sao_Paulo')
+        now = datetime.now(tz)
+        entry = {'role': role, 'text': text, 'ts': now.isoformat()}
+        if message_id:
+            entry['msg_id'] = message_id
+
+        conversation_collection.update_one(
+            {'_id': contact_id},
+            {'$push': {'history': entry}, '$setOnInsert': {'created_at': now}},
+            upsert=True
+        )
+        return True
+    except Exception as e:
+        print(f"❌ Erro ao append_message_to_db: {e}")
+        return False
+    
+def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session, tokens_used):
+    """
+    Atualiza apenas metadados da conversa (nome, tokens, última interação),
+    sem sobrescrever o histórico completo.
+    """
+    try:
         update_payload = {
             'sender_name': sender_name,
-            'history': history_list,
             'last_interaction': datetime.now()
         }
+
         if customer_name:
             update_payload['customer_name'] = customer_name
 
@@ -80,27 +96,30 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session
             {'_id': contact_id},
             {
                 '$set': update_payload,
-                '$inc': { 'total_tokens_consumed': tokens_used }
+                '$inc': {'total_tokens_consumed': tokens_used}
             },
             upsert=True
         )
+
     except Exception as e:
-        print(f"❌ Erro ao salvar conversa no MongoDB para {contact_id}: {e}")
+        print(f"❌ Erro ao salvar metadados da conversa no MongoDB para {contact_id}: {e}")
+
 
 def load_conversation_from_db(contact_id):
-    """Carrega o histórico de uma conversa do MongoDB, se existir."""
+    """Carrega o histórico de uma conversa do MongoDB, ordenando por timestamp."""
     try:
         result = conversation_collection.find_one({'_id': contact_id})
         if result:
-            print(f"🧠 Histórico anterior encontrado e carregado para {contact_id}.")
+            # garante que 'history' exista e ordena
+            history = result.get('history', [])
+            history_sorted = sorted(history, key=lambda m: m.get('ts', ''))
+            result['history'] = history_sorted
+            print(f"🧠 Histórico anterior encontrado e carregado para {contact_id} ({len(history_sorted)} entradas).")
             return result
     except Exception as e:
         print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
     return None
 
-# --- CORRIGIDO ---
-# Função 'gerar_resposta_ia' totalmente refeita para ser "Stateless" (sem cache)
-# Ela agora lê o histórico do MongoDB a CADA mensagem, resolvendo o problema de amnésia.
 def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     """
     Gera uma resposta usando a IA.
@@ -122,7 +141,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     if convo_data:
         known_customer_name = convo_data.get('customer_name')
         if 'history' in convo_data:
-            old_history = [msg for msg in convo_data['history'] if not msg['parts'][0].strip().startswith("A data e hora atuais são:")]
+            old_history = [msg for msg in convo_data['history'] if not msg['text'].strip().startswith("A data e hora atuais são:")]
     
     if known_customer_name:
         print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
@@ -406,10 +425,6 @@ def gerar_e_enviar_relatorio_semanal():
 app = Flask(__name__)
 processed_messages = set() 
 
-# --- CORRIGIDO ---
-# O bloco de 'handle_message_buffering' e '_trigger_ai_processing'
-# foi removido e substituído por 'process_message'
-# Isso elimina o buffer de 10s, resolvendo a confusão de pedidos.
 
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
@@ -475,10 +490,22 @@ def process_message(message_data):
 
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
-        
-        user_message_content = None
+
+        # Controle de concorrência (lock)
+        lock_filter = {'_id': clean_number, 'processing': {'$ne': True}}
+        lock_update = {'$set': {'processing': True, 'processing_started_at': datetime.now()}}
+        lock_result = conversation_collection.find_one_and_update(
+            lock_filter, lock_update, upsert=True
+        )
+
+        if lock_result is None:
+            print(f"⏳ {clean_number} já está sendo processado por outro worker. Aguardando...")
+            return  # Ignora ou refile a mensagem mais tarde
+
+        # Captura a mensagem do usuário
         message = message_data.get('message', {})
-        
+        user_message_content = None
+
         if message.get('conversation'):
             user_message_content = message['conversation']
         elif message.get('extendedTextMessage'):
@@ -496,22 +523,29 @@ def process_message(message_data):
             if not user_message_content:
                 send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
                 return
-        
+
         if not user_message_content:
-            print(f"➡️  Mensagem ignorada (sem conteúdo de texto ou áudio) de {clean_number}.")
+            print(f"➡️  Mensagem ignorada (sem conteúdo de texto ou áudio) de {clean_number}.")
             return
-        
+
+        # Salva a mensagem do usuário no histórico
+        append_message_to_db(clean_number, 'user', user_message_content)
         print(f"🧠 Processando mensagem IMEDIATA de {clean_number}: '{user_message_content}'")
 
-        # Chama a IA de forma stateless (ela mesma vai ler o DB)
+        # Gera resposta da IA
         ai_reply = gerar_resposta_ia(
-            clean_number, 
-            sender_name_from_wpp, 
-            user_message_content, 
-            clean_number # contact_phone
+            clean_number,
+            sender_name_from_wpp,
+            user_message_content,
+            clean_number
         )
 
-        # Lógica de Bifurcação (sem alterações)
+        # Se houver resposta, salva e envia
+        if ai_reply:
+            append_message_to_db(clean_number, 'assistant', ai_reply)
+            send_whatsapp_message(sender_number_full, ai_reply)
+
+        # 🔀 Lógica de bifurcação de pedidos
         if BIFURCACAO_ENABLED and ai_reply and ai_reply.strip().startswith("[PEDIDO_CONFIRMADO]"):
             print(f"📦 Tag [PEDIDO_CONFIRMADO] detectada. Processando e bifurcando pedido para {clean_number}...")
             try:
@@ -523,7 +557,7 @@ def process_message(message_data):
                 json_string = ai_reply[json_start:json_end]
                 remaining_reply = ai_reply[json_end:].strip()
                 if not remaining_reply:
-                    remaining_reply = "Seu pedido foi confirmado e enviado para a cozinha! 😋" 
+                    remaining_reply = "Seu pedido foi confirmado e enviado para a cozinha! 😋"
 
                 order_data = json.loads(json_string)
 
@@ -552,13 +586,19 @@ def process_message(message_data):
                 Forma de Pagto: {order_data.get('forma_pagamento', 'N/A')}
                 Valor Total: {order_data.get('valor_total', 'N/A')}
                 """
-                
-                # Só envia para o motoboy se for "Entrega"
+
+                # Envia mensagens em threads separadas
+                threading.Thread(
+                    target=send_whatsapp_message,
+                    args=(f"{COZINHA_WPP_NUMBER}@s.whatsapp.net", msg_cozinha.strip())
+                ).start()
+
+                # Se o pedido for de entrega, também envia para o motoboy
                 if order_data.get('tipo_pedido') == "Entrega":
-                    threading.Thread(target=send_whatsapp_message, args=(f"{MOTOBOY_WPP_NUMBER}@s.whatsapp.net", msg_motoboy.strip())).start()
-                
-                # Envia para a cozinha (sempre)
-                threading.Thread(target=send_whatsapp_message, args=(f"{COZINHA_WPP_NUMBER}@s.whatsapp.net", msg_cozinha.strip())).start()
+                    threading.Thread(
+                        target=send_whatsapp_message,
+                        args=(f"{MOTOBOY_WPP_NUMBER}@s.whatsapp.net", msg_motoboy.strip())
+                    ).start()
 
                 print(f"✅ Pedido bifurcado com sucesso.")
                 ai_reply = remaining_reply
@@ -568,16 +608,23 @@ def process_message(message_data):
                 ai_reply = ai_reply.replace("[PEDIDO_CONFIRMADO]", "").strip()
                 if '{' in ai_reply and '}' in ai_reply:
                     ai_reply = "Tive um problema ao enviar seu pedido para a cozinha. Pode confirmar os dados novamente, por favor? (Erro interno: JSON_PARSE)"
-            
+
             print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
             send_whatsapp_message(sender_number_full, ai_reply)
 
         elif ai_reply:
             print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
             send_whatsapp_message(sender_number_full, ai_reply)
-            
+
     except Exception as e:
-        print(f"❌ Erro fatal ao processar mensagem: {e}")
+        print(f"❌ Erro ao processar mensagem: {e}")
+
+    finally:
+        if 'clean_number' in locals():
+            conversation_collection.update_one(
+                {'_id': clean_number},
+                {'$set': {'processing': False}}
+            )
 
 if __name__ == '__main__':
     if modelo_ia:
