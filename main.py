@@ -12,9 +12,7 @@ from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
 import json 
 
-# --- 1. IDENTIDADE DO CLIENTE ATUALIZADA ---
 CLIENT_NAME = "Marmitaria Sabor do Dia" 
-# (RESPONSIBLE_NUMBER removido, pois este bot não tem intervenção)
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
@@ -30,16 +28,12 @@ if BIFURCACAO_ENABLED:
     print(f"✅ Plano de Bifurcação ATIVO. Cozinha: {COZINHA_WPP_NUMBER}, Motoboy: {MOTOBOY_WPP_NUMBER}")
 else:
     print("⚠️ Plano de Bifurcação INATIVO. (Configure COZINHA_WPP_NUMBER e MOTOBOY_WPP_NUMBER no .env)")
-# --- FIM DA NOVA SEÇÃO ---
 
 try:
     client = MongoClient(MONGO_DB_URI)
-    
     db_name = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
-    
     db = client[db_name] 
     conversation_collection = db.conversations
-    
     print(f"✅ Conectado ao MongoDB para o cliente: '{CLIENT_NAME}' no banco de dados '{db_name}'")
 except Exception as e:
     print(f"❌ ERRO: Não foi possível conectar ao MongoDB. Erro: {e}")
@@ -52,14 +46,16 @@ if GEMINI_API_KEY:
 else:
     print("AVISO: A variável de ambiente GEMINI_API_KEY não foi definida.")
 
-conversations_cache = {}
-message_buffer = {}
-message_timers = {}
+# --- CORRIGIDO ---
+# Removidas variáveis globais de cache e buffer (`conversations_cache`, `message_buffer`, `message_timers`)
+# Elas causam amnésia em ambientes de produção com múltiplos workers (como o Fly.io).
 
 modelo_ia = None
 try:
-    modelo_ia = genai.GenerativeModel('gemini-2.5-flash') # Recomendo usar o 1.5-flash
-    print("✅ Modelo do Gemini inicializado com sucesso.")
+    # --- OTIMIZADO ---
+    # Usando 'gemini-1.5-flash' que tem uma janela de contexto e memória muito melhores
+    modelo_ia = genai.GenerativeModel('gemini-2.5-flash')
+    print("✅ Modelo do Gemini (gemini-1.5-flash) inicializado com sucesso.")
 except Exception as e:
     print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
 
@@ -72,11 +68,10 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session
         ]
         
         update_payload = {
-            'sender_name': sender_name, # Nome do contato no WhatsApp (Ex: Gauchão)
+            'sender_name': sender_name,
             'history': history_list,
             'last_interaction': datetime.now()
         }
-        # Adiciona o nome real do cliente ao payload se ele for conhecido
         if customer_name:
             update_payload['customer_name'] = customer_name
 
@@ -84,9 +79,7 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session
             {'_id': contact_id},
             {
                 '$set': update_payload,
-                '$inc': {
-                    'total_tokens_consumed': tokens_used
-                }
+                '$inc': { 'total_tokens_consumed': tokens_used }
             },
             upsert=True
         )
@@ -104,196 +97,184 @@ def load_conversation_from_db(contact_id):
         print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
     return None
 
-def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name, contact_phone):
+# --- CORRIGIDO ---
+# Função 'gerar_resposta_ia' totalmente refeita para ser "Stateless" (sem cache)
+# Ela agora lê o histórico do MongoDB a CADA mensagem, resolvendo o problema de amnésia.
+def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     """
-    Gera uma resposta usando a IA, com lógica robusta de cache e fallback para o banco de dados.
+    Gera uma resposta usando a IA.
+    Esta versão é STATELESS: ela não usa cache de memória e lê o histórico
+    do MongoDB a cada chamada, garantindo consistência entre os workers.
     """
-    global modelo_ia, conversations_cache
+    global modelo_ia
 
     if not modelo_ia:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
 
-    cached_session_data = conversations_cache.get(contact_id)
-
-    if cached_session_data:
-        chat_session = cached_session_data['ai_chat_session']
-        customer_name_in_cache = cached_session_data.get('customer_name')
-        print(f"🧠 Sessão para {contact_id} encontrada no cache. Nome em cache: {customer_name_in_cache}")
-
-        if known_customer_name and customer_name_in_cache != known_customer_name:
-            print(f"🔄 Sincronizando nome no cache: de '{customer_name_in_cache}' para '{known_customer_name}'")
-            conversations_cache[contact_id]['customer_name'] = known_customer_name
-            customer_name_in_cache = known_customer_name
+    print(f"🧠 Lendo o estado do DB para {contact_id}...")
+    
+    # 1. SEMPRE carregar do DB. Esta é a nossa única fonte de verdade.
+    convo_data = load_conversation_from_db(contact_id)
+    
+    known_customer_name = None
+    old_history = []
+    
+    if convo_data:
+        known_customer_name = convo_data.get('customer_name')
+        if 'history' in convo_data:
+            # Filtra o prompt antigo para não o enviar duas vezes
+            old_history = [msg for msg in convo_data['history'] if not msg['parts'][0].strip().startswith("A data e hora atuais são:")]
+    
+    if known_customer_name:
+        print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
+    
+    horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    # 2. Lógica do Prompt (Reforçada para evitar amnésia)
+    prompt_name_instruction = ""
+    final_user_name_for_prompt = ""
+    
+    if known_customer_name:
+        final_user_name_for_prompt = known_customer_name
+        # Instrução EXPLÍCITA para não perguntar o nome novamente
+        prompt_name_instruction = f"REGRA DE NOME: O nome do cliente JÁ FOI CAPTURADO. O nome dele é {final_user_name_for_prompt}. NÃO pergunte o nome dele novamente."
     else:
-        print(f"⚠️ Sessão para {contact_id} não encontrada no cache. Reconstruindo...")
-        
-        horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
-        prompt_name_instruction = ""
-        final_user_name_for_prompt = ""
-        
-        if known_customer_name:
-            final_user_name_for_prompt = known_customer_name
-            prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este nome."
-        else:
-            final_user_name_for_prompt = sender_name
-            prompt_name_instruction =  f"""
-            REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
-             Seu nome é {{Lyra}} e você é atendente da {{Marmitaria Sabor do Dia}}.
-             Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido.
-             1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi"), se apresente e peça o nome dele.
-             2. Se a primeira mensagem do cliente já contiver uma pergunta (ex: "oi, quanto é?"), você deve:
-                - Primeiro, acalmar o cliente dizendo que já vai responder.
-                - Em seguida, peça o nome para personalizar o atendimento.
-                - **IMPORTANTE**: Você deve guardar a pergunta original do cliente na memória.
-             3. Quando o cliente responder com o nome dele (ex: "Meu nome é Marcos"), sua próxima resposta DEVE OBRIGATORIAMENTE:
-                - Começar com a tag: `[NOME_CLIENTE]O nome do cliente é: [Nome Extraído].`
-                - Agradecer ao cliente pelo nome.
-                - **RESPONDER IMEDIATAMENTE à pergunta original que ele fez no início da conversa.**
-            """
-        
-        # --- PROMPT DE BIFURCAÇÃO MELHORADO (REGRAS MAIS RÍGIDAS) ---
-        prompt_bifurcacao = ""
-        if BIFURCACAO_ENABLED:
-            prompt_bifurcacao = f"""
-            =====================================================
-            ⚙️ MODO DE BIFURCAÇÃO DE PEDIDOS (PRIORIDADE ALTA)
-            =====================================================
-            Esta é a sua principal função. Você DEVE seguir este fluxo com extrema precisão.
+        final_user_name_for_prompt = sender_name
+        prompt_name_instruction =  f"""
+        REGRA CRÍTICA - CAPTURA DE NOME (PRIORIDADE MÁXIMA):
+         Seu nome é {{Lyra}}. Seu primeiro objetivo é descobrir o nome real do cliente ('{sender_name}' é um apelido).
+         1. Se a mensagem for "oi", "bom dia", etc., se apresente e peça o nome.
+         2. Se a mensagem for uma pergunta (ex: "quero uma marmita"), diga que já vai ajudar, mas primeiro peça o nome para personalizar o atendimento. Guarde a pergunta original.
+         3. Quando o cliente responder o nome (ex: "marcelo"), sua resposta DEVE começar com a tag: `[NOME_CLIENTE]O nome do cliente é: [Nome Extraído].`
+         4. Imediatamente após a tag, agradeça e RESPONDA A PERGUNTA ORIGINAL que ele fez (ex: "Obrigada, Marcelo! Sobre a marmita, nosso cardápio é...").
+        """
+    
+    # 3. Prompt de Bifurcação (Mais Rígido e Detalhado)
+    prompt_bifurcacao = ""
+    if BIFURCACAO_ENABLED:
+        prompt_bifurcacao = f"""
+        =====================================================
+        ⚙️ MODO DE BIFURCAÇÃO DE PEDIDOS (PRIORIDADE ALTA)
+        =====================================================
+        Esta é a sua principal função. Você DEVE seguir este fluxo com extrema precisão, passo a passo.
 
-            1.  **MISSÃO:** Você DEVE preencher TODOS os campos do "Gabarito de Pedido" abaixo.
-            2.  **PERSISTÊNCIA:** Você DEVE ser persistente. Se o cliente não fornecer uma informação, pergunte novamente até conseguir.
-            3.  **COLETA DE DADOS (SEQUENCIAL):**
-                a. **Item:** Pergunte o(s) item(ns) e tamanho(s). Ex: "1 Marmita P".
-                b. **Observações:** Pergunte se há modificações. (Ex: "sem salada", "sem feijão"). TUDO deve ir em "observacoes".
-                c. **Bebida:** Ofereça bebidas.
-                d. **Tipo de Pedido:** Pergunte se é "Entrega" ou "Retirada".
-                e. **Endereço (CRÍTICO):** Se for "Entrega", você DEVE obter "Rua", "Número" e "Bairro". Se o cliente enviar picado (uma mensagem para rua, outra para número), você deve coletar todos antes de prosseguir.
-                f. **Pagamento:** Pergunte a forma de pagamento.
-            4.  **TELEFONE:** O campo "telefone_contato" JÁ ESTÁ PREENCHIDO. É {contact_phone}. NÃO pergunte o telefone ao cliente.
-            5.  **CÁLCULO:** Você DEVE calcular o `valor_total` somando os itens, bebidas e a `taxa_entrega` (APENAS se o tipo_pedido for 'Entrega'. Se for 'Retirada', a taxa é R$ 0,00).
-            6.  **CONFIRMAÇÃO FINAL (REGRA MESTRA):**
-                - Antes de enviar, você DEVE apresentar um RESUMO COMPLETO ao cliente com TODOS os campos preenchidos (item, observação, endereço, valor total, etc.).
-                - Você DEVE terminar perguntando "Confirma o pedido?".
-            7.  **ENVIO (AÇÃO CRÍTICA):**
-                - O cliente DEVE responder "sim", "confirmo", "pode enviar", ou algo positivo **DEPOIS** de ver o resumo.
-                - SOMENTE APÓS A CONFIRMAÇÃO DO CLIENTE, sua resposta DEVE começar com a tag [PEDIDO_CONFIRMADO] e ser seguida pelo JSON VÁLIDO.
-                - Se o cliente pedir para editar, volte ao passo 6 (apresentar novo resumo).
+        1.  **MISSÃO:** Preencher TODOS os campos do "Gabarito de Pedido" abaixo.
+        2.  **PERSISTÊNCIA:** Você deve ser um robô persistente. Se o cliente não fornecer uma informação (ex: Bairro), pergunte novamente até conseguir.
+        3.  **COLETA DE DADOS (SEQUENCIAL E OBRIGATÓRIA):**
+            a. **Item:** Pergunte o(s) item(ns) e tamanho(s). Ex: "1 Marmita P".
+            b. **Observações:** Pergunte se há modificações (ex: "sem salada"). TUDO deve ir em "observacoes".
+            c. **Bebida:** Ofereça bebidas.
+            d. **Tipo de Pedido:** Pergunte se é "Entrega" ou "Retirada".
+            e. **Endereço (CRÍTICO):** Se for "Entrega", você DEVE obter "Rua", "Número" e "Bairro". Se o cliente enviar picado (uma mensagem para rua, outra para número), você deve pacientemente coletar todos os 3 dados antes de prosseguir. NÃO PULE NENHUM.
+            f. **Pagamento:** Pergunte a forma de pagamento.
+        4.  **TELEFONE:** O campo "telefone_contato" JÁ ESTÁ PREENCHIDO. É {contact_phone}. NÃO pergunte o telefone.
+        5.  **CÁLCULO:** Calcule o `valor_total` somando itens, bebidas e a `taxa_entrega` (APENAS se for 'Entrega'. Se for 'Retirada', a taxa é R$ 0,00).
+        6.  **CONFIRMAÇÃO FINAL (REGRA MESTRA):**
+            - Após ter TODOS os dados (Rua, Número, Bairro, Pagamento, etc.), você DEVE apresentar um RESUMO COMPLETO.
+            - O resumo deve ter TODOS os campos: Cliente, Pedido, Obs, Bebidas, Endereço, Pagamento, Valor Total.
+            - Você DEVE terminar perguntando "Confirma o pedido?".
+        7.  **ENVIO (AÇÃO CRÍTICA):**
+            - O cliente DEVE responder "sim", "confirmo", "ok" **DEPOIS** de ver o resumo.
+            - SOMENTE APÓS A CONFIRMAÇÃO, sua resposta DEVE começar com a tag [PEDIDO_CONFIRMADO] e ser seguida pelo JSON VÁLIDO.
+            - Se o cliente pedir para editar (ex: "trocar a bebida"), você DEVE editar o gabarito e voltar ao passo 6 (apresentar novo resumo).
 
-            --- GABARITO DE PEDIDO (DEVE SER PREENCHIDO) ---
-            {{
-              "nome_cliente": "...", (Use o 'known_customer_name' ou o nome capturado)
-              "tipo_pedido": "...", (Deve ser "Entrega" ou "Retirada")
-              "endereco_completo": "...", (Deve conter Rua, Número e Bairro. Se 'Retirada', preencha com 'Retirada no Local')
-              "telefone_contato": "{contact_phone}", (JÁ PREENCHIDO)
-              "pedido_completo": "...", (Lista de todos os itens. Ex: "1 Marmita P")
-              "bebidas": "...", (ex: "1 Coca-Cola Lata", ou "Nenhuma")
-              "forma_pagamento": "...", (ex: "Pix", "Cartão na entrega", "Dinheiro (troco para R$ 100)")
-              "observacoes": "...", (CRÍTICO: Deve incluir "sem salada", "sem feijão", etc.)
-              "valor_total": "..." (O valor total calculado por você)
-            }}
-            --- FIM DO GABARITO ---
-            """
-        else:
-            prompt_bifurcacao = "O plano de Bifurcação (envio para cozinha) não está ativo."
-        
-        prompt_inicial = f"""
-            A data e hora atuais são: {horario_atual}.
-            {prompt_name_instruction}
-            
-            =====================================================
-            🏷️ IDENTIDADE DO ATENDENTE
-            =====================================================
-            nome: {{Lyra}}
-            função: {{Atendente de restaurante (delivery)}} 
-            papel: {{Você deve atender o cliente, apresentar o cardápio, anotar o pedido completo, calcular o valor total e confirmar a entrega.}}
+        --- GABARITO DE PEDIDO (DEVE SER PREENCHIDO) ---
+        {{
+          "nome_cliente": "...", (Use o nome que você já sabe)
+          "tipo_pedido": "...", (Deve ser "Entrega" ou "Retirada")
+          "endereco_completo": "...", (Deve conter Rua, Número e Bairro. Se 'Retirada', preencha com 'Retirada no Local')
+          "telefone_contato": "{contact_phone}", (JÁ PREENCHIDO)
+          "pedido_completo": "...", (Ex: "1 Marmita M, 2 Marmitas P")
+          "bebidas": "...", (Ex: "2 Coca-Cola Lata, 1 Suco de Laranja")
+          "forma_pagamento": "...", (ex: "Pix")
+          "observacoes": "...", (CRÍTICO: Deve incluir "sem salada", "as 2 P sem salada", etc.)
+          "valor_total": "..." (O valor total calculado por você)
+        }}
+        --- FIM DO GABARITO ---
+        """
+    else:
+        prompt_bifurcacao = "O plano de Bifurcação (envio para cozinha) não está ativo."
+    
+    prompt_inicial = f"""
+        A data e hora atuais são: {horario_atual}.
+        {prompt_name_instruction}
+        =====================================================
+        🏷️ IDENTIDADE DO ATENDENTE
+        =====================================================
+        nome: {{Lyra}}
+        função: {{Atendente de restaurante (delivery)}} 
+        papel: {{Você deve atender o cliente, apresentar o cardápio, anotar o pedido completo (Gabarito de Pedido), calcular o valor total e confirmar a entrega.}}
+        =====================================================
+        🏢 IDENTIDADE DA EMPRESA
+        =====================================================
+        nome da empresa: {{Marmitaria Sabor do Dia}}
+        horário de atendimento: {{Segunda a Sábado, das 11:00 às 14:00}}
+        =====================================================
+        🍲 CARDÁPIO E PREÇOS (BASE DO PEDIDO)
+        =====================================================
+        --- PRATO DO DIA (Exemplo) ---
+        Hoje temos: {{Strogonoff de Frango}}
+        Acompanhamentos: {{Arroz branco, Feijão, Batata palha e Salada de alface e tomate.}}
+        --- TAMANHOS E VALORES (Marmitas) ---
+        - Marmita Pequena (P): {{R$ 15,00}}
+        - Média (M): {{R$ 18,00}}
+        - Grande (G): {{R$ 22,00}}
+        --- 🥤 BEBIDAS ---
+        - Coca-Cola Lata (350ml): {{R$ 5,00}}
+        - Guaraná Antartica Lata (350ml): {{R$ 5,00}}
+        - Água Mineral (sem gás): {{R$ 3,00}}
+        - Suco de Laranja (natural 500ml): {{R$ 8,00}}
+        --- 🛵 TAXA DE ENTREGA ---
+        - Taxa de Entrega Fixa: {{R$ 6,00}} (Use este valor para CÁLCULO do valor total APENAS PARA ENTREGAS)
+        - Pedidos para Retirada no Local: {{R$ 0,00}} (não há taxa)
+        {prompt_bifurcacao} 
+        =====================================================
+        🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO
+        =====================================================
+        - FOCO TOTAL: Seu primeiro objetivo é capturar o nome do cliente (se ainda não souber). Seu segundo objetivo é preencher o "Gabarito de Pedido" e confirmar.
+        - MEMÓRIA: Você deve lembrar do que o cliente já disse (nome, itens) e não perguntar de novo.
+        - NÃO FAZER: Não inventar pratos ou preços. Não falar sobre "IA" ou "Chatbot". Você é uma ATENDENTE HUMANA (Lyra).
+        =====================================================
+        PRONTO PARA ATENDER O CLIENTE
+        =====================================================
+        """
 
-            =====================================================
-            🏢 IDENTIDADE DA EMPRESA
-            =====================================================
-            nome da empresa: {{Marmitaria Sabor do Dia}}
-            horário de atendimento: {{Segunda a Sábado, das 11:00 às 14:00}}
-            
-            =====================================================
-            🍲 CARDÁPIO E PREÇOS (BASE DO PEDIDO)
-            =====================================================
-            
-            --- PRATO DO DIA (Exemplo) ---
-            Hoje temos: {{Strogonoff de Frango}}
-            Acompanhamentos: {{Arroz branco, Feijão, Batata palha e Salada de alface e tomate.}}
-
-            --- TAMANHOS E VALORES (Marmitas) ---
-            - Marmita Pequena (P): {{R$ 15,00}}
-            - Marmita Média (M): {{R$ 18,00}}
-            - Marmita Grande (G): {{R$ 22,00}}
-
-            --- 🥤 BEBIDAS ---
-            - Coca-Cola Lata (350ml): {{R$ 5,00}}
-            - Guaraná Antartica Lata (350ml): {{R$ 5,00}}
-            - Água Mineral (sem gás): {{R$ 3,00}}
-            - Suco de Laranja (natural 500ml): {{R$ 8,00}}
-
-            --- 🛵 TAXA DE ENTREGA ---
-            - Taxa de Entrega Fixa: {{R$ 6,00}} (Use este valor para CÁLCULO do valor total APENAS PARA ENTREGAS)
-            - Pedidos para Retirada no Local: {{R$ 0,00}} (não há taxa)
-
-            {prompt_bifurcacao} 
-
-            =====================================================
-            🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO
-            =====================================================
-            - FOCO TOTAL: Seu primeiro objetivo é capturar o nome do cliente. Seu segundo objetivo é preencher o "Gabarito de Pedido" e confirmar.
-            - não deve fazer: Não inventar pratos ou preços. Não falar sobre "IA" ou "Chatbot". Você é uma ATENDENTE HUMANA (Lyra).
-            
-            =====================================================
-            PRONTO PARA ATENDER O CLIENTE
-            =====================================================
-            """
-
-        convo_start = [
-            {'role': 'user', 'parts': [prompt_inicial]},
-            {'role': 'model', 'parts': [f"Entendido. Eu sou Lyra, atendente da Marmitaria Sabor do Dia. Minha prioridade é capturar o nome do cliente ({final_user_name_for_prompt}) e depois anotar o pedido, seguindo rigorosamente as regras. Estou pronta."]}
-        ]
-
-        loaded_conversation = load_conversation_from_db(contact_id)
-        old_history = []
-        if loaded_conversation and 'history' in loaded_conversation:
-            old_history = [msg for msg in loaded_conversation['history'] if not msg['parts'][0].strip().startswith("A data e hora atuais são:")]
-        
-        chat_session = modelo_ia.start_chat(history=convo_start + old_history)
-        
-        conversations_cache[contact_id] = {
-            'ai_chat_session': chat_session, 
-            'name': sender_name, 
-            'customer_name': known_customer_name
-        }
-        customer_name_in_cache = known_customer_name
-
-    # --- FIM DA LÓGICA DE CACHE/RECONSTRUÇÃO ---
-
+    # 4. Reconstrução da Sessão
+    convo_start = [
+        {'role': 'user', 'parts': [prompt_inicial]},
+        {'role': 'model', 'parts': [f"Entendido. Eu sou Lyra. Minha prioridade é capturar o nome do cliente (se eu ainda não souber) e depois anotar o pedido rigorosamente. Estou pronta."]}
+    ]
+    
+    # Criamos a sessão de chat A CADA MENSAGEM, usando o histórico do DB
+    chat_session = modelo_ia.start_chat(history=convo_start + old_history)
+    
+    # 5. Geração da Resposta
     try:
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
         try:
             input_tokens = modelo_ia.count_tokens(chat_session.history + [{'role':'user', 'parts': [user_message]}]).total_tokens
-        except Exception as e:
-            print(f"Aviso: count_tokens falhou, continuando sem contar. Erro: {e}")
+        except Exception:
             input_tokens = 0
 
         resposta = chat_session.send_message(user_message)
         
         try:
             output_tokens = modelo_ia.count_tokens(resposta.text).total_tokens
-        except Exception as e:
-            print(f"Aviso: count_tokens (saída) falhou. Erro: {e}")
+        except Exception:
             output_tokens = 0
             
         total_tokens_na_interacao = input_tokens + output_tokens
         
         if total_tokens_na_interacao > 0:
-             print(f"📊 Consumo de Tokens: Entrada={input_tokens}, Saída={output_tokens}, Total={total_tokens_na_interacao}")
+             print(f"📊 Consumo de Tokens: Total={total_tokens_na_interacao}")
         
         ai_reply = resposta.text
+        
+        # 6. Lógica de Extração e Salvamento
+        
+        # Esta é a variável que será salva no DB
+        customer_name_to_save = known_customer_name 
 
         if ai_reply.strip().startswith("[NOME_CLIENTE]"):
             print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
@@ -303,47 +284,40 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
                 start_of_message_index = full_response_part.find(extracted_name) + len(extracted_name)
                 ai_reply = full_response_part[start_of_message_index:].lstrip('.!?, ').strip()
 
+                customer_name_to_save = extracted_name
+                
+                # Salva o nome NO DB IMEDIATAMENTE
                 conversation_collection.update_one(
                     {'_id': contact_id},
                     {'$set': {'customer_name': extracted_name}},
                     upsert=True
                 )
-                if contact_id in conversations_cache:
-                    conversations_cache[contact_id]['customer_name'] = extracted_name
-                customer_name_in_cache = extracted_name
-                print(f"✅ Nome '{extracted_name}' salvo para o cliente {contact_id}.")
+                print(f"✅ Nome '{extracted_name}' salvo no DB para o cliente {contact_id}.")
 
             except Exception as e:
                 print(f"❌ Erro ao extrair o nome da tag: {e}")
                 ai_reply = ai_reply.replace("[NOME_CLIENTE]", "").strip()
 
-        save_conversation_to_db(contact_id, sender_name, customer_name_in_cache, chat_session, total_tokens_na_interacao)
+        # 7. Salva o histórico completo da conversa no DB
+        save_conversation_to_db(contact_id, sender_name, customer_name_to_save, chat_session, total_tokens_na_interacao)
         
         return ai_reply
     
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
-        if contact_id in conversations_cache:
-            del conversations_cache[contact_id]
         return "Tive um pequeno problema para processar sua mensagem e precisei reiniciar nossa conversa. Você poderia repetir, por favor?"
-    
-def transcrever_audio_gemini(caminho_do_audio):
-    """
-    Envia um arquivo de áudio para a API do Gemini e retorna a transcrição em texto.
-    """
-    global modelo_ia 
 
+def transcrever_audio_gemini(caminho_do_audio):
+    global modelo_ia 
     if not modelo_ia:
         print("❌ Modelo de IA não inicializado. Impossível transcrever.")
         return None
-
     print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição no Gemini...")
     try:
         audio_file = genai.upload_file(
             path=caminho_do_audio, 
-            mime_type="audio/ogg" # O formato padrão da Evolution
+            mime_type="audio/ogg"
         )
-        
         response = modelo_ia.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
         genai.delete_file(audio_file.name)
         
@@ -358,14 +332,8 @@ def transcrever_audio_gemini(caminho_do_audio):
         return None
 
 def send_whatsapp_message(number, text_message):
-    """Envia uma mensagem de texto para um número via Evolution API."""
-    # O nome da sua instância
     INSTANCE_NAME = "chatbot" 
-    
     full_url = f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}"
-
-    # A sua função base já espera o JID completo (ex: 55...@s.whatsapp.net),
-    # mas a API da evolution quer o número limpo. A sua função já trata isso.
     clean_number = number.split('@')[0]
     payload = {"number": clean_number, "textMessage": {"text": text_message}}
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
@@ -378,18 +346,14 @@ def send_whatsapp_message(number, text_message):
         print(f"❌ Erro ao enviar mensagem para {clean_number}: {e}")
 
 def gerar_e_enviar_relatorio_semanal():
-    """Calcula um RESUMO do uso de tokens e envia por e-mail usando SendGrid."""
     print(f"🗓️ Gerando relatório semanal para o cliente: {CLIENT_NAME}...")
-    
     SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
     EMAIL_RELATORIOS = os.environ.get('EMAIL_RELATORIOS')
 
     if not all([SENDGRID_API_KEY, EMAIL_RELATORIOS]):
         print("⚠️ Variáveis SENDGRID_API_KEY e EMAIL_RELATORIOS não configuradas. Relatório não pode ser enviado.")
         return
-
     hoje = datetime.now()
-    
     try:
         usuarios_do_bot = list(conversation_collection.find({}))
         numero_de_contatos = len(usuarios_do_bot)
@@ -404,25 +368,20 @@ def gerar_e_enviar_relatorio_semanal():
         corpo_email_texto = f"""
         Relatório de Consumo Acumulado do Cliente: '{CLIENT_NAME}'
         Data do Relatório: {hoje.strftime('%d/%m/%Y')}
-
         --- RESUMO GERAL DE USO ---
-
         👤 Número de Contatos Únicos: {numero_de_contatos}
         🔥 Consumo Total de Tokens (Acumulado): {total_geral_tokens}
         📊 Média de Tokens por Contato: {media_por_contato:.0f}
-
         ---------------------------
         Atenciosamente,
         Seu Sistema de Monitoramento.
         """
-
         message = Mail(
             from_email=EMAIL_RELATORIOS,
             to_emails=EMAIL_RELATORIOS,
             subject=f"Relatório Semanal de Tokens - {CLIENT_NAME} - {hoje.strftime('%d/%m')}",
             plain_text_content=corpo_email_texto
         )
-        
         sendgrid_client = SendGridAPIClient(SENDGRID_API_KEY)
         response = sendgrid_client.send(message)
         
@@ -430,13 +389,16 @@ def gerar_e_enviar_relatorio_semanal():
              print(f"✅ Relatório semanal para '{CLIENT_NAME}' enviado com sucesso via SendGrid!")
         else:
              print(f"❌ Erro ao enviar e-mail via SendGrid. Status: {response.status_code}. Body: {response.body}")
-
     except Exception as e:
         print(f"❌ Erro ao gerar ou enviar relatório para '{CLIENT_NAME}': {e}")
 
 app = Flask(__name__)
-
 processed_messages = set() 
+
+# --- CORRIGIDO ---
+# O bloco de 'handle_message_buffering' e '_trigger_ai_processing'
+# foi removido e substituído por 'process_message'
+# Isso elimina o buffer de 10s, resolvendo a confusão de pedidos.
 
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
@@ -444,13 +406,11 @@ def receive_webhook():
     data = request.json
     print(f"📦 DADO BRUTO RECEBIDO NO WEBHOOK: {data}")
 
-    # --- Lógica de filtro de evento (Mantida da sua base) ---
     event_type = data.get('event')
     
     if event_type != 'messages.upsert':
         print(f"➡️  Ignorando evento: {event_type} (não é uma nova mensagem)")
         return jsonify({"status": "ignored_event_type"}), 200
-    # --- FIM DA CORREÇÃO ---
 
     try:
         message_data = data.get('data', {}) 
@@ -460,8 +420,6 @@ def receive_webhook():
             
         key_info = message_data.get('key', {})
 
-        # --- 6. LÓGICA DE 'fromMe' MODIFICADA ---
-        # (Removemos a checagem do RESPONSIBLE_NUMBER)
         if key_info.get('fromMe'):
             print(f"➡️  Mensagem do próprio bot ignorada.")
             return jsonify({"status": "ignored_from_me"}), 200
@@ -477,8 +435,9 @@ def receive_webhook():
         if len(processed_messages) > 1000:
             processed_messages.clear()
 
-        # --- Inicia o Buffer (Mantido da sua base) ---
-        threading.Thread(target=handle_message_buffering, args=(message_data,)).start()
+        # --- MUDANÇA PRINCIPAL: O BUFFER FOI REMOVIDO ---
+        # Chamamos 'process_message' diretamente, sem timer.
+        threading.Thread(target=process_message, args=(message_data,)).start()
         return jsonify({"status": "received"}), 200
 
     except Exception as e:
@@ -488,24 +447,23 @@ def receive_webhook():
 
 @app.route('/', methods=['GET'])
 def health_check():
-    return "Estou vivo! (Marmitaria Bot)", 200 # Mensagem de saúde atualizada
+    return "Estou vivo! (Marmitaria Bot)", 200
 
-# <<< FUNÇÃO handle_responsible_command REMOVIDA >>>
-# (Não é necessária, pois não há intervenção humana)
-
-def handle_message_buffering(message_data):
+# --- NOVA FUNÇÃO 'process_message' (sem buffer) ---
+def process_message(message_data):
     """
-    Esta função recebe a mensagem, a coloca em um buffer e gerencia um timer.
-    (Mantida 100% da sua base)
+    Processa CADA mensagem individualmente, sem buffer.
     """
     try:
         key_info = message_data.get('key', {})
         sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
 
+        # Ignora grupos
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
 
         clean_number = sender_number_full.split('@')[0]
+        sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
         
         user_message_content = None
         message = message_data.get('message', {})
@@ -516,7 +474,7 @@ def handle_message_buffering(message_data):
             user_message_content = message['extendedTextMessage'].get('text')
         elif message.get('audioMessage') and message.get('base64'):
             message_id = key_info.get('id')
-            print(f"🎤 Mensagem de áudio recebida de {clean_number}. Aguardando timer para transcrever.")
+            print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
             audio_base64 = message['base64']
             audio_data = base64.b64decode(audio_base64)
             temp_audio_path = f"/tmp/audio_{clean_number}_{message_id}.ogg"
@@ -529,145 +487,91 @@ def handle_message_buffering(message_data):
                 return
         
         if not user_message_content:
+            print(f"➡️  Mensagem ignorada (sem conteúdo de texto ou áudio) de {clean_number}.")
             return
+        
+        print(f"🧠 Processando mensagem IMEDIATA de {clean_number}: '{user_message_content}'")
 
-        # Adiciona a nova mensagem ao buffer do usuário
-        if clean_number not in message_buffer:
-            message_buffer[clean_number] = []
-        message_buffer[clean_number].append(user_message_content)
-        print(f"📥 Mensagem de {clean_number} adicionada ao buffer. Buffer atual: {message_buffer[clean_number]}")
+        # Chama a IA de forma stateless (ela mesma vai ler o DB)
+        ai_reply = gerar_resposta_ia(
+            clean_number, 
+            sender_name_from_wpp, 
+            user_message_content, 
+            clean_number # contact_phone
+        )
 
-        # Se já existe um timer para este usuário, cancele-o
-        if clean_number in message_timers:
-            message_timers[clean_number].cancel()
+        # Lógica de Bifurcação (sem alterações)
+        if BIFURCACAO_ENABLED and ai_reply and ai_reply.strip().startswith("[PEDIDO_CONFIRMADO]"):
+            print(f"📦 Tag [PEDIDO_CONFIRMADO] detectada. Processando e bifurcando pedido para {clean_number}...")
+            try:
+                json_start = ai_reply.find('{')
+                json_end = ai_reply.rfind('}') + 1
+                if json_start == -1 or json_end == 0:
+                    raise ValueError("JSON de pedido não encontrado após a tag.")
 
-        # Inicia um novo timer de 10 segundos
-        timer = threading.Timer(10.0, _trigger_ai_processing, args=[message_data])
-        message_timers[clean_number] = timer
-        timer.start()
-        print(f"⏳ Timer de 10s iniciado/reiniciado para {clean_number}.")
+                json_string = ai_reply[json_start:json_end]
+                remaining_reply = ai_reply[json_end:].strip()
+                if not remaining_reply:
+                    remaining_reply = "Seu pedido foi confirmado e enviado para a cozinha! 😋" 
 
+                order_data = json.loads(json_string)
+
+                msg_cozinha = f"""
+                --- 🍳 NOVO PEDIDO (COZINHA) 🍳 ---
+                Cliente: {order_data.get('nome_cliente', 'N/A')}
+                Telefone: {order_data.get('telefone_contato', 'N/A')}
+                Tipo: {order_data.get('tipo_pedido', 'N/A')}
+                Endereço: {order_data.get('endereco_completo', 'N/A')}
+                --- PEDIDO ---
+                {order_data.get('pedido_completo', 'N/A')}
+                --- BEBIDAS ---
+                {order_data.get('bebidas', 'N/A')}
+                --- OBSERVAÇÕES ---
+                {order_data.get('observacoes', 'N/A')}
+                Forma de Pagto: {order_data.get('forma_pagamento', 'N/A')}
+                Valor Total: {order_data.get('valor_total', 'N/A')}
+                """
+
+                msg_motoboy = f"""
+                --- 🛵 NOVA ENTREGA (MOTOBOY) 🛵 ---
+                Cliente: {order_data.get('nome_cliente', 'N/A')}
+                Telefone: {order_data.get('telefone_contato', 'N/A')}
+                Tipo: {order_data.get('tipo_pedido', 'N/A')}
+                Endereço: {order_data.get('endereco_completo', 'N/A')}
+                Forma de Pagto: {order_data.get('forma_pagamento', 'N/A')}
+                Valor Total: {order_data.get('valor_total', 'N/A')}
+                """
+                
+                # Só envia para o motoboy se for "Entrega"
+                if order_data.get('tipo_pedido') == "Entrega":
+                    threading.Thread(target=send_whatsapp_message, args=(f"{MOTOBOY_WPP_NUMBER}@s.whatsapp.net", msg_motoboy.strip())).start()
+                
+                # Envia para a cozinha (sempre)
+                threading.Thread(target=send_whatsapp_message, args=(f"{COZINHA_WPP_NUMBER}@s.whatsapp.net", msg_cozinha.strip())).start()
+
+                print(f"✅ Pedido bifurcado com sucesso.")
+                ai_reply = remaining_reply
+
+            except Exception as e:
+                print(f"❌ Erro ao processar bifurcação [PEDIDO_CONFIRMADO]: {e}")
+                ai_reply = ai_reply.replace("[PEDIDO_CONFIRMADO]", "").strip()
+                if '{' in ai_reply and '}' in ai_reply:
+                    ai_reply = "Tive um problema ao enviar seu pedido para a cozinha. Pode confirmar os dados novamente, por favor? (Erro interno: JSON_PARSE)"
+            
+            print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
+            send_whatsapp_message(sender_number_full, ai_reply)
+
+        elif ai_reply:
+            print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
+            send_whatsapp_message(sender_number_full, ai_reply)
+            
     except Exception as e:
-        print(f"❌ Erro ao gerenciar buffer da mensagem: {e}")
-
-# --- 7. FUNÇÃO _trigger_ai_processing MODIFICADA ---
-def _trigger_ai_processing(message_data):
-    """
-    Esta função é chamada pelo timer. Ela pega todas as mensagens do buffer,
-    junta-as e envia para a IA.
-    Agora usa a lógica de BIFURCAÇÃO ao invés de intervenção.
-    """
-    key_info = message_data.get('key', {})
-    sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
-    clean_number = sender_number_full.split('@')[0]
-    sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
-    
-    if clean_number not in message_buffer:
-        return
-        
-    full_user_message = "\n".join(message_buffer[clean_number])
-    
-    del message_buffer[clean_number]
-    del message_timers[clean_number]
-    
-    print(f"⏰ Timer finalizado! Processando mensagem completa de {clean_number}: '{full_user_message}'")
-
-    # <<< REMOVIDO: Bloco de 'handle_responsible_command' >>>
-    # <<< REMOVIDO: Bloco de checagem 'intervention_active' >>>
-
-    conversation_status = conversation_collection.find_one({'_id': clean_number})
-    known_customer_name = conversation_status.get('customer_name') if conversation_status else None
-    
-    # --- ATUALIZADO: Passa o 'clean_number' como 'contact_phone' ---
-    ai_reply = gerar_resposta_ia(clean_number, sender_name_from_wpp, full_user_message, known_customer_name, clean_number)
-
-    # --- 8. LÓGICA DE BIFURCAÇÃO (DA MARMITARIA) ---
-    if BIFURCACAO_ENABLED and ai_reply and ai_reply.strip().startswith("[PEDIDO_CONFIRMADO]"):
-        print(f"📦 Tag [PEDIDO_CONFIRMADO] detectada. Processando e bifurcando pedido para {clean_number}...")
-        try:
-            # 1. Isolar o JSON do resto da mensagem
-            json_start = ai_reply.find('{')
-            json_end = ai_reply.rfind('}') + 1
-
-            if json_start == -1 or json_end == 0:
-                raise ValueError("JSON de pedido não encontrado após a tag.")
-
-            json_string = ai_reply[json_start:json_end]
-
-            # 2. Isolar a mensagem de resposta para o cliente
-            remaining_reply = ai_reply[json_end:].strip()
-            if not remaining_reply:
-                remaining_reply = "Seu pedido foi confirmado e enviado para a cozinha! 😋" # Fallback
-
-            # 3. Parsear o JSON
-            order_data = json.loads(json_string)
-
-            # 4. Formatar as mensagens de bifurcação
-            # Mensagem para a COZINHA (Completa)
-            msg_cozinha = f"""
-            --- 🍳 NOVO PEDIDO (COZINHA) 🍳 ---
-            
-            Cliente: {order_data.get('nome_cliente', 'N/A')}
-            Telefone: {order_data.get('telefone_contato', 'N/A')}
-            Endereço: {order_data.get('endereco_completo', 'N/A')}
-            
-            --- PEDIDO ---
-            {order_data.get('pedido_completo', 'N/A')}
-            
-            --- BEBIDAS ---
-            {order_data.get('bebidas', 'N/A')}
-            
-            --- OBSERVAÇÕES ---
-            {order_data.get('observacoes', 'N/A')}
-            
-            Forma de Pagto: {order_data.get('forma_pagamento', 'N/A')}
-            Valor Total: {order_data.get('valor_total', 'N/A')}
-            """
-
-            # Mensagem para o MOTOBOY (Parcial)
-            msg_motoboy = f"""
-            --- 🛵 NOVA ENTREGA (MOTOBOY) 🛵 ---
-            
-            Cliente: {order_data.get('nome_cliente', 'N/A')}
-            Telefone: {order_data.get('telefone_contato', 'N/A')}
-            Endereço: {order_data.get('endereco_completo', 'N/A')}
-            
-            Forma de Pagto: {order_data.get('forma_pagamento', 'N/A')}
-            Valor Total: {order_data.get('valor_total', 'N/A')}
-            """
-
-            # 5. Enviar as mensagens (em threads para não bloquear a resposta)
-            # A sua função send_whatsapp_message espera o JID completo (com @s.whatsapp.net)
-            threading.Thread(target=send_whatsapp_message, args=(f"{COZINHA_WPP_NUMBER}@s.whatsapp.net", msg_cozinha.strip())).start()
-            threading.Thread(target=send_whatsapp_message, args=(f"{MOTOBOY_WPP_NUMBER}@s.whatsapp.net", msg_motoboy.strip())).start()
-
-            print(f"✅ Pedido bifurcado com sucesso para {COZINHA_WPP_NUMBER} e {MOTOBOY_WPP_NUMBER}.")
-
-            # 6. Atualiza a resposta para o cliente
-            ai_reply = remaining_reply
-
-        except Exception as e:
-            print(f"❌ Erro ao processar bifurcação [PEDIDO_CONFIRMADO]: {e}")
-            ai_reply = ai_reply.replace("[PEDIDO_CONFIRMADO]", "").strip()
-            if '{' in ai_reply and '}' in ai_reply:
-                ai_reply = "Tive um problema ao enviar seu pedido para a cozinha. Pode confirmar os dados novamente, por favor? (Erro interno: JSON_PARSE)"
-        
-        # Envia a resposta final (seja de sucesso ou erro) para o cliente
-        print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
-        send_whatsapp_message(sender_number_full, ai_reply)
-
-    elif ai_reply:
-        # Se não for um pedido, é uma conversa normal
-        print(f"🤖 Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
-        send_whatsapp_message(sender_number_full, ai_reply)
-    # --- FIM DO BLOCO DE BIFURCAÇÃO ---
-
+        print(f"❌ Erro fatal ao processar mensagem: {e}")
 
 if __name__ == '__main__':
     if modelo_ia:
         print("\n=============================================")
         print("   CHATBOT WHATSAPP COM IA INICIADO")
-        # --- 9. MENSAGEM DE START ATUALIZADA ---
         print(f"   CLIENTE: {CLIENT_NAME}")
         if not BIFURCACAO_ENABLED:
             print("   AVISO: 'COZINHA_WPP_NUMBER' ou 'MOTOBOY_WPP_NUMBER' não configurados. O recurso de bifurcação está DESATIVADO.")
@@ -684,7 +588,6 @@ if __name__ == '__main__':
         import atexit
         atexit.register(lambda: scheduler.shutdown())
         
-        # O Fly.io vai injetar a variável PORT, mas 8000 é um bom padrão
         port = int(os.environ.get("PORT", 8000))
         app.run(host='0.0.0.0', port=port)
     else:
