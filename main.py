@@ -13,7 +13,6 @@ from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
 import json 
-from pymongo import errors
 
 CLIENT_NAME = "Marmitaria Sabor do Dia" 
 
@@ -83,7 +82,7 @@ def append_message_to_db(contact_id, role, text, message_id=None):
         print(f"❌ Erro ao append_message_to_db: {e}")
         return False
     
-def save_conversation_to_db(contact_id, sender_name, customer_name, chat_session, tokens_used):
+def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used):
 
     try:
         update_payload = {
@@ -472,6 +471,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         6.  **CONFIRMAÇÃO FINAL:**
             - Após ter TODOS os dados, você DEVE apresentar um RESUMO COMPLETO.
             - O resumo deve ter TODOS os campos: Cliente, Pedido, Obs, Bebidas, Endereço, Pagamento, Valor Total.
+            - Sempre quando o pagamento for em dinheiro, verificar se precisa de troco. 
             - Você DEVE terminar perguntando "Confirma o pedido?".
         
         # --- CORREÇÃO 2 (Vazamento de JSON) ---
@@ -620,7 +620,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
                 print(f"❌ Erro ao extrair o nome da tag: {e}")
                 ai_reply = ai_reply.replace("[NOME_CLIENTE]", "").strip()
 
-        save_conversation_to_db(contact_id, sender_name, customer_name_to_save, chat_session, total_tokens_na_interacao)
+        save_conversation_to_db(contact_id, sender_name, customer_name_to_save, total_tokens_na_interacao)
         
         return ai_reply
     
