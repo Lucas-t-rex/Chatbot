@@ -120,26 +120,19 @@ def load_conversation_from_db(contact_id):
     return None
 
 def inicializar_menu_padrao():
-
+    """Cria a estrutura do menu no DB, mas sem itens."""
+    
     print("Verificando/Criando menu padrão no DB...")
     try:
  
+        # Menu padrão agora está "em branco", só com a estrutura.
         menu_padrao = {
             '_id': 'menu_principal',
-            'prato_do_dia': 'Strogonoff de Frango',
-            'acompanhamentos': 'Arroz branco, Feijão, Batata palha e Salada de alface e tomate.',
-            'marmitas': [
-                {'nome': 'Pequena (P)', 'preco': 15.00},
-                {'nome': 'Média (M)', 'preco': 18.00},
-                {'nome': 'Grande (G)', 'preco': 22.00},
-            ],
-            'bebidas': [
-                {'nome': 'Coca-Cola Lata (350ml)', 'preco': 5.00},
-                {'nome': 'Guaraná Antartica Lata (350ml)', 'preco': 5.00},
-                {'nome': 'Água Mineral (sem gás)', 'preco': 3.00},
-                {'nome': 'Suco de Laranja (natural 500ml)', 'preco': 8.00},
-            ],
-            'taxa_entrega': 6.00
+            'prato_do_dia': [], # Lista vazia
+            'acompanhamentos': "", # String vazia
+            'marmitas': [],        # Lista vazia
+            'bebidas': [],         # Lista vazia
+            'taxa_entrega': 0.00   # Padrão 0
         }
 
         resultado = menu_collection.update_one(
@@ -149,7 +142,7 @@ def inicializar_menu_padrao():
         )
         
         if resultado.upserted_id:
-            print("✅✅✅ Menu padrão NÃO existia e foi CRIADO com sucesso. ✅✅✅")
+            print("✅✅✅ Menu padrão NÃO existia e foi CRIADO VAZIO. O admin deve preenchê-lo. ✅✅✅")
         else:
             print("✅ Menu 'menu_principal' já existia. Nenhuma alteração feita.")
         
@@ -241,14 +234,18 @@ def gerar_resposta_admin(contact_id, user_message):
         2. COMPARE com o "MENU ATUAL".
         3. DETERMINE a intenção: (adicionar, remover, alterar_preco, alterar_prato_dia, alterar_taxa).
         4. FAÇA PERGUNTAS se faltar informação (ex: "Qual o preço da Coca 2L?").
-        5. QUANDO TIVER TUDO, sua resposta final DEVE começar com a tag [CONFIRMAR_UPDATE] e ser seguida de um JSON VÁLIDO contendo *apenas* os campos que devem ser atualizados no MongoDB.
+        5. QUANDO TIVER TUDO, sua resposta final DEVE conter a tag [CONFIRMAR_UPDATE] e o JSON VÁLIDO *seguido pelo* texto de confirmação.
         6. Se o usuário confirmar ("sim", "ok"), sua ÚNICA resposta deve ser a tag [EXECUTAR_UPDATE] seguida pelo JSON de antes.
         
         # --- REGRA CRÍTICA DO PRATO DO DIA ---
         O campo "prato_do_dia" DEVE ser sempre uma LISTA (um Array) de strings.
         - Se o admin disser que é SÓ UM prato (ex: "hoje é macarronada"), o JSON deve ser: {{"prato_do_dia": ["Macarronada"]}}
         - Se o admin disser que são DOIS ou MAIS pratos (ex: "hoje é carne e frango"), o JSON deve ser: {{"prato_do_dia": ["Carne de panela", "Frango frito"]}}
-        # --- FIM DA REGRA ---
+        
+        # --- REGRA 7: VER O CARDÁPIO ---
+        - Se o usuário pedir para "ver o cardápio", "ver o estoque", "o que temos hoje?", "qual o cardápio atual?" ou algo similar, 
+        - Sua ÚNICA resposta deve ser a tag [VER_CARDAPIO].
+        - NÃO tente atualizar nada, apenas envie a tag.
         
         MENU ATUAL (DO BANCO DE DADOS):
         {json.dumps(current_menu, indent=2, default=str)}
@@ -271,6 +268,10 @@ def gerar_resposta_admin(contact_id, user_message):
         Confirma?"
         Usuário: "sim"
         Você: "[EXECUTAR_UPDATE]{{{{\"prato_do_dia\": [\"Carne de panela\", \"Frango frito\"]}}}}"
+        
+        EXEMPLO DE FLUXO 3 (Ver Cardápio):
+        Usuário: "como está o cardápio agora?"
+        Você: "[VER_CARDAPIO]"
         """
 
         admin_convo_start = [
@@ -283,7 +284,9 @@ def gerar_resposta_admin(contact_id, user_message):
         resposta_ia_admin = chat_session.send_message(user_message)
         ai_reply = resposta_ia_admin.text
         
-        # 5. Lógica de Execução do Update
+        # --- INÍCIO DO NOVO BLOCO DE LÓGICA DE RESPOSTA ---
+        
+        # 1. Verificando se é um COMANDO DE EXECUÇÃO
         if ai_reply.strip().startswith("[EXECUTAR_UPDATE]"):
             print("✅ Admin confirmou. Executando update no DB...")
             try:
@@ -307,21 +310,83 @@ def gerar_resposta_admin(contact_id, user_message):
                 print(f"❌ ERRO AO EXECUTAR UPDATE: {e}")
                 return f"Tive um erro ao tentar salvar no banco: {e}. Por favor, tente de novo."
         
-        # Remove a tag de confirmação da resposta ao usuário.
-        if ai_reply.strip().startswith("[CONFIRMAR_UPDATE]"):
-            json_start = ai_reply.find('{')
-            json_end = ai_reply.rfind('}') + 1
-            if json_end > 0 and json_start != -1:
-                ai_reply = ai_reply[json_end:].strip() # Remove o JSON da resposta
-            else:
-                ai_reply = ai_reply.replace("[CONFIRMAR_UPDATE]", "").strip()
+        # 2. Verificando se é um PEDIDO PARA VER O CARDÁPIO (Request 1)
+        elif ai_reply.strip().startswith("[VER_CARDAPIO]"):
+            print("ℹ️ Admin pediu para ver o cardápio atual.")
+            try:
+                # 'current_menu' já foi carregado no início desta função
+                # Apenas formatamos para o admin
+                menu_formatado = "--- 📋 CARDÁPIO / ESTOQUE ATUAL 📋 ---\n\n"
+                
+                pratos = current_menu.get('prato_do_dia', [])
+                if not pratos:
+                    menu_formatado += "Prato do Dia: (Vazio)\n"
+                else:
+                    menu_formatado += "Prato(s) do Dia:\n"
+                    for prato in pratos:
+                        menu_formatado += f" - {prato}\n"
+                
+                menu_formatado += f"\nAcompanhamentos: {current_menu.get('acompanhamentos') or '(Vazio)'}\n"
+                
+                marmitas = current_menu.get('marmitas', [])
+                if not marmitas:
+                    menu_formatado += "\nMarmitas: (Vazio)\n"
+                else:
+                    menu_formatado += "\nMarmitas:\n"
+                    for item in marmitas:
+                        menu_formatado += f" - {item.get('nome', '?')}: R${item.get('preco', 0.0):.2f}\n"
+                
+                bebidas = current_menu.get('bebidas', [])
+                if not bebidas:
+                    menu_formatado += "\nBebidas: (Vazio)\n"
+                else:
+                    menu_formatado += "\nBebidas:\n"
+                    for item in bebidas:
+                        menu_formatado += f" - {item.get('nome', '?')}: R${item.get('preco', 0.0):.2f}\n"
+                
+                menu_formatado += f"\nTaxa de Entrega: R${current_menu.get('taxa_entrega', 0.0):.2f}"
+        
+                return menu_formatado.strip()
+            
+            except Exception as e:
+                print(f"❌ Erro ao formatar cardápio para admin: {e}")
+                return "Erro ao tentar formatar o cardápio."
 
-        return ai_reply # Retorna a pergunta/confirmação para o admin
+        # 3. Verificando se é uma MENSAGEM DE CONFIRMAÇÃO (Request 3)
+        elif "[CONFIRMAR_UPDATE]" in ai_reply:
+            print("ℹ️ IA gerou uma mensagem de confirmação para o admin.")
+            
+            # O admin NÃO deve ver a tag.
+            # O prompt foi instruído a gerar: [TAG]{JSON}Texto amigável
+            
+            json_end_index = ai_reply.rfind('}')
+            if json_end_index != -1:
+                # Pega o texto DEPOIS do '}'
+                visible_reply = ai_reply[json_end_index + 1:].strip()
+                if visible_reply:
+                    return visible_reply
+            
+            # Se falhou (ex: o texto veio antes, como no seu log),
+            # vamos pegar o texto ANTES da tag [CONFIRMAR_UPDATE]
+            tag_start_index = ai_reply.find("[CONFIRMAR_UPDATE]")
+            if tag_start_index != -1:
+                visible_reply = ai_reply[:tag_start_index].strip()
+                if visible_reply:
+                    return visible_reply
+                    
+            # Se ambas as lógicas falharem, é um erro de prompt
+            print(f"❌ Erro de prompt admin: A IA gerou a tag [CONFIRMAR_UPDATE] mas não foi possível extrair o texto. Resposta: {ai_reply}")
+            return "Entendi. Confirma a alteração? (Erro ao formatar JSON)"
+
+        # 4. Se não for nenhum dos anteriores, é uma pergunta normal da IA (ex: "Qual o preço?")
+        else:
+            return ai_reply
+
+        # --- FIM DO NOVO BLOCO DE LÓGICA DE RESPOSTA ---
 
     except Exception as e:
         print(f"❌ Erro em 'gerar_resposta_admin': {e}")
         return f"Desculpe, tive um erro no modo admin: {e}"
-
 
 def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     """
