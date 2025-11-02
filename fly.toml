@@ -24,3 +24,6 @@ primary_region = 'gru'
 
 [env]
   PYTHONUNBUFFERED = "1"
+
+[processes]
+  app = "gunicorn --bind 0.0.0.0:8000 --workers 1 --timeout 120 main:app"

@@ -26,6 +26,11 @@ MONGO_DB_URI = os.environ.get("MONGO_DB_URI")
 COZINHA_WPP_NUMBER = "554898389781"
 MOTOBOY_WPP_NUMBER = "554499242532"
 
+message_buffer = {}
+message_timers = {}
+BUFFER_TIME_SECONDS = 8
+
+
 BIFURCACAO_ENABLED = bool(COZINHA_WPP_NUMBER and MOTOBOY_WPP_NUMBER)
 if BIFURCACAO_ENABLED:
     print(f"✅ Plano de Bifurcação ATIVO. Cozinha: {COZINHA_WPP_NUMBER}, Motoboy: {MOTOBOY_WPP_NUMBER}")
@@ -461,32 +466,35 @@ def gerar_e_enviar_relatorio_semanal():
     except Exception as e:
         print(f"❌ Erro ao gerar ou enviar relatório para '{CLIENT_NAME}': {e}")
 
+scheduler = BackgroundScheduler(daemon=True, timezone='America/Sao_Paulo')
+scheduler.start()
+
 app = Flask(__name__)
 processed_messages = set() 
 
 
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
-    """Recebe mensagens do WhatsApp enviadas pela Evolution API."""
+    """Recebe mensagens do WhatsApp e as coloca no buffer."""
     data = request.json
     print(f"📦 DADO BRUTO RECEBIDO NO WEBHOOK: {data}")
 
     event_type = data.get('event')
     
     if event_type != 'messages.upsert':
-        print(f"➡️  Ignorando evento: {event_type} (não é uma nova mensagem)")
+        print(f"➡️  Ignorando evento: {event_type} (não é uma nova mensagem)")
         return jsonify({"status": "ignored_event_type"}), 200
 
     try:
         message_data = data.get('data', {}) 
         if not message_data:
-            print("➡️  Evento 'messages.upsert' sem 'data'. Ignorando.")
+            print("➡️  Evento 'messages.upsert' sem 'data'. Ignorando.")
             return jsonify({"status": "ignored_no_data"}), 200
-            
+        
         key_info = message_data.get('key', {})
 
         if key_info.get('fromMe'):
-            print(f"➡️  Mensagem do próprio bot ignorada.")
+            print(f"➡️  Mensagem do próprio bot ignorada.")
             return jsonify({"status": "ignored_from_me"}), 200
 
         message_id = key_info.get('id')
@@ -500,9 +508,9 @@ def receive_webhook():
         if len(processed_messages) > 1000:
             processed_messages.clear()
 
-        # --- MUDANÇA PRINCIPAL: O BUFFER FOI REMOVIDO ---
-        # Chamamos 'process_message' diretamente, sem timer.
-        threading.Thread(target=process_message, args=(message_data,)).start()
+        # --- LÓGICA DE BUFFER ---
+        handle_message_buffering(message_data)
+        
         return jsonify({"status": "received"}), 200
 
     except Exception as e:
@@ -514,97 +522,192 @@ def receive_webhook():
 def health_check():
     return "Estou vivo! (Marmitaria Bot)", 200
 
-def process_message(message_data):
+def handle_message_buffering(message_data):
     """
-    Processa CADA mensagem individualmente, sem buffer.
+    Agrupa mensagens de um mesmo usuário que chegam rápido
+    e dispara o processamento após um 'delay'.
     """
+    global message_buffer, message_timers, BUFFER_TIME_SECONDS
+    
     try:
         key_info = message_data.get('key', {})
         sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
-
-        # Ignora grupos
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
 
         clean_number = sender_number_full.split('@')[0]
+        
+        message = message_data.get('message', {})
+        user_message_content = None
+        
+        # --- Processa ÁUDIO imediatamente ---
+        if message.get('audioMessage'):
+            print("🎤 Áudio recebido, processando imediatamente (sem buffer)...")
+            threading.Thread(target=process_message_logic, args=(message_data, None)).start()
+            return
+        
+        # --- Processa TEXTO no buffer ---
+        if message.get('conversation'):
+            user_message_content = message['conversation']
+        elif message.get('extendedTextMessage'):
+            user_message_content = message['extendedTextMessage'].get('text')
+        
+        if not user_message_content:
+            print("➡️  Mensagem sem conteúdo de texto ignorada pelo buffer.")
+            return
+
+        # Adiciona a mensagem de texto ao buffer
+        if clean_number not in message_buffer:
+            message_buffer[clean_number] = []
+        message_buffer[clean_number].append(user_message_content)
+        
+        print(f"📥 Mensagem adicionada ao buffer de {clean_number}: '{user_message_content}'")
+
+        # Se já existe um timer, cancela ele (vamos esperar mais)
+        if clean_number in message_timers:
+            message_timers[clean_number].cancel()
+
+        # Inicia um NOVO timer
+        timer = threading.Timer(
+            BUFFER_TIME_SECONDS, 
+            _trigger_ai_processing, 
+            args=[clean_number, message_data] # Passa o 'message_data' da ÚLTIMA mensagem
+        )
+        message_timers[clean_number] = timer
+        timer.start()
+        print(f"⏰ Buffer de {clean_number} resetado. Aguardando {BUFFER_TIME_SECONDS}s...")
+
+    except Exception as e:
+        print(f"❌ Erro no 'handle_message_buffering': {e}")
+            
+def _trigger_ai_processing(clean_number, last_message_data):
+    """
+    Função chamada pelo Timer. Junta as mensagens e chama a IA.
+    """
+    global message_buffer, message_timers
+    
+    if clean_number not in message_buffer:
+        return 
+
+    # 1. Pega todas as mensagens agrupadas e limpa o buffer
+    messages_to_process = message_buffer.pop(clean_number, [])
+    if clean_number in message_timers:
+        del message_timers[clean_number]
+        
+    if not messages_to_process:
+        return
+
+    # 2. Junta as mensagens
+    # Ex: ["Quero 1 p", "E", "Uma m"] -> "Quero 1 p. E. Uma m"
+    full_user_message = ". ".join(messages_to_process)
+    
+    print(f"⚡️ DISPARANDO IA para {clean_number} com mensagem agrupada: '{full_user_message}'")
+
+    # 3. Chama a função de processamento principal
+    threading.Thread(target=process_message_logic, args=(last_message_data, full_user_message)).start()
+
+
+def process_message_logic(message_data, buffered_message_text=None):
+    """
+    Esta é a função "worker" principal. Ela pega o lock e chama a IA.
+    (Esta é a sua antiga 'process_message' com um novo nome)
+    """
+    try:
+        key_info = message_data.get('key', {})
+        sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
+        if not sender_number_full or sender_number_full.endswith('@g.us'): return
+        
+        clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
+        # --- Pega o Lock ---
         now = datetime.now()
-
         res = conversation_collection.update_one(
             {'_id': clean_number, 'processing': {'$ne': True}},
             {'$set': {'processing': True, 'processing_started_at': now}}
         )
 
-        if res.matched_count == 1:
-            got_lock = True
-        elif res.matched_count == 0:
-            try:
-                conversation_collection.insert_one({
-                    '_id': clean_number,
-                    'processing': True,
-                    'processing_started_at': now,
-                    'created_at': now
-                })
-                got_lock = True
-            except errors.DuplicateKeyError:
-                print(f"⏳ {clean_number} já está sendo processado por outro worker (race). Abandonando esta execução.")
-                return
-        else:
-            got_lock = False
-
-        message = message_data.get('message', {})
-        user_message_content = None
-
-        if message.get('conversation'):
-            user_message_content = message['conversation']
-        elif message.get('extendedTextMessage'):
-            user_message_content = message['extendedTextMessage'].get('text')
-        elif message.get('audioMessage') and message.get('base64'):
-            message_id = key_info.get('id')
-            print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
-            audio_base64 = message['base64']
-            audio_data = base64.b64decode(audio_base64)
-            temp_audio_path = f"/tmp/audio_{clean_number}_{message_id}.ogg"
-            with open(temp_audio_path, 'wb') as f:
-                f.write(audio_data)
-            user_message_content = transcrever_audio_gemini(temp_audio_path)
-            os.remove(temp_audio_path)
-            if not user_message_content:
-                send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
-                return
-
-        if not user_message_content:
-            print(f"➡️  Mensagem ignorada (sem conteúdo de texto ou áudio) de {clean_number}.")
+        if res.matched_count == 0:
+            # Não conseguiu o lock. Tenta de novo em 10s.
+            print(f"⏳ {clean_number} já está sendo processado (lock). Reagendando...")
+            # Recoloca no buffer para tentar de novo
+            if buffered_message_text:
+                if clean_number not in message_buffer: message_buffer[clean_number] = []
+                # Coloca a mensagem agrupada de volta no *início* do buffer
+                message_buffer[clean_number].insert(0, buffered_message_text)
+            
+            timer = threading.Timer(10.0, _trigger_ai_processing, args=[clean_number, message_data])
+            message_timers[clean_number] = timer
+            timer.start()
             return
+        
+        # --- TEMOS O LOCK! ---
+        
+        user_message_content = None
+        
+        if buffered_message_text:
+            # Veio do buffer de 10s
+            user_message_content = buffered_message_text
+            # Salva TODAS as mensagens de texto que foram agrupadas
+            messages_to_save = user_message_content.split(". ")
+            for msg_text in messages_to_save:
+                # Evita salvar "pontos" vazios se o join der errado
+                if msg_text and msg_text.strip():
+                    append_message_to_db(clean_number, 'user', msg_text)
+        else:
+            # É uma mensagem de áudio (processamento imediato)
+            message = message_data.get('message', {})
+            if message.get('audioMessage') and message.get('base64'):
+                message_id = key_info.get('id')
+                print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
+                audio_base64 = message['base64']
+                audio_data = base64.b64decode(audio_base64)
+                temp_audio_path = f"/tmp/audio_{clean_number}_{message_id}.ogg"
+                with open(temp_audio_path, 'wb') as f: f.write(audio_data)
+                user_message_content = transcrever_audio_gemini(temp_audio_path)
+                os.remove(temp_audio_path)
+                if not user_message_content:
+                    send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
+                    user_message_content = "[Usuário enviou um áudio incompreensível]"
+            
+            if not user_message_content:
+                 user_message_content = "[Usuário enviou uma mensagem não suportada]"
+                 
+            append_message_to_db(clean_number, 'user', user_message_content)
 
-        append_message_to_db(clean_number, 'user', user_message_content)
-        print(f"🧠 Processando mensagem IMEDIATA de {clean_number}: '{user_message_content}'")
-
+        print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
+        
+        # --- Chama a IA ---
         ai_reply = gerar_resposta_ia(
             clean_number,
             sender_name_from_wpp,
             user_message_content,
             clean_number
         )
-
+        
+        # Se a IA não responder, apenas libera o lock
         if not ai_reply:
-            return
+             print("⚠️ A IA não gerou resposta.")
+             conversation_collection.update_one(
+                {'_id': clean_number},
+                {'$unset': {'processing': "", 'processing_started_at': ""}}
+             )
+             print(f"🔓 Lock liberado (IA sem resposta) para {clean_number}.")
+             return
+
+        # --- Processa e Envia a Resposta ---
         try:
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
             if BIFURCACAO_ENABLED and ai_reply.strip().startswith("[PEDIDO_CONFIRMADO]"):
                 print(f"📦 Tag [PEDIDO_CONFIRMADO] detectada. Processando e bifurcando pedido para {clean_number}...")
-                
                 json_start = ai_reply.find('{')
                 json_end = ai_reply.rfind('}') + 1
-                if json_start == -1 or json_end == 0:
-                    raise ValueError("JSON de pedido não encontrado após a tag.")
+                if json_start == -1 or json_end == 0: raise ValueError("JSON de pedido não encontrado após a tag.")
 
                 json_string = ai_reply[json_start:json_end]
                 remaining_reply = ai_reply[json_end:].strip()
-                if not remaining_reply:
-                    remaining_reply = "Seu pedido foi confirmado e enviado para a cozinha! 😋"
+                if not remaining_reply: remaining_reply = "Seu pedido foi confirmado e enviado para a cozinha! 😋"
 
                 order_data = json.loads(json_string)
 
@@ -634,20 +737,11 @@ def process_message(message_data):
                 Valor Total: {order_data.get('valor_total', 'N/A')}
                 """
 
-                threading.Thread(
-                    target=send_whatsapp_message,
-                    args=(f"{COZINHA_WPP_NUMBER}@s.whatsapp.net", msg_cozinha.strip())
-                ).start()
-
+                threading.Thread(target=send_whatsapp_message, args=(f"{COZINHA_WPP_NUMBER}@s.whatsapp.net", msg_cozinha.strip())).start()
                 if order_data.get('tipo_pedido') == "Entrega":
-                    threading.Thread(
-                        target=send_whatsapp_message,
-                        args=(f"{MOTOBOY_WPP_NUMBER}@s.whatsapp.net", msg_motoboy.strip())
-                    ).start()
-
-                print(f"✅ Pedido bifurcado com sucesso.")
+                    threading.Thread(target=send_whatsapp_message, args=(f"{MOTOBOY_WPP_NUMBER}@s.whatsapp.net", msg_motoboy.strip())).start()
                 
-
+                # print(f"✅ Pedido bifurcado com sucesso.") # (Removido para evitar confusão)
                 send_whatsapp_message(sender_number_full, remaining_reply)
 
             else:
@@ -661,6 +755,7 @@ def process_message(message_data):
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
+        # --- Libera o Lock ---
         if 'clean_number' in locals():
             conversation_collection.update_one(
                 {'_id': clean_number},
@@ -680,9 +775,7 @@ if __name__ == '__main__':
         print("=============================================")
         print("Servidor aguardando mensagens no webhook...")
 
-        scheduler = BackgroundScheduler(daemon=True, timezone='America/Sao_Paulo') 
         scheduler.add_job(gerar_e_enviar_relatorio_semanal, 'cron', day_of_week='sun', hour=8, minute=0)
-        scheduler.start()
         print("⏰ Agendador de relatórios iniciado. O relatório será enviado todo Domingo às 08:00.")
         
         import atexit
