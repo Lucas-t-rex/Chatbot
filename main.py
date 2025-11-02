@@ -17,7 +17,7 @@ import json
 # ⬇️ ⬇️ ⬇️ ÁREA DE CONFIGURAÇÃO PRINCIPAL ⬇️ ⬇️ ⬇️
 # ==============================================================================
 
-CLIENT_NAME = "Marmitaria Sabor do Dia" # <--- EDITAR NOME DO CLIENTE
+CLIENT_NAME = "Marmitaria Sabor do Dia" 
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
@@ -268,104 +268,141 @@ def handle_responsible_command(message_content, responsible_number):
         return None
 # --- FIM DA FUSÃO ---
 
+# <--- SUBSTITUA A FUNÇÃO 'gerar_resposta_admin' INTEIRA POR ESTA ---
 
-# <--- FUSÃO: Função 'gerar_resposta_admin' (do 'codigo atual') MODIFICADA ---
 def gerar_resposta_admin(contact_id, user_message):
     """
+    (VERSÃO CORRIGIDA v2)
     Gera uma resposta para o ADMIN.
-    AGORA, ele primeiro verifica se é um comando de intervenção ("ok numero")
-    e SÓ DEPOIS tenta processar como uma edição de menu.
+    Trata comandos de intervenção ("ok numero") E edição de menu.
+    Esta versão corrige o "loop de confirmação" E a lógica de "merge" de itens.
     """
     global modelo_ia
     
-    # --- INÍCIO DA FUSÃO ---
     # 1. Verifica se é um comando de intervenção
     command_response = handle_responsible_command(user_message, contact_id)
     if command_response:
-        return "Comando de intervenção tratado." # Retorna uma msg interna (não será enviada ao admin)
-
+        # A própria função 'handle_responsible_command' já envia a msg de status.
+        return "Comando de intervenção tratado." 
+    
+    # 2. Se não era um comando, continua para a lógica de edição de menu
     try:
         current_menu = menu_collection.find_one({"_id": "menu_principal"})
         if not current_menu:
-            return "ERRO: Não encontrei o documento 'menu_principal' no banco de dados. A inicialização falhou."
+            return "ERRO: Não encontrei o documento 'menu_principal' no banco de dados."
         
         convo_data = load_conversation_from_db(contact_id)
         old_history = []
+        
         if convo_data and 'history' in convo_data:
             history_from_db = [msg for msg in convo_data['history']][-10:] 
             old_history = []
             for msg in history_from_db:
                 role = msg.get('role', 'user')
                 if role == 'assistant': role = 'model'
+                
                 if 'text' in msg:
                     old_history.append({'role': role, 'parts': [msg['text']]})
 
-        # (O prompt de admin é mantido 100% como estava)
         admin_prompt_text = f"""
         Você é um assistente de gerenciamento de cardápio.
         Sua única função é ajudar o dono da loja (o usuário) a ATUALIZAR o cardápio no banco de dados.
-        O usuário NÃO é um programador. Ele vai falar em linguagem natural.
 
         REGRAS:
-        1. ANALISE a mensagem do usuário.
+        1. ANALISE a mensagem do usuário (ex: "lasanha e coca 2L 10 reais").
         2. COMPARE com o "MENU ATUAL".
-        3. DETERMINE a intenção: (adicionar, remover, alterar_preco, alterar_prato_dia, alterar_taxa).
-        4. FAÇA PERGUNTAS se faltar informação (ex: "Qual o preço da Coca 2L?").
+        3. DETERMINE a intenção: (adicionar, remover, alterar_preco, alterar_prato_dia, etc.).
+        4. FAÇA PERGUNTAS se faltar informação (ex: "Qual o preço?").
         5. QUANDO TIVER TUDO, sua resposta final DEVE conter a tag [CONFIRMAR_UPDATE] e o JSON VÁLIDO *seguido pelo* texto de confirmação.
-        6. Se o usuário confirmar ("sim", "ok"), sua ÚNICA resposta deve ser a tag [EXECUTAR_UPDATE] seguida pelo JSON de antes.
+        
+        # --- REGRA CRÍTICA DE EXECUÇÃO (CORRIGIDA) ---
+        6. Se a sua *última* mensagem no histórico foi uma proposta (ex: `[CONFIRMAR_UPDATE]{{...}}Confirma?`)
+        7. E a *nova* mensagem do usuário é uma confirmação clara (ex: "sim", "isso", "pode confirmar", "pode", "confirmo", "isso mesmo")
+        8. Sua tarefa é PEGAR O JSON EXATO da sua última mensagem (a que continha [CONFIRMAR_UPDATE]) e responder APENAS com a tag [EXECUTAR_UPDATE] seguida daquele JSON.
+        9. NÃO adicione texto de despedida ou confirmação após a tag [EXECUTAR_UPDATE].
         
         # --- REGRA CRÍTICA DO PRATO DO DIA ---
         O campo "prato_do_dia" DEVE ser sempre uma LISTA (um Array) de strings.
         - Se o admin disser que é SÓ UM prato (ex: "hoje é macarronada"), o JSON deve ser: {{"prato_do_dia": ["Macarronada"]}}
         - Se o admin disser que são DOIS ou MAIS pratos (ex: "hoje é carne e frango"), o JSON deve ser: {{"prato_do_dia": ["Carne de panela", "Frango frito"]}}
         
-        # --- REGRA 7: VER O CARDÁPIO ---
+        # --- REGRA CRÍTICA DE BEBIDAS/MARMITAS ---
+        - Se o usuário pedir para adicionar um item (ex: "add coca 2L 10 reais"), o JSON deve conter APENAS o novo item.
+        - Ex: {{"bebidas": [{{"nome": "Coca 2L", "preco": 10.00}}]}}
+        - O código se encarregará de mesclar (fazer o "append") esta lista com a lista existente.
+        
+        # --- REGRA: VER O CARDÁPIO ---
         - Se o usuário pedir para "ver o cardápio", "ver o estoque", "o que temos hoje?", "qual o cardápio atual?" ou algo similar, 
         - Sua ÚNICA resposta deve ser a tag [VER_CARDAPIO].
-        - NÃO tente atualizar nada, apenas envie a tag.
         
         MENU ATUAL (DO BANCO DE DADOS):
         {json.dumps(current_menu, indent=2, default=str)}
         
         EXEMPLO DE FLUXO 1 (Alterar Prato Único):
-        Usuário: "oi, hoje o prato do dia é Macarronada e os acompanhamentos são arroz e feijão"
-        Você: "[CONFIRMAR_UPDATE]{{{{\"prato_do_dia\": [\"Macarronada\"], \"acompanhamentos\": \"arroz e feijão\"}}}}Olá! Entendido. Vou alterar:
-        - Prato do Dia: ['Macarronada']
-        - Acompanhamentos: 'arroz e feijão'
-        Confirma?"
+        (Histórico anterior...)
+        Bot: "[CONFIRMAR_UPDATE]{{{{\"prato_do_dia\": [\"Macarronada\"]}}}}Olá! Entendido... Confirma?"
         Usuário: "sim"
-        Você: "[EXECUTAR_UPDATE]{{{{\"prato_do_dia\": [\"Macarronada\"], \"acompanhamentos\": \"arroz e feijão\"}}}}"
+        Você: "[EXECUTAR_UPDATE]{{{{\"prato_do_dia\": [\"Macarronada\"]}}}}"
         
-        EXEMPLO DE FLUXO 3 (Ver Cardápio):
-        Usuário: "como está o cardápio agora?"
-        Você: "[VER_CARDAPIO]"
+        EXEMPLO DE FLUXO 2 (Múltiplas Alterações):
+        Usuário: "hoje é lasanha e quero add coca 2L por 10"
+        (O menu atual já tem "Coca Lata")
+        Você: "[CONFIRMAR_UPDATE]{{{{\"prato_do_dia\": [\"Lasanha\"], \"bebidas\": [{{ \"nome\": \"Coca 2L\", \"preco\": 10.00 }}]}}}}Certo. Vou alterar o prato para 'Lasanha' e adicionar 'Coca 2L' por R$10. Confirma?"
+        Usuário: "pode confirmar"
+        Você: "[EXECUTAR_UPDATE]{{{{\"prato_do_dia\": [\"Lasanha\"], \"bebidas\": [{{ \"nome\": \"Coca 2L\", \"preco\": 10.00 }}]}}}}"
         """
 
         admin_convo_start = [
             {'role': 'user', 'parts': [admin_prompt_text]},
-            {'role': 'model', 'parts': ["Entendido. Estou no modo de gerenciamento. Vou analisar o pedido do admin, comparar com o JSON atual e pedir confirmação."]}
+            {'role': 'model', 'parts': ["Entendido. Estou no modo de gerenciamento. Vou analisar o pedido, pedir confirmação com [CONFIRMAR_UPDATE], e ao receber 'sim', vou pegar o JSON anterior e enviar [EXECUTAR_UPDATE]."]}
         ]
         chat_session = modelo_ia.start_chat(history=admin_convo_start + old_history)
         
         print(f"Enviando para a IA (Admin/Menu): '{user_message}'")
         resposta_ia_admin = chat_session.send_message(user_message)
-        ai_reply = resposta_ia_admin.text
+        ai_reply_raw = resposta_ia_admin.text 
         
-        # (A lógica de resposta do Admin é mantida 100% como estava)
-        if ai_reply.strip().startswith("[EXECUTAR_UPDATE]"):
+        append_message_to_db(contact_id, 'assistant', ai_reply_raw)
+
+        if ai_reply_raw.strip().startswith("[EXECUTAR_UPDATE]"):
             print("✅ Admin confirmou. Executando update no DB...")
             try:
-                json_start = ai_reply.find('{')
-                json_end = ai_reply.rfind('}') + 1
+                json_start = ai_reply_raw.find('{')
+                json_end = ai_reply_raw.rfind('}') + 1
                 if json_start == -1: raise ValueError("JSON de update não encontrado")
                 
-                update_json_string = ai_reply[json_start:json_end]
+                update_json_string = ai_reply_raw[json_start:json_end]
                 update_data = json.loads(update_json_string)
+                
+                # <--- CORREÇÃO DE DUPLICATAS (PRIORIZA O ITEM NOVO) ---
+                update_payload = {}
+                for key, value in update_data.items():
+                    if key in ['bebidas', 'marmitas'] and isinstance(value, list):
+                        # Se for lista, mescla (adiciona/atualiza itens)
+                        existing_items = current_menu.get(key, [])
+                        # Adiciona os novos itens NO FINAL
+                        existing_items.extend(value) 
+                        
+                        seen_names = set()
+                        merged_list = []
+                        # Itera de TRÁS PARA FRENTE
+                        for item in reversed(existing_items):
+                            item_name = item.get('nome')
+                            if item_name and item_name not in seen_names:
+                                merged_list.insert(0, item) # Insere no início
+                                seen_names.add(item_name)
+                        
+                        print(f"Itens mesclados para '{key}': {merged_list}")
+                        update_payload[key] = merged_list
+                    else:
+                        # Se for 'prato_do_dia', 'acompanhamentos' ou 'taxa', apenas substitui
+                        update_payload[key] = value
                 
                 menu_collection.update_one(
                     {'_id': 'menu_principal'},
-                    {'$set': update_data}
+                    {'$set': update_payload}
                 )
+                # --- FIM DA CORREÇÃO DE DUPLICATAS ---
                 
                 print("✅✅✅ MENU ATUALIZADO NO BANCO DE DADOS! ✅✅✅")
                 return "Pronto! O menu foi atualizado com sucesso. Os próximos clientes já verão as mudanças."
@@ -373,53 +410,52 @@ def gerar_resposta_admin(contact_id, user_message):
                 print(f"❌ ERRO AO EXECUTAR UPDATE: {e}")
                 return f"Tive um erro ao tentar salvar no banco: {e}. Por favor, tente de novo."
         
-        elif ai_reply.strip().startswith("[VER_CARDAPIO]"):
+        elif ai_reply_raw.strip().startswith("[VER_CARDAPIO]"):
             print("ℹ️ Admin pediu para ver o cardápio atual.")
             try:
+                menu_atualizado = menu_collection.find_one({"_id": "menu_principal"})
                 menu_formatado = "--- 📋 CARDÁPIO / ESTOQUE ATUAL 📋 ---\n\n"
                 
-                pratos = current_menu.get('prato_do_dia', [])
+                pratos = menu_atualizado.get('prato_do_dia', [])
                 menu_formatado += "Prato(s) do Dia:\n" + ("(Vazio)\n" if not pratos else "".join(f" - {p}\n" for p in pratos))
                 
-                menu_formatado += f"\nAcompanhamentos: {current_menu.get('acompanhamentos') or '(Vazio)'}\n"
+                menu_formatado += f"\nAcompanhamentos: {menu_atualizado.get('acompanhamentos') or '(Vazio)'}\n"
                 
-                marmitas = current_menu.get('marmitas', [])
+                marmitas = menu_atualizado.get('marmitas', [])
                 menu_formatado += "\nMarmitas:\n" + ("(Vazio)\n" if not marmitas else "".join(f" - {i.get('nome', '?')}: R${i.get('preco', 0.0):.2f}\n" for i in marmitas))
 
-                bebidas = current_menu.get('bebidas', [])
+                bebidas = menu_atualizado.get('bebidas', [])
                 menu_formatado += "\nBebidas:\n" + ("(Vazio)\n" if not bebidas else "".join(f" - {i.get('nome', '?')}: R${i.get('preco', 0.0):.2f}\n" for i in bebidas))
                 
-                menu_formatado += f"\nTaxa de Entrega: R${current_menu.get('taxa_entrega', 0.0):.2f}"
+                menu_formatado += f"\nTaxa de Entrega: R${menu_atualizado.get('taxa_entrega', 0.0):.2f}"
         
                 return menu_formatado.strip()
             except Exception as e:
                 print(f"❌ Erro ao formatar cardápio para admin: {e}")
                 return "Erro ao tentar formatar o cardápio."
 
-        elif "[CONFIRMAR_UPDATE]" in ai_reply:
+        elif "[CONFIRMAR_UPDATE]" in ai_reply_raw:
             print("ℹ️ IA gerou uma mensagem de confirmação para o admin.")
-            json_end_index = ai_reply.rfind('}')
+            json_end_index = ai_reply_raw.rfind('}')
             if json_end_index != -1:
-                visible_reply = ai_reply[json_end_index + 1:].strip()
+                visible_reply = ai_reply_raw[json_end_index + 1:].strip()
                 if visible_reply:
                     return visible_reply
             
-            tag_start_index = ai_reply.find("[CONFIRMAR_UPDATE]")
+            tag_start_index = ai_reply_raw.find("[CONFIRMAR_UPDATE]")
             if tag_start_index != -1:
-                visible_reply = ai_reply[:tag_start_index].strip()
+                visible_reply = ai_reply_raw[:tag_start_index].strip()
                 if visible_reply:
                     return visible_reply
                     
-            print(f"❌ Erro de prompt admin: A IA gerou a tag [CONFIRMAR_UPDATE] mas não foi possível extrair o texto. Resposta: {ai_reply}")
-            return "Entendi. Confirma a alteração? (Erro ao formatar JSON)"
+            print(f"❌ Erro de prompt admin: A IA gerou a tag [CONFIRMAR_UPDATE] mas não foi possível extrair o texto. Resposta: {ai_reply_raw}")
+            return ai_reply_raw.replace("[CONFIRMAR_UPDATE]", "").strip() # Fallback
         else:
-            return ai_reply
+            return ai_reply_raw
 
     except Exception as e:
         print(f"❌ Erro em 'gerar_resposta_admin': {e}")
         return f"Desculpe, tive um erro no modo admin: {e}"
-# --- FIM DA FUSÃO ---
-
 
 def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     """
