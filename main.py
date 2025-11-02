@@ -165,7 +165,29 @@ def formatar_menu_para_prompt():
             return "O cardápio não está disponível no momento."
 
         menu_string = "--- PRATO DO DIA ---\n"
-        menu_string += f"Hoje temos: {{{menu_data.get('prato_do_dia', 'Prato não informado')}}}\n"
+        
+        # --- LÓGICA ATUALIZADA PARA LISTA DE PRATOS ---
+        prato_data = menu_data.get('prato_do_dia')
+        
+        if isinstance(prato_data, list):
+            if len(prato_data) == 0:
+                menu_string += "Prato do dia não informado.\n"
+            elif len(prato_data) == 1:
+                # Se for uma lista com UM item, trate como normal
+                menu_string += f"Hoje temos: {{{prato_data[0]}}}\n"
+            else:
+                # Se for uma lista com VÁRIOS itens, liste como OPÇÕES
+                opcoes_str = ", ".join(prato_data)
+                menu_string += f"Hoje temos as seguintes OPÇÕES DE PRATO: [{{ {opcoes_str} }}]\n"
+                menu_string += "(O cliente deve escolher UMA das opções para a marmita)\n"
+        
+        elif isinstance(prato_data, str):
+             # Apenas para garantir compatibilidade se o dado for antigo (string)
+             menu_string += f"Hoje temos: {{{prato_data}}}\n"
+        else:
+            menu_string += "Prato do dia não informado.\n"
+        # --- FIM DA LÓGICA ATUALIZADA ---
+
         menu_string += f"Acompanhamentos: {{{menu_data.get('acompanhamentos', 'Não informado')}}}\n"
 
         menu_string += "--- TAMANHOS E VALORES (Marmitas) ---\n"
@@ -222,28 +244,33 @@ def gerar_resposta_admin(contact_id, user_message):
         5. QUANDO TIVER TUDO, sua resposta final DEVE começar com a tag [CONFIRMAR_UPDATE] e ser seguida de um JSON VÁLIDO contendo *apenas* os campos que devem ser atualizados no MongoDB.
         6. Se o usuário confirmar ("sim", "ok"), sua ÚNICA resposta deve ser a tag [EXECUTAR_UPDATE] seguida pelo JSON de antes.
         
+        # --- REGRA CRÍTICA DO PRATO DO DIA ---
+        O campo "prato_do_dia" DEVE ser sempre uma LISTA (um Array) de strings.
+        - Se o admin disser que é SÓ UM prato (ex: "hoje é macarronada"), o JSON deve ser: {{"prato_do_dia": ["Macarronada"]}}
+        - Se o admin disser que são DOIS ou MAIS pratos (ex: "hoje é carne e frango"), o JSON deve ser: {{"prato_do_dia": ["Carne de panela", "Frango frito"]}}
+        # --- FIM DA REGRA ---
+        
         MENU ATUAL (DO BANCO DE DADOS):
         {json.dumps(current_menu, indent=2, default=str)}
         
-        EXEMPLO DE FLUXO 1 (Alterar Prato):
+        EXEMPLO DE FLUXO 1 (Alterar Prato Único):
         Usuário: "oi, hoje o prato do dia é Macarronada e os acompanhamentos são arroz e feijão"
-        Você: "[CONFIRMAR_UPDATE]{{{{\"prato_do_dia\": \"Macarronada\", \"acompanhamentos\": \"arroz e feijão\"}}}}Olá! Entendido. Vou alterar:
-        - Prato do Dia: 'Macarronada'
+        Você: "[CONFIRMAR_UPDATE]{{{{\"prato_do_dia\": [\"Macarronada\"], \"acompanhamentos\": \"arroz e feijão\"}}}}Olá! Entendido. Vou alterar:
+        - Prato do Dia: ['Macarronada']
         - Acompanhamentos: 'arroz e feijão'
         Confirma?"
         Usuário: "sim"
-        Você: "[EXECUTAR_UPDATE]{{{{\"prato_do_dia\": \"Macarronada\", \"acompanhamentos\": \"arroz e feijão\"}}}}"
+        Você: "[EXECUTAR_UPDATE]{{{{\"prato_do_dia\": [\"Macarronada\"], \"acompanhamentos\": \"arroz e feijão\"}}}}"
         
-        EXEMPLO DE FLUXO 2 (Alterar Preço e Estoque):
-        Usuário: "acabou a coca lata. bota coca 2L por 12 reais. e a marmita M agora é 19."
-        Você: "[CONFIRMAR_UPDATE]{{{{\"bebidas\": [{{ \"nome\": \"Guaraná Antartica Lata (350ml)\", \"preco\": 5.0}}, {{ \"nome\": \"Água Mineral (sem gás)\", \"preco\": 3.0}}, {{ \"nome\": \"Suco de Laranja (natural 500ml)\", \"preco\": 8.0}}, {{ \"nome\": \"coca 2L\", \"preco\": 12.0}}], \"marmitas\": [{{ \"nome\": \"Pequena (P)\", \"preco\": 15.0}}, {{ \"nome\": \"Média (M)\", \"preco\": 19.0}}, {{ \"nome\": \"Grande (G)\", \"preco\": 22.0}}]}}}}
-        Certo! Entendido. Vamos:
-        1. REMOVER 'Coca-Cola Lata'
-        2. ADICIONAR 'coca 2L' por R$ 12,00
-        3. ALTERAR 'Média (M)' para R$ 19,00
-        Confirma estas 3 alterações?"
+        EXEMPLO DE FLUXO 2 (Múltiplos Pratos):
+        Usuário: "hoje os pratos sao carne de panela e frango frito"
+        Você: "[CONFIRMAR_UPDATE]{{{{\"prato_do_dia\": [\"Carne de panela\", \"Frango frito\"]}}}}
+        Certo! Entendido. O Prato do Dia terá 2 opções:
+        1. Carne de panela
+        2. Frango frito
+        Confirma?"
         Usuário: "sim"
-        Você: "[EXECUTAR_UPDATE]{{{{\"bebidas\": [{{ \"nome\": \"Guaraná Antartica Lata (350ml)\", \"preco\": 5.0}}, {{ \"nome\": \"Água Mineral (sem gás)\", \"preco\": 3.0}}, {{ \"nome\": \"Suco de Laranja (natural 500ml)\", \"preco\": 8.0}}, {{ \"nome\": \"coca 2L\", \"preco\": 12.0}}], \"marmitas\": [{{ \"nome\": \"Pequena (P)\", \"preco\": 15.0}}, {{ \"nome\": \"Média (M)\", \"preco\": 19.0}}, {{ \"nome\": \"Grande (G)\", \"preco\": 22.0}}]}}}}"
+        Você: "[EXECUTAR_UPDATE]{{{{\"prato_do_dia\": [\"Carne de panela\", \"Frango frito\"]}}}}"
         """
 
         admin_convo_start = [
@@ -449,12 +476,21 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO
         =====================================================
         - FOCO TOTAL: Seu primeiro objetivo é capturar o nome do cliente (se ainda não souber). Seu segundo objetivo é preencher o "Gabarito de Pedido" e confirmar.
+
+        # --- INÍCIO DA NOVA REGRA (MÚLTIPLOS SABORES) ---
+        - **REGRA DE ESCOLHA (PRIORIDADE ALTA):**
+          - Se a seção "PRATO DO DIA" do cardápio mostrar o texto "OPÇÕES DE PRATO: [Opção A, Opção B, ...]",
+          - Isso significa que o cliente DEVE escolher UMA dessas opções.
+          - Se o cliente pedir uma marmita (ex: "quero 1 M"), sua primeira pergunta DEVE ser qual dos sabores ele prefere.
+          - **Exemplo de fala:** "Certo, Dani! A marmita M hoje pode ser de Carne de panela ou Frango frito. Qual das duas você prefere?"
+          - Ao preencher o "Gabarito de Pedido", o campo "pedido_completo" deve conter o sabor escolhido (ex: "1 Marmita M (Frango Frito)").
+        # --- FIM DA NOVA REGRA ---
+
         - MEMÓRIA: Você deve lembrar do que o cliente já disse (nome, itens) e não perguntar de novo.
         - NÃO FAZER: Não inventar pratos ou preços. Não falar sobre "IA" ou "Chatbot". Você é uma ATENDENTE HUMANA (Lyra).
 
         # --- CORREÇÃO 3 (Confusão de Pedido: 1 coca + 1 agua) ---
         - ATENÇÃO MÁXIMA: Leia as ÚLTIMAS mensagens do cliente com muito cuidado. Se ele enviar duas mensagens seguidas (ex: "1 coca" e logo depois "1 agua"), ele quer OS DOIS ITENS. Não ignore a segunda mensagem. Preste atenção no histórico recente.
-        
         =====================================================
         PRONTO PARA ATENDER O CLIENTE
         =====================================================
