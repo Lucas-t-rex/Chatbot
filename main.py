@@ -777,58 +777,63 @@ def _trigger_ai_processing(clean_number, last_message_data):
 def process_message_logic(message_data, buffered_message_text=None):
     """
     Esta é a função "worker" principal. Ela pega o lock e chama a IA.
-    (Esta é a sua antiga 'process_message' com um novo nome)
+    (Versão corrigida com 'upsert=True' para novos usuários)
     """
-    lock_acquired = False # <--- ADICIONADO: Flag para controlar o lock
-    clean_number = None   # <--- ADICIONADO: Definir clean_number fora do try
+    lock_acquired = False
+    clean_number = None
     
     try:
         key_info = message_data.get('key', {})
         sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
         if not sender_number_full or sender_number_full.endswith('@g.us'): return
         
-        clean_number = sender_number_full.split('@')[0] # <--- MOVIDO: Atribui a variável
+        clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
         IS_ADMIN = bool(BIFURCACAO_ENABLED and clean_number == ADMIN_WPP_NUMBER)
 
         # --- Pega o Lock ---
         now = datetime.now()
+        
+        # --- CORREÇÃO APLICADA AQUI ---
         res = conversation_collection.update_one(
             {'_id': clean_number, 'processing': {'$ne': True}},
-            {'$set': {'processing': True, 'processing_started_at': now}}
+            {'$set': {'processing': True, 'processing_started_at': now}},
+            upsert=True  # <--- ADICIONADO: Cria o documento se for um novo usuário
         )
 
-        if res.matched_count == 0:
-            # Não conseguiu o lock. Tenta de novo em 10s.
+        # Nova lógica de verificação:
+        # Se não deu "match" E também não criou um novo doc (upsert),
+        # então o doc já existia e estava com 'processing: True'.
+        if res.matched_count == 0 and res.upserted_id is None:
+            # Isso agora é a ÚNICA condição de "lock" real
             print(f"⏳ {clean_number} já está sendo processado (lock). Reagendando...")
-            # Recoloca no buffer para tentar de novo
+            
+            # (Lógica de reagendamento)
             if buffered_message_text:
                 if clean_number not in message_buffer: message_buffer[clean_number] = []
-                # Coloca a mensagem agrupada de volta no *início* do buffer
                 message_buffer[clean_number].insert(0, buffered_message_text)
             
             timer = threading.Timer(10.0, _trigger_ai_processing, args=[clean_number, message_data])
             message_timers[clean_number] = timer
             timer.start()
-            return # <--- Sai da função. O 'finally' será executado, mas lock_acquired é False.
+            return # Sai da função. O 'finally' será executado, mas lock_acquired é False.
         
-        lock_acquired = True 
-        
+        # --- TEMOS O LOCK! ---
+        lock_acquired = True
+        if res.upserted_id:
+             print(f"✅ Novo usuário {clean_number}. Documento criado e lock adquirido.")
+        # --- FIM DA CORREÇÃO ---
         
         user_message_content = None
         
         if buffered_message_text:
-            # Veio do buffer de 10s
             user_message_content = buffered_message_text
-            # Salva TODAS as mensagens de texto que foram agrupadas
             messages_to_save = user_message_content.split(". ")
             for msg_text in messages_to_save:
-                # Evita salvar "pontos" vazios se o join der errado
                 if msg_text and msg_text.strip():
                     append_message_to_db(clean_number, 'user', msg_text)
         else:
-            # É uma mensagem de áudio (processamento imediato)
             message = message_data.get('message', {})
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
@@ -923,7 +928,7 @@ def process_message_logic(message_data, buffered_message_text=None):
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
-      
+        # --- Libera o Lock ---
         if clean_number and lock_acquired: 
             conversation_collection.update_one(
                 {'_id': clean_number},
