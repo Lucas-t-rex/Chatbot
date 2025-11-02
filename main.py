@@ -936,26 +936,35 @@ def process_message_logic(message_data, buffered_message_text=None):
             )
             print(f"🔓 Lock liberado para {clean_number}.")
 
-if __name__ == '__main__':
-    if modelo_ia:
-        inicializar_menu_padrao()
-        print("\n=============================================")
-        print("   CHATBOT WHATSAPP COM IA INICIADO")
-        print(f"   CLIENTE: {CLIENT_NAME}")
-        if not BIFURCACAO_ENABLED:
-            print("   AVISO: 'COZINHA_WPP_NUMBER' ou 'MOTOBOY_WPP_NUMBER' não configurados. O recurso de bifurcação está DESATIVADO.")
-        else:
-            print(f"   Bifurcação ATIVA. Cozinha: {COZINHA_WPP_NUMBER} | Motoboy: {MOTOBOY_WPP_NUMBER}")
-        print("=============================================")
-        print("Servidor aguardando mensagens no webhook...")
-
-        scheduler.add_job(gerar_e_enviar_relatorio_semanal, 'cron', day_of_week='sun', hour=8, minute=0)
-        print("⏰ Agendador de relatórios iniciado. O relatório será enviado todo Domingo às 08:00.")
-        
-        import atexit
-        atexit.register(lambda: scheduler.shutdown())
-        
-        port = int(os.environ.get("PORT", 8000))
-        app.run(host='0.0.0.0', port=port)
+if modelo_ia:
+    inicializar_menu_padrao() 
+    
+    print("\n=============================================")
+    print(f"   CHATBOT WHATSAPP COM IA INICIADO")
+    print(f"   CLIENTE: {CLIENT_NAME}")
+    
+    if not BIFURCACAO_ENABLED:
+        print("   AVISO: 'COZINHA_WPP_NUMBER' ou 'MOTOBOY_WPP_NUMBER' não configurados. O recurso de bifurcação está DESATIVADO.")
     else:
-        print("\nEncerrando o programa devido a erros na inicialização.")
+        print(f"   Bifurcação ATIVA. Cozinha: {COZINHA_WPP_NUMBER} | Motoboy: {MOTOBOY_WPP_NUMBER}")
+    
+    print("=============================================")
+    print("Servidor aguardando mensagens no webhook...")
+
+    # Inicia o agendador de relatórios
+    scheduler.add_job(gerar_e_enviar_relatorio_semanal, 'cron', day_of_week='sun', hour=8, minute=0)
+    print("⏰ Agendador de relatórios iniciado. O relatório será enviado todo Domingo às 08:00.")
+    
+    import atexit
+    atexit.register(lambda: scheduler.shutdown())
+    
+else:
+    print("\nEncerrando o programa devido a erros na inicialização (modelo_ia falhou).")
+
+
+if __name__ == '__main__':
+    # Esta parte só roda se você executar 'python main.py'
+    # Gunicorn NÃO executa isso.
+    print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host='0.0.0.0', port=port)
