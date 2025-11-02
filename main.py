@@ -25,6 +25,7 @@ MONGO_DB_URI = os.environ.get("MONGO_DB_URI")
 
 COZINHA_WPP_NUMBER = "554898389781"
 MOTOBOY_WPP_NUMBER = "554499242532"
+ADMIN_WPP_NUMBER = "554898389781"
 
 message_buffer = {}
 message_timers = {}
@@ -42,6 +43,8 @@ try:
     db_name = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
     db = client[db_name] 
     conversation_collection = db.conversations
+    menu_collection = db.menu
+    
     print(f"✅ Conectado ao MongoDB para o cliente: '{CLIENT_NAME}' no banco de dados '{db_name}'")
 except Exception as e:
     print(f"❌ ERRO: Não foi possível conectar ao MongoDB. Erro: {e}")
@@ -116,6 +119,183 @@ def load_conversation_from_db(contact_id):
         print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
     return None
 
+def inicializar_menu_padrao():
+
+    print("Verificando/Criando menu padrão no DB...")
+    try:
+ 
+        menu_padrao = {
+            '_id': 'menu_principal',
+            'prato_do_dia': 'Strogonoff de Frango',
+            'acompanhamentos': 'Arroz branco, Feijão, Batata palha e Salada de alface e tomate.',
+            'marmitas': [
+                {'nome': 'Pequena (P)', 'preco': 15.00},
+                {'nome': 'Média (M)', 'preco': 18.00},
+                {'nome': 'Grande (G)', 'preco': 22.00},
+            ],
+            'bebidas': [
+                {'nome': 'Coca-Cola Lata (350ml)', 'preco': 5.00},
+                {'nome': 'Guaraná Antartica Lata (350ml)', 'preco': 5.00},
+                {'nome': 'Água Mineral (sem gás)', 'preco': 3.00},
+                {'nome': 'Suco de Laranja (natural 500ml)', 'preco': 8.00},
+            ],
+            'taxa_entrega': 6.00
+        }
+
+        resultado = menu_collection.update_one(
+            {'_id': 'menu_principal'},
+            {'$setOnInsert': menu_padrao},
+            upsert=True
+        )
+        
+        if resultado.upserted_id:
+            print("✅✅✅ Menu padrão NÃO existia e foi CRIADO com sucesso. ✅✅✅")
+        else:
+            print("✅ Menu 'menu_principal' já existia. Nenhuma alteração feita.")
+        
+    except Exception as e:
+        print(f"❌ Erro ao inicializar menu: {e}")
+
+def formatar_menu_para_prompt():
+    """Busca o menu no DB e formata como string para a IA."""
+    try:
+
+        menu_data = menu_collection.find_one({"_id": "menu_principal"})
+        if not menu_data:
+            return "O cardápio não está disponível no momento."
+
+        menu_string = "--- PRATO DO DIA ---\n"
+        menu_string += f"Hoje temos: {{{menu_data.get('prato_do_dia', 'Prato não informado')}}}\n"
+        menu_string += f"Acompanhamentos: {{{menu_data.get('acompanhamentos', 'Não informado')}}}\n"
+
+        menu_string += "--- TAMANHOS E VALORES (Marmitas) ---\n"
+        for item in menu_data.get('marmitas', []):
+            menu_string += f"- {item['nome']}: {{R${item['preco']:.2f}}}\n"
+
+        menu_string += "--- 🥤 BEBIDAS ---\n"
+        for item in menu_data.get('bebidas', []):
+            menu_string += f"- {item['nome']}: {{R${item['preco']:.2f}}}\n"
+
+        menu_string += "--- 🛵 TAXA DE ENTREGA ---\n"
+        menu_string += f"- Taxa de Entrega Fixa: {{R${menu_data.get('taxa_entrega', 0.00):.2f}}} (Use este valor para CÁLCULO do valor total APENAS PARA ENTREGAS)\n"
+        menu_string += "- Pedidos para Retirada no Local: {R$ 0,00} (não há taxa)\n"
+
+        return menu_string
+
+    except Exception as e:
+        print(f"❌ Erro ao formatar menu: {e}")
+        return "Erro ao carregar cardápio."
+
+# --- INÍCIO DA MUDANÇA (PASSO 4 CORRIGIDO) ---
+def gerar_resposta_admin(contact_id, user_message):
+    """Gera uma resposta para o ADMIN, focado em atualizar o menu."""
+    global modelo_ia
+    try:
+        # 1. Carrega o menu ATUAL do DB para a IA saber o estado
+        current_menu = menu_collection.find_one({"_id": "menu_principal"})
+        if not current_menu:
+            return "ERRO: Não encontrei o documento 'menu_principal' no banco de dados. A inicialização falhou."
+        
+        # 2. Carrega o histórico de conversa do ADMIN (só as últimas 10 msgs)
+        convo_data = load_conversation_from_db(contact_id)
+        old_history = []
+        if convo_data and 'history' in convo_data:
+            history_from_db = [msg for msg in convo_data['history']][-10:] 
+            old_history = []
+            for msg in history_from_db:
+                role = msg.get('role', 'user')
+                if role == 'assistant': role = 'model'
+                if 'text' in msg:
+                    old_history.append({'role': role, 'parts': [msg['text']]})
+
+        # 3. Cria o prompt do ADMIN
+        admin_prompt_text = f"""
+        Você é um assistente de gerenciamento de cardápio.
+        Sua única função é ajudar o dono da loja (o usuário) a ATUALIZAR o cardápio no banco de dados.
+        O usuário NÃO é um programador. Ele vai falar em linguagem natural.
+
+        REGRAS:
+        1. ANALISE a mensagem do usuário.
+        2. COMPARE com o "MENU ATUAL".
+        3. DETERMINE a intenção: (adicionar, remover, alterar_preco, alterar_prato_dia, alterar_taxa).
+        4. FAÇA PERGUNTAS se faltar informação (ex: "Qual o preço da Coca 2L?").
+        5. QUANDO TIVER TUDO, sua resposta final DEVE começar com a tag [CONFIRMAR_UPDATE] e ser seguida de um JSON VÁLIDO contendo *apenas* os campos que devem ser atualizados no MongoDB.
+        6. Se o usuário confirmar ("sim", "ok"), sua ÚNICA resposta deve ser a tag [EXECUTAR_UPDATE] seguida pelo JSON de antes.
+        
+        MENU ATUAL (DO BANCO DE DADOS):
+        {json.dumps(current_menu, indent=2, default=str)}
+        
+        EXEMPLO DE FLUXO 1 (Alterar Prato):
+        Usuário: "oi, hoje o prato do dia é Macarronada e os acompanhamentos são arroz e feijão"
+        Você: "[CONFIRMAR_UPDATE]{{{{\"prato_do_dia\": \"Macarronada\", \"acompanhamentos\": \"arroz e feijão\"}}}}Olá! Entendido. Vou alterar:
+        - Prato do Dia: 'Macarronada'
+        - Acompanhamentos: 'arroz e feijão'
+        Confirma?"
+        Usuário: "sim"
+        Você: "[EXECUTAR_UPDATE]{{{{\"prato_do_dia\": \"Macarronada\", \"acompanhamentos\": \"arroz e feijão\"}}}}"
+        
+        EXEMPLO DE FLUXO 2 (Alterar Preço e Estoque):
+        Usuário: "acabou a coca lata. bota coca 2L por 12 reais. e a marmita M agora é 19."
+        Você: "[CONFIRMAR_UPDATE]{{{{\"bebidas\": [{{ \"nome\": \"Guaraná Antartica Lata (350ml)\", \"preco\": 5.0}}, {{ \"nome\": \"Água Mineral (sem gás)\", \"preco\": 3.0}}, {{ \"nome\": \"Suco de Laranja (natural 500ml)\", \"preco\": 8.0}}, {{ \"nome\": \"coca 2L\", \"preco\": 12.0}}], \"marmitas\": [{{ \"nome\": \"Pequena (P)\", \"preco\": 15.0}}, {{ \"nome\": \"Média (M)\", \"preco\": 19.0}}, {{ \"nome\": \"Grande (G)\", \"preco\": 22.0}}]}}}}
+        Certo! Entendido. Vamos:
+        1. REMOVER 'Coca-Cola Lata'
+        2. ADICIONAR 'coca 2L' por R$ 12,00
+        3. ALTERAR 'Média (M)' para R$ 19,00
+        Confirma estas 3 alterações?"
+        Usuário: "sim"
+        Você: "[EXECUTAR_UPDATE]{{{{\"bebidas\": [{{ \"nome\": \"Guaraná Antartica Lata (350ml)\", \"preco\": 5.0}}, {{ \"nome\": \"Água Mineral (sem gás)\", \"preco\": 3.0}}, {{ \"nome\": \"Suco de Laranja (natural 500ml)\", \"preco\": 8.0}}, {{ \"nome\": \"coca 2L\", \"preco\": 12.0}}], \"marmitas\": [{{ \"nome\": \"Pequena (P)\", \"preco\": 15.0}}, {{ \"nome\": \"Média (M)\", \"preco\": 19.0}}, {{ \"nome\": \"Grande (G)\", \"preco\": 22.0}}]}}}}"
+        """
+
+        admin_convo_start = [
+            {'role': 'user', 'parts': [admin_prompt_text]},
+            {'role': 'model', 'parts': ["Entendido. Estou no modo de gerenciamento. Vou analisar o pedido do admin, comparar com o JSON atual e pedir confirmação."]}
+        ]
+        chat_session = modelo_ia.start_chat(history=admin_convo_start + old_history)
+        
+        print(f"Enviando para a IA (Admin): '{user_message}'")
+        resposta_ia_admin = chat_session.send_message(user_message)
+        ai_reply = resposta_ia_admin.text
+        
+        # 5. Lógica de Execução do Update
+        if ai_reply.strip().startswith("[EXECUTAR_UPDATE]"):
+            print("✅ Admin confirmou. Executando update no DB...")
+            try:
+                json_start = ai_reply.find('{')
+                json_end = ai_reply.rfind('}') + 1
+                if json_start == -1: raise ValueError("JSON de update não encontrado")
+                
+                update_json_string = ai_reply[json_start:json_end]
+                update_data = json.loads(update_json_string)
+                
+                # Executa o update no MongoDB
+                menu_collection.update_one(
+                    {'_id': 'menu_principal'},
+                    {'$set': update_data}
+                )
+                
+                print("✅✅✅ MENU ATUALIZADO NO BANCO DE DADOS! ✅✅✅")
+                return "Pronto! O menu foi atualizado com sucesso. Os próximos clientes já verão as mudanças."
+                
+            except Exception as e:
+                print(f"❌ ERRO AO EXECUTAR UPDATE: {e}")
+                return f"Tive um erro ao tentar salvar no banco: {e}. Por favor, tente de novo."
+        
+        # Remove a tag de confirmação da resposta ao usuário.
+        if ai_reply.strip().startswith("[CONFIRMAR_UPDATE]"):
+            json_start = ai_reply.find('{')
+            json_end = ai_reply.rfind('}') + 1
+            if json_end > 0 and json_start != -1:
+                ai_reply = ai_reply[json_end:].strip() # Remove o JSON da resposta
+            else:
+                ai_reply = ai_reply.replace("[CONFIRMAR_UPDATE]", "").strip()
+
+        return ai_reply # Retorna a pergunta/confirmação para o admin
+
+    except Exception as e:
+        print(f"❌ Erro em 'gerar_resposta_admin': {e}")
+        return f"Desculpe, tive um erro no modo admin: {e}"
+
+
 def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
     """
     Gera uma resposta usando a IA.
@@ -151,6 +331,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
         horario_atual = agora_local.strftime("%Y-%m-%d %H:%M:%S")
+        menu_dinamico_string = formatar_menu_para_prompt()
         print(f"⏰ Hora local (America/Sao_Paulo) definida para: {horario_atual}")
     except Exception as e:
         print(f"⚠️ Erro ao definir fuso horário, usando hora do servidor. Erro: {e}")
@@ -262,21 +443,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, contact_phone):
         =====================================================
         🍲 CARDÁPIO E PREÇOS (BASE DO PEDIDO)
         =====================================================
-        --- PRATO DO DIA (Exemplo) ---
-        Hoje temos: {{Strogonoff de Frango}}
-        Acompanhamentos: {{Arroz branco, Feijão, Batata palha e Salada de alface e tomate.}}
-        --- TAMANHOS E VALORES (Marmitas) ---
-        - Marmita Pequena (P): {{R$ 15,00}}
-        - Média (M): {{R$ 18,00}}
-        - Grande (G): {{R$ 22,00}}
-        --- 🥤 BEBIDAS ---
-        - Coca-Cola Lata (350ml): {{R$ 5,00}}
-        - Guaraná Antartica Lata (350ml): {{R$ 5,00}}
-        - Água Mineral (sem gás): {{R$ 3,00}}
-        - Suco de Laranja (natural 500ml): {{R$ 8,00}}
-        --- 🛵 TAXA DE ENTREGA ---
-        - Taxa de Entrega Fixa: {{R$ 6,00}} (Use este valor para CÁLCULO do valor total APENAS PARA ENTREGAS)
-        - Pedidos para Retirada no Local: {{R$ 0,00}} (não há taxa)
+        {menu_dinamico_string}
         {prompt_bifurcacao} 
         =====================================================
         🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO
@@ -620,6 +787,8 @@ def process_message_logic(message_data, buffered_message_text=None):
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
+        IS_ADMIN = bool(BIFURCACAO_ENABLED and clean_number == ADMIN_WPP_NUMBER)
+
         # --- Pega o Lock ---
         now = datetime.now()
         res = conversation_collection.update_one(
@@ -677,15 +846,17 @@ def process_message_logic(message_data, buffered_message_text=None):
 
         print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
         
-        # --- Chama a IA ---
-        ai_reply = gerar_resposta_ia(
-            clean_number,
-            sender_name_from_wpp,
-            user_message_content,
-            clean_number
-        )
+        ai_reply = None
+        if IS_ADMIN:
+            ai_reply = gerar_resposta_admin(clean_number, user_message_content)
+        else:
+            ai_reply = gerar_resposta_ia(
+                clean_number,
+                sender_name_from_wpp,
+                user_message_content,
+                clean_number
+            )
         
-        # Se a IA não responder, apenas libera o lock
         if not ai_reply:
              print("⚠️ A IA não gerou resposta.")
              conversation_collection.update_one(
@@ -695,7 +866,6 @@ def process_message_logic(message_data, buffered_message_text=None):
              print(f"🔓 Lock liberado (IA sem resposta) para {clean_number}.")
              return
 
-        # --- Processa e Envia a Resposta ---
         try:
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
@@ -765,6 +935,7 @@ def process_message_logic(message_data, buffered_message_text=None):
 
 if __name__ == '__main__':
     if modelo_ia:
+        inicializar_menu_padrao()
         print("\n=============================================")
         print("   CHATBOT WHATSAPP COM IA INICIADO")
         print(f"   CLIENTE: {CLIENT_NAME}")
