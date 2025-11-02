@@ -779,12 +779,15 @@ def process_message_logic(message_data, buffered_message_text=None):
     Esta é a função "worker" principal. Ela pega o lock e chama a IA.
     (Esta é a sua antiga 'process_message' com um novo nome)
     """
+    lock_acquired = False # <--- ADICIONADO: Flag para controlar o lock
+    clean_number = None   # <--- ADICIONADO: Definir clean_number fora do try
+    
     try:
         key_info = message_data.get('key', {})
         sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
         if not sender_number_full or sender_number_full.endswith('@g.us'): return
         
-        clean_number = sender_number_full.split('@')[0]
+        clean_number = sender_number_full.split('@')[0] # <--- MOVIDO: Atribui a variável
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
         IS_ADMIN = bool(BIFURCACAO_ENABLED and clean_number == ADMIN_WPP_NUMBER)
@@ -808,9 +811,10 @@ def process_message_logic(message_data, buffered_message_text=None):
             timer = threading.Timer(10.0, _trigger_ai_processing, args=[clean_number, message_data])
             message_timers[clean_number] = timer
             timer.start()
-            return
+            return # <--- Sai da função. O 'finally' será executado, mas lock_acquired é False.
         
-        # --- TEMOS O LOCK! ---
+        lock_acquired = True 
+        
         
         user_message_content = None
         
@@ -859,11 +863,6 @@ def process_message_logic(message_data, buffered_message_text=None):
         
         if not ai_reply:
              print("⚠️ A IA não gerou resposta.")
-             conversation_collection.update_one(
-                {'_id': clean_number},
-                {'$unset': {'processing': "", 'processing_started_at': ""}}
-             )
-             print(f"🔓 Lock liberado (IA sem resposta) para {clean_number}.")
              return
 
         try:
@@ -911,7 +910,6 @@ def process_message_logic(message_data, buffered_message_text=None):
                 if order_data.get('tipo_pedido') == "Entrega":
                     threading.Thread(target=send_whatsapp_message, args=(f"{MOTOBOY_WPP_NUMBER}@s.whatsapp.net", msg_motoboy.strip())).start()
                 
-                # print(f"✅ Pedido bifurcado com sucesso.") # (Removido para evitar confusão)
                 send_whatsapp_message(sender_number_full, remaining_reply)
 
             else:
@@ -925,8 +923,8 @@ def process_message_logic(message_data, buffered_message_text=None):
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
-        # --- Libera o Lock ---
-        if 'clean_number' in locals():
+      
+        if clean_number and lock_acquired: 
             conversation_collection.update_one(
                 {'_id': clean_number},
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
