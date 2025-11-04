@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import json 
 
 CLIENT_NAME = "Mengatto Estratégia Digital" # <--- EDITAR NOME DO CLIENTE
-RESPONSIBLE_NUMBER = "554898389781" # <--- EDITAR: Número do responsável com 55+DDD
+RESPONSIBLE_NUMBER = "554985033507" # <--- EDITAR: Número do responsável com 55+DDD
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL") # <--- EDITAR NO .ENV
@@ -687,7 +687,7 @@ def handle_responsible_command(message_content, responsible_number):
 
             if result.modified_count > 0:
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
-                send_whatsapp_message(customer_number_to_reactivate, "Personalizar o retorno do atendimento do bot de acordo com o cliente! 😊") # <--- EDITAR MENSAGEM
+                send_whatsapp_message(customer_number_to_reactivate, "Oi sou eu a Lyra novamente, espero que tenha resolvido o que precisava.\nSe quiser tirar mais alguma duvida só me avisar!😊")
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
 
@@ -831,7 +831,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                     {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
                 )
                 
-                send_whatsapp_message(sender_number_full, "Entendido. Já notifiquei um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼") # <--- EDITAR MENSAGEM
+                send_whatsapp_message(sender_number_full, "Entendido. Já avisei o Raffael. Por favor, aguarde um momento. 👨‍💼") # <--- EDITAR MENSAGEM
                 
                 if RESPONSIBLE_NUMBER:
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
