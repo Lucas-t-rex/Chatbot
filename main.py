@@ -150,24 +150,21 @@ def get_last_messages_summary(history, max_messages=4):
 
 def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name):
     """
-    (VERSÃO MELHORADA)
-    Gera uma resposta usando a IA, agora usando o carregamento do DB (stateless).
+    (VERSÃO CORRIGIDA - BUGS 1 e 2)
+    Gera uma resposta usando a IA, agora com lógica de prioridade de intervenção.
     """
     global modelo_ia
 
     if not modelo_ia:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
 
-    # <--- MELHORIA: Lógica de cache removida. Carrega do DB a cada chamada ---
     print(f"🧠 Lendo o estado do DB para {contact_id}...")
     convo_data = load_conversation_from_db(contact_id)
     old_history = []
     
     if convo_data:
-        # 'known_customer_name' passado como parâmetro é atualizado se já existir no DB
         known_customer_name = convo_data.get('customer_name', known_customer_name) 
         if 'history' in convo_data:
-            # Converte o histórico do DB para o formato do Gemini
             history_from_db = [msg for msg in convo_data['history'] if not msg.get('text', '').strip().startswith("A data e hora atuais são:")]
             for msg in history_from_db:
                 role = msg.get('role', 'user')
@@ -181,9 +178,8 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
                     })
     if known_customer_name:
         print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
-    # --- Fim da Melhoria ---
 
-    try: # <--- MELHORIA: Adicionado try/except para fuso horário ---
+    try:
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
         horario_atual = agora_local.strftime("%Y-%m-%d %H:%M:%S")
@@ -195,15 +191,15 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
     prompt_name_instruction = ""
     final_user_name_for_prompt = ""
 
-    # (Lógica de nome do cliente mantida, mas agora usa 'known_customer_name' vindo do DB)
     if known_customer_name:
         final_user_name_for_prompt = known_customer_name
         prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este nome."
     else:
         final_user_name_for_prompt = sender_name
-        # (Este prompt de captura de nome é do seu código de intervenção)
+        # (A regra de captura de nome original será inserida abaixo)
         prompt_name_instruction = f"""
             REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
+              (Esta regra SÓ se aplica se a REGRA DE OURO de intervenção não for acionada primeiro)
               Seu nome é {{Lyra}} e você é atendente da {{Mengatto Estratégia Digital}}.
               Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido. No entanto, você deve fazer isso de forma natural.
               1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi", "boa noite"), peça o nome dele de forma direta e educada.
@@ -215,25 +211,43 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
                  - Começar com a tag: [NOME_CLIENTE]O nome do cliente é: [Nome Extraído].
                  - Agradecer ao cliente pelo nome.
                  - *RESPONDER IMEDIATAMENTE à pergunta original que ele fez no início da conversa.* Não o faça perguntar de novo.
-              - *IMPORTANTE*: A simples apresentação do nome do cliente (ex: "meu nome é marcos") NÃO é um motivo para intervenção. Continue a conversa normalmente nesses casos.
-
-              EXEMPLO DE FLUXO IDEAL:
-              Cliente: "boa noite, queria saber o preço da assessoria"
-              Você: "Boa noite! Claro, já te passo os detalhes da assessoria. Para que nosso atendimento fique mais próximo, como posso te chamar?"
-              Cliente: "pode me chamar de Marcos"
-              Sua Resposta: "[NOME_CLIENTE]O nome do cliente é: Marcos. Prazer em conhecê-lo, Marcos! A assessoria é voltada para negócios que buscam posicionamento estratégico e crescimento real no digital. Posso te explicar como ela funciona?"
+              4. Se não tiver historico de converssa anterior faça a aprensetação de forma amigavel e dinamica, se apresente, apresente a empresa, e continue para saber o nome. 
             """
         
+    # --- INÍCIO DA CORREÇÃO (BUG 1 e 2) ---
+    # O prompt foi reestruturado para dar prioridade à intervenção.
     prompt_inicial = f"""
             A data e hora atuais são: {horario_atual}.
-            {prompt_name_instruction}
-            Dever : vender nossos serviços ou, se o cliente quiser falar com o Raffael (proprietário), acionar intervenção.
+            
             =====================================================
-            🆘 REGRA DE OURO: ANÁLISE DE INTENÇÃO E INTERVENÇÃO HUMANA
+            🆘 REGRA DE OURO: ANÁLISE DE INTERVENÇÃO (PRIORIDADE ABSOLUTA)
             =====================================================
-            - Sua função é identificar a intenção do cliente.
-            - Se o cliente pedir para falar com o Raffael, o proprietário, ou quiser negociar algo fora do script, acione a intervenção.
-            [HUMAN_INTERVENTION] Motivo: [Resumo da intenção]
+            - SUA TAREFA MAIS IMPORTANTE é identificar se o cliente quer falar com "Raffael" (o proprietário).
+            - Se a mensagem do cliente contiver QUALQUER PEDIDO para falar com "Raffael" (ex: "quero falar com o Raffael", "falar com o dono", "chama o Raffael", "o Raffael está?"), esta regra ANULA TODAS AS OUTRAS.
+            
+            1.  **CENÁRIO 1 (BUG 1): NOME + INTERVENÇÃO JUNTOS**
+                - Se o nome AINDA NÃO FOI CAPTURADO (prompt_name_instruction está ativo).
+                - E o cliente responder com o nome E o pedido de intervenção na MESMA FRASE (ex: "Meu nome é Lucas e quero falar com o Raffael" ou "Lucas, quero falar com o Raffael").
+                - Você DEVE capturar o nome E acionar a intervenção SIMULTANEAMENTE.
+                - **Resposta Correta (EXATA):** `[NOME_CLIENTE]O nome do cliente é: Lucas. [HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o Raffael.`
+                - (O código do sistema irá tratar as duas tags. NÃO adicione "Prazer em conhecê-lo" ou qualquer outro texto).
+                - - **EXEMPLO DO QUE NÃO FAZER (ERRADO):** `Prazer em conhecê-lo, Lucas! Entendi. Para que eu possa te ajudar... [HUMAN_INTERVENTION]...` <-- ISSO ESTÁ ERRADO. A REGRA DE OURO EXIGE A TAG IMEDIATA.
+                
+            2.  **CENÁRIO 2: APENAS INTERVENÇÃO**
+                - Se o cliente (com nome já conhecido ou não) pedir para falar com o Raffael.
+                - **Resposta Correta (EXATA):** `[HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o Raffael.`
+
+            3.  **CENÁRIO 3 (BUG 2): EXCEÇÃO CRÍTICA (FALSO POSITIVO)**
+                - Se o cliente APENAS se apresentar com o nome "Raffael" (ex: "Meu nome é Raffael", "Pode me chamar de Raffael").
+                - ISSO **NÃO** É UMA INTERVENÇÃO. É uma apresentação.
+                - **Resposta Correta (se o nome não foi capturado):** `[NOME_CLIENTE]O nome do cliente é: Raffael. Prazer em conhecê-lo, Raffael! Como posso te ajudar?`
+            =====================================================
+            
+            {prompt_name_instruction} # A regra de nome original agora vem DEPOIS da regra de intervenção
+            
+            Dever : vender nossos serviços ou, se o cliente quiser falar com o Raffael (proprietário), acionar intervenção (conforme a REGRA DE OURO acima).
+            
+                        
             =====================================================
             🏷️ IDENTIDADE DO ATENDENTE
             =====================================================
@@ -294,21 +308,19 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             =====================================================
             Quando o cliente enviar mensagem, cumprimente de forma natural, descubra o nome e a necessidade, e conduza o fechamento com empatia e autoridade.
     """
+    # --- FIM DA CORREÇÃO ---
 
     convo_start = [
         {'role': 'user', 'parts': [prompt_inicial]},
-        {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro e a captura de nome são prioridades. Estou pronto. Olá, {final_user_name_for_prompt}! Como posso te ajudar?"]}
+        {'role': 'model', 'parts': [f"Entendido. A Regra de Ouro (Intervenção) e a Captura de Nome são prioridades. Estou pronto. Olá, {final_user_name_for_prompt}! Como posso te ajudar?"]}
     ]
 
-    # <--- MELHORIA: Lógica de cache removida. Cria a sessão de chat com o 'old_history' vindo do DB ---
     chat_session = modelo_ia.start_chat(history=convo_start + old_history)
-    customer_name_to_save = known_customer_name # Inicia com o nome que já sabemos
-    # --- Fim da Melhoria ---
+    customer_name_to_save = known_customer_name
 
     try:
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
-        # <--- MELHORIA: Contagem de tokens agora dentro de try/except ---
         try:
             input_tokens = modelo_ia.count_tokens(chat_session.history + [{'role':'user', 'parts': [user_message]}]).total_tokens
         except Exception:
@@ -320,43 +332,46 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             output_tokens = modelo_ia.count_tokens(resposta.text).total_tokens
         except Exception:
             output_tokens = 0
-        # --- Fim da Melhoria ---
             
         total_tokens_na_interacao = input_tokens + output_tokens
         
-        if total_tokens_na_interacao > 0: # <--- MELHORIA: Log de tokens ---
+        if total_tokens_na_interacao > 0:
             print(f"📊 Consumo de Tokens: Total={total_tokens_na_interacao}")
         
         ai_reply = resposta.text
 
-        # (Lógica de extração de nome mantida - é do seu código de intervenção)
+        # Lógica de extração de nome (agora funciona em conjunto com a intervenção)
         if ai_reply.strip().startswith("[NOME_CLIENTE]"):
             print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
             try:
-                full_response_part = ai_reply.split("O nome do cliente é:")[1].strip()
+                # Isola a parte do nome
+                name_part = ai_reply.split("[HUMAN_INTERVENTION]")[0]
+                full_response_part = name_part.split("O nome do cliente é:")[1].strip()
                 extracted_name = full_response_part.split('.')[0].strip()
-                
-                # <--- MELHORIA: Correção para extrair só o primeiro nome se houver lixo ---
                 extracted_name = extracted_name.split(' ')[0].strip() 
                 
-                start_of_message_index = full_response_part.find(extracted_name) + len(extracted_name)
-                ai_reply = full_response_part[start_of_message_index:].lstrip('.!?, ').strip()
-
                 # Salva o nome limpo no banco de dados
                 conversation_collection.update_one(
                     {'_id': contact_id},
                     {'$set': {'customer_name': extracted_name}},
                     upsert=True
                 )
-                customer_name_to_save = extracted_name # Atualiza o nome para salvar
+                customer_name_to_save = extracted_name
                 print(f"✅ Nome '{extracted_name}' salvo para o cliente {contact_id}.")
+
+                # Remonta a 'ai_reply' APENAS com o que sobrou
+                if "[HUMAN_INTERVENTION]" in ai_reply:
+                    # Se tinha NOME + INTERVENÇÃO, a 'ai_reply' agora é SÓ a intervenção
+                    ai_reply = "[HUMAN_INTERVENTION]" + ai_reply.split("[HUMAN_INTERVENTION]")[1]
+                else:
+                    # Se era só o nome, extrai o texto de "Prazer em conhecê-lo..."
+                    start_of_message_index = full_response_part.find(extracted_name) + len(extracted_name)
+                    ai_reply = full_response_part[start_of_message_index:].lstrip('.!?, ').strip()
 
             except Exception as e:
                 print(f"❌ Erro ao extrair o nome da tag: {e}")
                 ai_reply = ai_reply.replace("[NOME_CLIENTE]", "").strip()
 
-        # <--- MELHORIA: Salva os METADADOS (tokens, nome) ---
-        # A função 'append_message_to_db' salvará o histórico
         if not ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
              save_conversation_to_db(contact_id, sender_name, customer_name_to_save, total_tokens_na_interacao)
         
@@ -364,9 +379,7 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
     
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
-        # <--- MELHORIA: Mensagem de erro mais amigável ---
         return "Desculpe, estou com um problema técnico no momento (IA_GEN_FAIL). Por favor, tente novamente em um instante."
-    
 def transcrever_audio_gemini(caminho_do_audio):
     """
     Envia um arquivo de áudio para a API do Gemini e retorna a transcrição em texto.
@@ -742,9 +755,9 @@ def handle_responsible_command(message_content, responsible_number):
 # <--- MELHORIA: Esta é a fusão das duas lógicas de processamento ---
 def process_message_logic(message_data, buffered_message_text=None):
     """
-    (VERSÃO MELHORADA COM LIGA/DESLIGA)
+    (VERSÃO CORRIGIDA - BUG 3)
     Esta é a função "worker" principal. Ela pega o lock e chama a IA.
-    Agora ela verifica se o BOT está ATIVO antes de responder a clientes.
+    Corrigida a lógica de geração de resumo para evitar duplicatas.
     """
     lock_acquired = False
     clean_number = None
@@ -819,33 +832,30 @@ def process_message_logic(message_data, buffered_message_text=None):
         
         # --- LÓGICA DE INTERVENÇÃO (Verifica se é o Admin) ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
-            handle_responsible_command(user_message_content, clean_number)
-            return # Sai da função, mas o 'finally' vai liberar o lock
-
-        # ==========================================================
-        # ⬇️⬇️⬇️ AQUI ESTÁ O "PORTÃO" LIGA/DESLIGA ⬇️⬇️⬇️
-        # ==========================================================
+            # A função handle_responsible_command já retorna True
+            # Se for um comando, ele é executado e a função para aqui
+            if handle_responsible_command(user_message_content, clean_number):
+                return 
+        
+        # --- LÓGICA DE "BOT LIGADO/DESLIGADO" ---
         try:
             bot_status_doc = conversation_collection.find_one({'_id': 'BOT_STATUS'})
-            # O bot fica LIGADO por padrão se o documento não existir
             is_active = bot_status_doc.get('is_active', True) if bot_status_doc else True 
             
             if not is_active:
                 print(f"🤖 Bot está em standby (desligado). Ignorando mensagem de {sender_name_from_wpp} ({clean_number}).")
-                return # Sai da função, ignorando o cliente, mas o 'finally' vai liberar o lock
+                return
                 
         except Exception as e:
             print(f"⚠️ Erro ao verificar o status do bot: {e}. Assumindo que está ligado.")
-        # ==========================================================
-        # ⬆️⬆️⬆️ FIM DO "PORTÃO" LIGA/DESLIGA ⬆️⬆️⬆️
-        # ==========================================================
+        # --- FIM DA LÓGICA "BOT LIGADO/DESLIGADO" ---
 
         # --- LÓGICA DE INTERVENÇÃO (Verifica se o Cliente está pausado) ---
         conversation_status = conversation_collection.find_one({'_id': clean_number})
 
         if conversation_status and conversation_status.get('intervention_active', False):
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
-            return # Sai da função, mas o 'finally' vai liberar o lock
+            return 
 
         known_customer_name = conversation_status.get('customer_name') if conversation_status else None
         if known_customer_name:
@@ -862,9 +872,10 @@ def process_message_logic(message_data, buffered_message_text=None):
         
         if not ai_reply:
             print("⚠️ A IA não gerou resposta.")
-            return # 'finally' vai liberar o lock
+            return
 
         try:
+            # Salva a resposta da IA (mesmo que seja uma tag de intervenção)
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
             # --- LÓGICA DE INTERVENÇÃO (Pós-IA) ---
@@ -881,10 +892,29 @@ def process_message_logic(message_data, buffered_message_text=None):
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                     display_name = known_customer_name or sender_name_from_wpp
                     
+                    # --- INÍCIO DA CORREÇÃO (BUG 3) ---
+                    # O 'conversation_status' foi carregado ANTES do append_message_to_db
+                    # do 'user_message_content'.
+                    # A lógica anterior estava correta ao adicionar manualmente, mas
+                    # vamos garantir que o 'conversation_status' seja o mais recente.
+                    
+                    # Vamos recarregar o histórico DEPOIS que as mensagens do usuário
+                    # e do bot foram salvas para ter o resumo mais fiel.
+                    
+                    # ATUALIZAÇÃO DA CORREÇÃO:
+                    # A sua lógica original estava quase certa. O 'conversation_status'
+                    # foi carregado ANTES do 'append_message_to_db' do usuário.
+                    # O erro é que 'append_message_to_db' do usuário é chamado
+                    # no início da função.
+                    # Portanto, 'conversation_status' JÁ TEM a última msg do usuário.
+                    
                     history_summary = "Nenhum histórico de conversa encontrado."
                     if conversation_status and 'history' in conversation_status:
-                        history_com_ultima_msg = conversation_status.get('history', []) + [{'role': 'user', 'text': user_message_content}]
+                        # CORREÇÃO: Não adicionamos 'user_message_content' de novo.
+                        # Apenas usamos o histórico como ele está.
+                        history_com_ultima_msg = conversation_status.get('history', [])
                         history_summary = get_last_messages_summary(history_com_ultima_msg)
+                    # --- FIM DA CORREÇÃO (BUG 3) ---
 
                     notification_msg = (
                         f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
@@ -916,7 +946,6 @@ def process_message_logic(message_data, buffered_message_text=None):
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
             print(f"🔓 Lock liberado para {clean_number}.")
-# --- Fim da Função Aprimorada ---
 
 # <--- MELHORIA: Estrutura de inicialização para Gunicorn ---
 if modelo_ia:
