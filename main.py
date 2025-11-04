@@ -659,14 +659,46 @@ def _trigger_ai_processing(clean_number, last_message_data):
 
 
 # (Função 'handle_responsible_command' mantida - é essencial para a intervenção)
+# (Substitua sua função inteira por esta)
 def handle_responsible_command(message_content, responsible_number):
     """
     Processa comandos enviados pelo número do responsável.
+    AGORA INCLUI: 'bot on', 'bot off' e 'ok <numero>'
     """
     print(f"⚙️  Processando comando do responsável: '{message_content}'")
     
-    command_parts = message_content.lower().strip().split()
+    command_lower = message_content.lower().strip()
+    command_parts = command_lower.split()
 
+    # --- NOVO: COMANDO LIGA/DESLIGA ---
+    if command_lower == "bot off":
+        try:
+            conversation_collection.update_one(
+                {'_id': 'BOT_STATUS'},
+                {'$set': {'is_active': False}},
+                upsert=True
+            )
+            send_whatsapp_message(responsible_number, "✅ *Bot PAUSADO.* O bot não responderá a nenhum cliente até você enviar 'bot on'.")
+            return True
+        except Exception as e:
+            send_whatsapp_message(responsible_number, f"❌ Erro ao pausar o bot: {e}")
+            return True
+
+    elif command_lower == "bot on":
+        try:
+            conversation_collection.update_one(
+                {'_id': 'BOT_STATUS'},
+                {'$set': {'is_active': True}},
+                upsert=True
+            )
+            send_whatsapp_message(responsible_number, "✅ *Bot REATIVADO.* O bot está respondendo aos clientes normalmente.")
+            return True
+        except Exception as e:
+            send_whatsapp_message(responsible_number, f"❌ Erro ao reativar o bot: {e}")
+            return True
+    # --- FIM DO NOVO COMANDO ---
+
+    # --- Comando 'ok <numero>' existente ---
     if len(command_parts) == 2 and command_parts[0] == "ok":
         customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
         
@@ -675,43 +707,44 @@ def handle_responsible_command(message_content, responsible_number):
 
             if not customer:
                 send_whatsapp_message(responsible_number, f"⚠️ *Atenção:* O cliente com o número `{customer_number_to_reactivate}` não foi encontrado no banco de dados.")
-                return 
+                return True # Retorna True para parar o processamento
 
             result = conversation_collection.update_one(
                 {'_id': customer_number_to_reactivate},
                 {'$set': {'intervention_active': False}}
             )
 
-            # <--- MELHORIA: 'conversations_cache' foi removido ---
-            # O cache não é mais usado, então não precisamos limpá-lo
-
             if result.modified_count > 0:
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
                 send_whatsapp_message(customer_number_to_reactivate, "Oi sou eu a Lyra novamente, espero que tenha resolvido o que precisava.\nSe quiser tirar mais alguma duvida só me avisar!😊")
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
+            
+            return True # Retorna True para parar o processamento
 
         except Exception as e:
             print(f"❌ Erro ao tentar reativar cliente: {e}")
             send_whatsapp_message(responsible_number, f"❌ Ocorreu um erro técnico ao tentar reativar o cliente. Verifique o log do sistema.")
+            return True # Retorna True para parar o processamento
             
-    else:
-        print("⚠️ Comando não reconhecido do responsável.")
-        help_message = (
-            "Comando não reconhecido. 🤖\n\n"
-            "Para reativar o atendimento de um cliente, envie a mensagem no formato exato:\n"
-            "`ok <numero_do_cliente>`\n\n"
-            "*(Exemplo):*\n`ok 5544912345678`"
-        )
-        send_whatsapp_message(responsible_number, help_message)
-    return True 
+    # --- Mensagem de ajuda se nenhum comando for reconhecido ---
+    print("⚠️ Comando não reconhecido do responsável.")
+    help_message = (
+        "Comando não reconhecido. 🤖\n\n"
+        "*COMANDOS DISPONÍVEIS:*\n\n"
+        "1️⃣ `bot on`\n(Liga o bot para todos os clientes)\n\n"
+        "2️⃣ `bot off`\n(Desliga o bot para todos os clientes)\n\n"
+        "3️⃣ `ok <numero_do_cliente>`\n(Reativa um cliente em intervenção)"
+    )
+    send_whatsapp_message(responsible_number, help_message)
+    return True
 
 # <--- MELHORIA: Esta é a fusão das duas lógicas de processamento ---
 def process_message_logic(message_data, buffered_message_text=None):
     """
-    (VERSÃO MELHORADA)
+    (VERSÃO MELHORADA COM LIGA/DESLIGA)
     Esta é a função "worker" principal. Ela pega o lock e chama a IA.
-    Combina o LOCK do 'codigo atual' com a LÓGICA DE INTERVENÇÃO do 'codigo intervenção'.
+    Agora ela verifica se o BOT está ATIVO antes de responder a clientes.
     """
     lock_acquired = False
     clean_number = None
@@ -724,19 +757,16 @@ def process_message_logic(message_data, buffered_message_text=None):
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
-        # --- MELHORIA: Lógica de LOCK robusta (do 'codigo atual') ---
+        # --- Lógica de LOCK ---
         now = datetime.now()
-        
         res = conversation_collection.update_one(
             {'_id': clean_number, 'processing': {'$ne': True}},
             {'$set': {'processing': True, 'processing_started_at': now}},
-            upsert=True  # Cria o documento se for um novo usuário
+            upsert=True
         )
 
         if res.matched_count == 0 and res.upserted_id is None:
-            # Não conseguiu o lock
             print(f"⏳ {clean_number} já está sendo processado (lock). Reagendando...")
-            
             if buffered_message_text:
                 if clean_number not in message_buffer: message_buffer[clean_number] = []
                 message_buffer[clean_number].insert(0, buffered_message_text)
@@ -748,12 +778,12 @@ def process_message_logic(message_data, buffered_message_text=None):
         
         lock_acquired = True
         if res.upserted_id:
-             print(f"✅ Novo usuário {clean_number}. Documento criado e lock adquirido.")
-        # --- Fim da Lógica de LOCK ---
+            print(f"✅ Novo usuário {clean_number}. Documento criado e lock adquirido.")
+        # --- Fim do Lock ---
         
         user_message_content = None
         
-        # --- MELHORIA: Lógica de processamento de buffer/áudio (do 'codigo atual') ---
+        # --- Lógica de Buffer/Áudio ---
         if buffered_message_text:
             user_message_content = buffered_message_text
             messages_to_save = user_message_content.split(". ")
@@ -761,41 +791,56 @@ def process_message_logic(message_data, buffered_message_text=None):
                 if msg_text and msg_text.strip():
                     append_message_to_db(clean_number, 'user', msg_text)
         else:
-            # Lógica de Áudio (processamento imediato)
             message = message_data.get('message', {})
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
                 print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
                 audio_base64 = message['base64']
                 audio_data = base64.b64decode(audio_base64)
-                os.makedirs("/tmp", exist_ok=True) # Garante que /tmp existe
+                os.makedirs("/tmp", exist_ok=True)
                 temp_audio_path = f"/tmp/audio_{clean_number}_{message_id}.ogg"
                 with open(temp_audio_path, 'wb') as f: f.write(audio_data)
-                
                 user_message_content = transcrever_audio_gemini(temp_audio_path)
-                
                 try:
                     os.remove(temp_audio_path)
                 except Exception as e:
                     print(f"Aviso: não foi possível remover áudio temporário. {e}")
-
                 if not user_message_content:
                     send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
                     user_message_content = "[Usuário enviou um áudio incompreensível]"
             
             if not user_message_content:
-                 user_message_content = "[Usuário enviou uma mensagem não suportada]"
-                 
+                user_message_content = "[Usuário enviou uma mensagem não suportada]"
+                
             append_message_to_db(clean_number, 'user', user_message_content)
-        # --- Fim da Melhoria ---
+        # --- Fim da Lógica de Buffer/Áudio ---
 
         print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
         
-        # --- LÓGICA DE INTERVENÇÃO (do 'codigo intervenção') ---
+        # --- LÓGICA DE INTERVENÇÃO (Verifica se é o Admin) ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
             handle_responsible_command(user_message_content, clean_number)
             return # Sai da função, mas o 'finally' vai liberar o lock
 
+        # ==========================================================
+        # ⬇️⬇️⬇️ AQUI ESTÁ O "PORTÃO" LIGA/DESLIGA ⬇️⬇️⬇️
+        # ==========================================================
+        try:
+            bot_status_doc = conversation_collection.find_one({'_id': 'BOT_STATUS'})
+            # O bot fica LIGADO por padrão se o documento não existir
+            is_active = bot_status_doc.get('is_active', True) if bot_status_doc else True 
+            
+            if not is_active:
+                print(f"🤖 Bot está em standby (desligado). Ignorando mensagem de {sender_name_from_wpp} ({clean_number}).")
+                return # Sai da função, ignorando o cliente, mas o 'finally' vai liberar o lock
+                
+        except Exception as e:
+            print(f"⚠️ Erro ao verificar o status do bot: {e}. Assumindo que está ligado.")
+        # ==========================================================
+        # ⬆️⬆️⬆️ FIM DO "PORTÃO" LIGA/DESLIGA ⬆️⬆️⬆️
+        # ==========================================================
+
+        # --- LÓGICA DE INTERVENÇÃO (Verifica se o Cliente está pausado) ---
         conversation_status = conversation_collection.find_one({'_id': clean_number})
 
         if conversation_status and conversation_status.get('intervention_active', False):
@@ -816,11 +861,10 @@ def process_message_logic(message_data, buffered_message_text=None):
         )
         
         if not ai_reply:
-             print("⚠️ A IA não gerou resposta.")
-             return # 'finally' vai liberar o lock
+            print("⚠️ A IA não gerou resposta.")
+            return # 'finally' vai liberar o lock
 
         try:
-            # <--- MELHORIA: Salva a resposta da IA no histórico ---
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
             # --- LÓGICA DE INTERVENÇÃO (Pós-IA) ---
@@ -831,16 +875,14 @@ def process_message_logic(message_data, buffered_message_text=None):
                     {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
                 )
                 
-                send_whatsapp_message(sender_number_full, "Entendido. Já avisei o Raffael. Por favor, aguarde um momento. 👨‍💼") # <--- EDITAR MENSAGEM
+                send_whatsapp_message(sender_number_full, "Entendido. Já avisei o Raffael. Por favor, aguarde um momento. 👨‍💼")
                 
                 if RESPONSIBLE_NUMBER:
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                     display_name = known_customer_name or sender_name_from_wpp
                     
-                    # <--- MELHORIA: Usa o 'conversation_status' que já carregamos ---
                     history_summary = "Nenhum histórico de conversa encontrado."
                     if conversation_status and 'history' in conversation_status:
-                        # Adiciona a última mensagem do usuário (que não está em 'conversation_status' ainda)
                         history_com_ultima_msg = conversation_status.get('history', []) + [{'role': 'user', 'text': user_message_content}]
                         history_summary = get_last_messages_summary(history_com_ultima_msg)
 
@@ -867,7 +909,7 @@ def process_message_logic(message_data, buffered_message_text=None):
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
-        # --- MELHORIA: Libera o Lock ---
+        # --- Libera o Lock ---
         if clean_number and lock_acquired: 
             conversation_collection.update_one(
                 {'_id': clean_number},
@@ -875,7 +917,6 @@ def process_message_logic(message_data, buffered_message_text=None):
             )
             print(f"🔓 Lock liberado para {clean_number}.")
 # --- Fim da Função Aprimorada ---
-
 
 # <--- MELHORIA: Estrutura de inicialização para Gunicorn ---
 if modelo_ia:
