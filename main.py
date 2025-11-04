@@ -14,7 +14,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import json 
 
 CLIENT_NAME = "Mengatto Estratégia Digital" # <--- EDITAR NOME DO CLIENTE
-RESPONSIBLE_NUMBER = "554985033507" # <--- EDITAR: Número do responsável com 55+DDD
+RESPONSIBLE_NUMBER = "554898389781" # <--- EDITAR: Número do responsável com 55+DDD
 
 load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL") # <--- EDITAR NO .ENV
