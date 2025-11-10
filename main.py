@@ -643,8 +643,9 @@ else:
 # ==========================================================
 # (Copiadas do Bot Neuro)
 def append_message_to_db(contact_id, role, text, message_id=None):
-    if not conversation_collection: return False
-    try:
+    if conversation_collection is None:
+        return False  # Adiciona o "return False"
+    try:  # Indenta o "try" para ficar dentro da função
         tz = pytz.timezone('America/Sao_Paulo')
         now = datetime.now(tz)
         entry = {'role': role, 'text': text, 'ts': now.isoformat()}
@@ -662,7 +663,7 @@ def append_message_to_db(contact_id, role, text, message_id=None):
         return False
 
 def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used):
-    if not conversation_collection: return
+    if conversation_collection is None: return
     try:
         update_payload = {
             'sender_name': sender_name,
@@ -683,7 +684,7 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used)
         print(f"❌ Erro ao salvar metadados da conversa no MongoDB para {contact_id}: {e}")
 
 def load_conversation_from_db(contact_id):
-    if not conversation_collection: return None
+    if conversation_collection is None: return None
     try:
         result = conversation_collection.find_one({'_id': contact_id})
         if result:
@@ -906,7 +907,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 if not nome:
                     return json.dumps({"erro": "Nome estava vazio."}, ensure_ascii=False)
                 
-                if conversation_collection:
+                if conversation_collection is not None:
                     conversation_collection.update_one(
                         {'_id': contact_id},
                         {'$set': {'customer_name': nome}},
@@ -939,9 +940,9 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     """
     global modelo_ia 
 
-    if not modelo_ia:
+    if modelo_ia is None:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
-    if not conversation_collection:
+    if conversation_collection is None:
          return "Desculpe, estou com um problema interno (DB de conversas não carregado)."
 
     # 1. Carregar histórico (do Bot Neuro)
@@ -1130,12 +1131,11 @@ def send_whatsapp_message(number, text_message):
 # LÓGICA DE RELATÓRIOS (Copiada do Bot Neuro)
 # ==========================================================
 def gerar_e_enviar_relatorio_semanal():
-    print(f"🗓️ Gerando relatório semanal para o cliente: {CLIENT_NAME}...")
-    
+    # ...
     SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
     EMAIL_RELATORIOS = os.environ.get('EMAIL_RELATORIOS')
 
-    if not all([SENDGRID_API_KEY, EMAIL_RELATORIOS, conversation_collection]):
+    if not all([SENDGRID_API_KEY, EMAIL_RELATORIOS]) or conversation_collection is None:
         print("⚠️ Variáveis de Relatório não configuradas ou DB de Conversas indisponível.")
         return
 
@@ -1324,7 +1324,7 @@ def _trigger_ai_processing(clean_number, last_message_data):
 # LÓGICA DE COMANDOS (Copiada do Bot Neuro)
 # ==========================================================
 def handle_responsible_command(message_content, responsible_number):
-    if not conversation_collection:
+    if conversation_collection is None:
         send_whatsapp_message(responsible_number, "❌ Erro: Comandos desabilitados (DB de Conversas indisponível).")
         return True
         
@@ -1401,17 +1401,14 @@ def handle_responsible_command(message_content, responsible_number):
 # LÓGICA PRINCIPAL DE PROCESSAMENTO (REFATORADA)
 # ==========================================================
 def process_message_logic(message_data, buffered_message_text=None):
-    """
-    (VERSÃO FINAL - UNIFICADA)
-    Esta é a função "worker" principal. Ela pega o lock e chama a IA (com tools).
-    """
+    # ...
     lock_acquired = False
     clean_number = None
     
-    if not conversation_collection:
+    if conversation_collection is None:
         print("❌ Processamento interrompido: DB de Conversas indisponível.")
         return
-    if not modelo_ia:
+    if modelo_ia is None:
         print("❌ Processamento interrompido: Modelo IA não inicializado.")
         return
         
@@ -1568,7 +1565,7 @@ def process_message_logic(message_data, buffered_message_text=None):
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
         # --- Libera o Lock ---
-        if clean_number and lock_acquired and conversation_collection: 
+        if clean_number and lock_acquired and conversation_collection is not None:
             conversation_collection.update_one(
                 {'_id': clean_number},
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
@@ -1578,7 +1575,7 @@ def process_message_logic(message_data, buffered_message_text=None):
 # ==========================================================
 # INICIALIZAÇÃO DO SERVIDOR
 # ==========================================================
-if modelo_ia and conversation_collection and agenda_instance:
+if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
     print("   CHATBOT WHATSAPP COM IA INICIADO (V2 - COM AGENDA)")
     print(f"   CLIENTE: {CLIENT_NAME}")
