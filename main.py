@@ -1,63 +1,649 @@
+# ==========================================================
+# ARQUIVO ÚNICO: NEURO SOLUÇÕES + AGENDADOR
+# ==========================================================
 import google.generativeai as genai
 import requests
 import os
 import pytz 
-from flask import Flask, request, jsonify
-from datetime import datetime
-from dotenv import load_dotenv
+import re
+import calendar
+import json 
+import logging
 import base64
 import threading
+from flask import Flask, request, jsonify
+from datetime import datetime, timedelta, UTC, time as dt_time
+from dateutil import parser as dateparser
+from dotenv import load_dotenv
 from pymongo import MongoClient
+from pymongo.server_api import ServerApi
+from pymongo.errors import ConnectionFailure, OperationFailure
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
-import json 
+from typing import Any, Dict, List, Optional
 
-# --- CONFIGURAÇÃO DO CLIENTE (DO CÓDIGO ANTIGO) ---
+# --- CONFIGURAÇÃO DO CLIENTE (NEURO SOLUÇÕES) ---
 CLIENT_NAME = "Neuro Soluções em Tecnologia"
-RESPONSIBLE_NUMBER = "554898389781" # <-- MANTIDO DO CÓDIGO ANTIGO
-# --- FIM DA CONFIGURAÇÃO ---
+RESPONSIBLE_NUMBER = "554898389781" 
 
 load_dotenv()
+
+# --- CHAVES DE API (NEURO BOT) ---
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
 EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-MONGO_DB_URI = os.environ.get("MONGO_DB_URI")
+MONGO_DB_URI = os.environ.get("MONGO_DB_URI") # DB de Conversas
 
-# --- MELHORIA: Sistema de Buffer (DO CÓDIGO ATUAL) ---
+# --- CHAVES DE API (NOVO - AGENDA) ---
+# Você PRECISA definir estas no seu .env
+MONGO_AGENDA_URI = os.environ.get("MONGO_AGENDA_URI")
+MONGO_AGENDA_DB = os.environ.get("MONGO_AGENDA_DB", "neuro_agenda_db")
+MONGO_AGENDA_COLLECTION = os.environ.get("MONGO_AGENDA_COLLECTION", "agendamentos")
+
+# --- LÓGICA DE NEGÓCIO DA AGENDA (ADAPTADA PARA NEURO) ---
+INTERVALO_SLOTS_MINUTOS = 30 # Reuniões de 30 em 30 min (08:00, 08:30...)
+NUM_ATENDENTES = 1 # Apenas 1 pessoa (Lucas)
+
+# Blocos de trabalho (formato HH:MM) - Define o almoço
+BLOCOS_DE_TRABALHO = [
+    {"inicio": "08:00", "fim": "12:00"},
+    {"inicio": "13:00", "fim": "18:00"}
+]
+FOLGAS_DIAS_SEMANA = [ 6 ] # Folga Domingo
+MAPA_DIAS_SEMANA_PT = { 5: "sábado", 6: "domingo" }
+
+# SERVIÇOS DA NEURO (Substitui a barbearia)
+MAPA_SERVICOS_DURACAO = {
+    "reunião": 60,
+    "reunião de consultoria": 60,
+    "agendamento com lucas": 60,
+    "consultoria inicial": 30
+}
+LISTA_SERVICOS_PROMPT = ", ".join(MAPA_SERVICOS_DURACAO.keys())
+SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
+
+# --- FIM DA CONFIGURAÇÃO DA AGENDA ---
+
+# --- Sistema de Buffer (DO BOT NEURO) ---
 message_buffer = {}
 message_timers = {}
 BUFFER_TIME_SECONDS = 8 
-# --- FIM DA MELHORIA ---
+# --- FIM ---
 
+# ==========================================================
+# INICIALIZAÇÃO DE LOGS (DA AGENDA)
+# ==========================================================
+logging.basicConfig(
+    filename="log.txt",
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    encoding="utf-8"
+)
+def log_info(msg):
+    logging.info(msg)
+
+# ==========================================================
+# CONEXÃO DB 1: CONVERSAS (Bot Neuro)
+# ==========================================================
 try:
-    client = MongoClient(MONGO_DB_URI)
+    client_conversas = MongoClient(MONGO_DB_URI)
     db_name = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
-    db = client[db_name] 
-    conversation_collection = db.conversations
+    db_conversas = client_conversas[db_name] 
+    conversation_collection = db_conversas.conversations
     
-    print(f"✅ Conectado ao MongoDB para o cliente: '{CLIENT_NAME}' no banco de dados '{db_name}'")
+    print(f"✅ [DB Conversas] Conectado ao MongoDB: '{db_name}'")
 except Exception as e:
-    print(f"❌ ERRO: Não foi possível conectar ao MongoDB. Erro: {e}")
+    print(f"❌ ERRO: [DB Conversas] Não foi possível conectar ao MongoDB. Erro: {e}")
+    conversation_collection = None # Trava de segurança
 
+# ==========================================================
+# FUNÇÕES AUXILIARES DE AGENDAMENTO (Copiadas da Agenda)
+# ==========================================================
+
+def limpar_cpf(cpf_raw: Optional[str]) -> Optional[str]:
+    if not cpf_raw:
+        return None
+    s = re.sub(r'\D', '', str(cpf_raw))
+    return s if len(s) == 11 else None
+
+def parse_data(data_str: str) -> Optional[datetime]:
+    if not data_str or not isinstance(data_str, str):
+        return None
+    data_str = data_str.strip()
+    if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', data_str):
+        d, m, y = data_str.split('/')
+        try:
+            return datetime(int(y), int(m), int(d))
+        except Exception:
+            return None
+    try:
+        dt = dateparser.parse(data_str, dayfirst=True)
+        if dt:
+            return datetime(dt.year, dt.month, dt.day)
+    except Exception:
+        return None
+    return None
+
+def validar_hora(hora_str: str) -> Optional[str]:
+    if not hora_str or not isinstance(hora_str, str):
+        return None
+    m = re.match(r'^\s*(\d{1,2}):(\d{1,2})\s*$', hora_str)
+    if not m:
+        return None
+    hh, mm = int(m.group(1)), int(m.group(2))
+    if 0 <= hh <= 23 and 0 <= mm <= 59:
+        return f"{hh:02d}:{mm:02d}"
+    return None
+
+def str_to_time(time_str: str) -> dt_time:
+    return datetime.strptime(time_str, '%H:%M').time()
+
+def time_to_minutes(t: dt_time) -> int:
+    return t.hour * 60 + t.minute
+
+def minutes_to_str(m: int) -> str:
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+def gerar_slots_de_trabalho(intervalo_min: int) -> List[str]:
+    slots = []
+    for bloco in BLOCOS_DE_TRABALHO:
+        inicio_min = time_to_minutes(str_to_time(bloco["inicio"]))
+        fim_min = time_to_minutes(str_to_time(bloco["fim"]))
+        current_min = inicio_min
+        while current_min < fim_min:
+            slots.append(minutes_to_str(current_min))
+            current_min += intervalo_min
+    return slots
+
+# ==========================================================
+# CLASSE AGENDA (Copiada 100% da Agenda)
+# ==========================================================
+
+class Agenda:
+    def __init__(self, uri: str, db_name: str, collection_name: str):
+        try:
+            self.client = MongoClient(
+                uri,
+                server_api=ServerApi('1'),
+                tls=True,
+                appname="NeuroBotAgendador"
+            )
+            self.client.admin.command('ping')
+            print(f"✅ [DB Agenda] Conectado ao MongoDB: '{db_name}'")
+        except ConnectionFailure as e:
+            print(f"❌ FALHA CRÍTICA [DB Agenda] ao conectar ao MongoDB: {e}")
+            raise
+
+        self.db = self.client[db_name]
+        self.collection = self.db[collection_name]
+        self._criar_indices()
+
+    def _criar_indices(self):
+        try:
+            self.collection.create_index("cpf")
+            self.collection.create_index([("inicio", 1), ("fim", 1)])
+            print("✅ [DB Agenda] Índices do MongoDB garantidos.")
+        except OperationFailure as e:
+            print(f"⚠️ [DB Agenda] Aviso ao criar índices (normal se já existem): {e}")
+
+    def _checar_dia_de_folga(self, dt: datetime) -> Optional[str]:
+        dia_semana_num = dt.weekday()
+        if dia_semana_num in FOLGAS_DIAS_SEMANA:
+            return MAPA_DIAS_SEMANA_PT.get(dia_semana_num, "dia de folga")
+        return None
+
+    def _get_duracao_servico(self, servico_str: str) -> Optional[int]:
+        servico_key = servico_str.strip().lower()
+        # Lógica flexível: se a chave exata não existir, tenta encontrar por palavra-chave
+        if servico_key in MAPA_SERVICOS_DURACAO:
+             return MAPA_SERVICOS_DURACAO.get(servico_key)
+        
+        if "reunião" in servico_key or "lucas" in servico_key:
+             return MAPA_SERVICOS_DURACAO.get("reunião") # Retorna o padrão
+        
+        if "consultoria" in servico_key:
+             return MAPA_SERVICOS_DURACAO.get("consultoria inicial")
+
+        return None # Retorna None se realmente não encontrar
+
+    def _cabe_no_bloco(self, data_base: datetime, inicio_str: str, duracao_min: int) -> bool:
+        inicio_dt = datetime.combine(data_base.date(), str_to_time(inicio_str))
+        fim_dt = inicio_dt + timedelta(minutes=duracao_min)
+        for bloco in BLOCOS_DE_TRABALHO:
+            bloco_inicio_dt = datetime.combine(data_base.date(), str_to_time(bloco["inicio"]))
+            bloco_fim_dt = datetime.combine(data_base.date(), str_to_time(bloco["fim"]))
+            if inicio_dt >= bloco_inicio_dt and fim_dt <= bloco_fim_dt:
+                return True
+        return False
+
+    def _checar_horario_passado(self, dt_agendamento: datetime, hora_str: str) -> bool:
+        try:
+            agendamento_dt = datetime.combine(dt_agendamento.date(), str_to_time(hora_str))
+            agora = datetime.now()
+            return agendamento_dt < agora
+        except Exception:
+            return False
+
+    def _contar_conflitos_no_banco(self, novo_inicio_dt: datetime, novo_fim_dt: datetime, excluir_id: Optional[Any] = None) -> int:
+        query = {
+            "inicio": {"$lt": novo_fim_dt},
+            "fim": {"$gt": novo_inicio_dt}
+        }
+        if excluir_id:
+            query["_id"] = {"$ne": excluir_id}
+        try:
+            count = self.collection.count_documents(query)
+            return count
+        except Exception as e:
+            log_info(f"❌ Erro ao contar conflitos no Mongo: {e}")
+            return 999 
+
+    def _buscar_agendamentos_do_dia(self, dt: datetime) -> List[Dict[str, Any]]:
+        try:
+            inicio_dia = datetime.combine(dt.date(), dt_time.min)
+            fim_dia = inicio_dia + timedelta(days=1)
+            query = {"inicio": {"$gte": inicio_dia, "$lt": fim_dia}}
+            return list(self.collection.find(query))
+        except Exception as e:
+            log_info(f"❌ Erro ao buscar agendamentos do dia: {e}")
+            return []
+
+    def _contar_conflitos_em_lista(self, agendamentos_do_dia: List[Dict], novo_inicio_dt: datetime, novo_fim_dt: datetime) -> int:
+        conflitos_encontrados = 0
+        for ag in agendamentos_do_dia:
+            ag_inicio_dt = ag["inicio"] 
+            ag_fim_dt = ag["fim"]
+            if (novo_inicio_dt < ag_fim_dt) and (novo_fim_dt > ag_inicio_dt):
+                conflitos_encontrados += 1
+        return conflitos_encontrados
+
+    def buscar_por_cpf(self, cpf_raw: str) -> Dict[str, Any]:
+        cpf = limpar_cpf(cpf_raw)
+        if not cpf:
+            return {"erro": "CPF inválido (deve ter 11 dígitos)."}
+        
+        try:
+            agora = datetime.now()
+            query = {"cpf": cpf, "inicio": {"$gte": agora}}
+            resultados_db = self.collection.find(query).sort("inicio", 1)
+            
+            resultados = []
+            for ag in resultados_db:
+                inicio_dt_local = ag["inicio"]
+                resultados.append({
+                    "data": inicio_dt_local.strftime('%d/%m/%Y'),
+                    "hora": inicio_dt_local.strftime('%H:%M'),
+                    "nome": ag.get("nome"),
+                    "telefone": ag.get("telefone"),
+                    "servico": ag.get("servico"),
+                    "duracao_minutos": ag.get("duracao_minutos")
+                })
+            
+            if not resultados:
+                return {"sucesso": True, "resultados": [], "info": "Nenhum agendamento futuro encontrado para este CPF."}
+                
+            return {"sucesso": True, "resultados": resultados}
+        
+        except Exception as e:
+            log_info(f"Erro em buscar_por_cpf: {e}")
+            return {"erro": f"Falha ao buscar CPF no banco de dados: {e}"}
+
+    def salvar(self, nome: str, cpf_raw: str, telefone: str, servico: str, data_str: str, hora_str: str) -> Dict[str, Any]:
+        cpf = limpar_cpf(cpf_raw)
+        if not cpf:
+            return {"erro": "CPF inválido."}
+        dt = parse_data(data_str)
+        if not dt:
+            return {"erro": "Data inválida."}
+        hora = validar_hora(hora_str)
+        if not hora:
+            return {"erro": "Hora inválida."}
+
+        folga = self._checar_dia_de_folga(dt)
+        if folga:
+            return {"erro": f"Não é possível agendar. O dia {data_str} é um {folga} e não trabalhamos."}
+        
+        if self._checar_horario_passado(dt, hora):
+             return {"erro": f"Não é possível agendar. O horário {data_str} às {hora} já passou."}
+
+        duracao_minutos = self._get_duracao_servico(servico)
+        if duracao_minutos is None:
+            return {"erro": f"Serviço '{servico}' não reconhecido. Os serviços válidos são: {LISTA_SERVICOS_PROMPT}"}
+
+        if not self._cabe_no_bloco(dt, hora, duracao_minutos):
+            fim_dt_calc = datetime.combine(dt.date(), str_to_time(hora)) + timedelta(minutes=duracao_minutos)
+            return {"erro": f"O horário {hora} com duração de {duracao_minutos} min (até {fim_dt_calc.strftime('%H:%M')}) ultrapassa o horário de atendimento."}
+
+        try:
+            inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
+            fim_dt = inicio_dt + timedelta(minutes=duracao_minutos)
+
+            conflitos_atuais = self._contar_conflitos_no_banco(inicio_dt, fim_dt)
+
+            if conflitos_atuais >= NUM_ATENDENTES:
+                return {"erro": f"Horário {hora} indisponível. O proprietário já está ocupado neste horário."}
+            
+            novo_documento = {
+                "nome": nome.strip(),
+                "cpf": cpf,
+                "telefone": telefone.strip(),
+                "servico": servico.strip(),
+                "duracao_minutos": duracao_minutos,
+                "inicio": inicio_dt, 
+                "fim": fim_dt,
+                "created_at": datetime.now(UTC)
+            }
+            
+            self.collection.insert_one(novo_documento)
+            
+            return {"sucesso": True, "msg": f"Agendamento salvo para {nome} em {dt.strftime('%d/%m/%Y')} às {hora}."}
+        
+        except Exception as e:
+            log_info(f"Erro em salvar: {e}")
+            return {"erro": f"Falha ao salvar no banco de dados: {e}"}
+
+    def excluir(self, cpf_raw: str, data_str: str, hora_str: str) -> Dict[str, Any]:
+        cpf = limpar_cpf(cpf_raw)
+        if not cpf:
+            return {"erro": "CPF inválido."}
+        dt = parse_data(data_str)
+        if not dt:
+            return {"erro": "Data inválida."}
+        hora = validar_hora(hora_str)
+        if not hora:
+            return {"erro": "Hora inválida."}
+
+        if self._checar_horario_passado(dt, hora):
+            return {"erro": f"Não é possível excluir. O agendamento em {data_str} às {hora} já passou."}
+
+        try:
+            inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
+            query = {"cpf": cpf, "inicio": inicio_dt}
+            
+            documento_removido = self.collection.find_one_and_delete(query)
+
+            if not documento_removido:
+                return {"erro": "Agendamento não encontrado com os dados fornecidos."}
+            
+            nome_cliente = documento_removido.get('nome', 'Cliente')
+            return {"sucesso": True, "msg": f"Agendamento de {nome_cliente} em {data_str} às {hora} removido."}
+        
+        except Exception as e:
+            log_info(f"Erro em excluir: {e}")
+            return {"erro": f"Falha ao excluir do banco de dados: {e}"}
+
+    def alterar(self, cpf_raw: str, data_antiga: str, hora_antiga: str, data_nova: str, hora_nova: str) -> Dict[str, Any]:
+        cpf = limpar_cpf(cpf_raw)
+        if not cpf:
+            return {"erro": "CPF inválido."}
+        dt_old = parse_data(data_antiga)
+        dt_new = parse_data(data_nova)
+        if not dt_old or not dt_new:
+            return {"erro": "Data antiga ou nova inválida."}
+        h_old = validar_hora(hora_antiga)
+        h_new = validar_hora(hora_nova)
+        if not h_old or not h_new:
+            return {"erro": "Hora antiga ou nova inválida."}
+
+        folga = self._checar_dia_de_folga(dt_new)
+        if folga:
+            return {"erro": f"Não é possível alterar para {data_nova}, pois é um {folga} e não trabalhamos."}
+
+        if self._checar_horario_passado(dt_old, h_old):
+            return {"erro": f"Não é possível alterar. O agendamento original em {data_antiga} às {h_old} já passou."}
+
+        if self._checar_horario_passado(dt_new, h_new):
+            return {"erro": f"Não é possível agendar. O novo horário {data_nova} às {h_new} já passou."}
+
+        try:
+            inicio_antigo_dt = datetime.combine(dt_old.date(), str_to_time(h_old))
+            item = self.collection.find_one({"cpf": cpf, "inicio": inicio_antigo_dt})
+            
+            if not item:
+                return {"erro": "Agendamento antigo não encontrado."}
+
+            duracao_minutos = item.get("duracao_minutos")
+            if duracao_minutos is None: 
+                duracao_minutos = self._get_duracao_servico(item.get("servico", ""))
+            
+            if duracao_minutos is None:
+                return {"erro": f"O serviço '{item.get('servico')}' do agendamento original não é mais válido."}
+
+            if not self._cabe_no_bloco(dt_new, h_new, duracao_minutos):
+                return {"erro": f"O novo horário {h_new} (duração {duracao_minutos} min) ultrapassa o horário de atendimento."}
+
+            novo_inicio_dt = datetime.combine(dt_new.date(), str_to_time(h_new))
+            novo_fim_dt = novo_inicio_dt + timedelta(minutes=duracao_minutos)
+            
+            conflitos_atuais = self._contar_conflitos_no_banco(
+                novo_inicio_dt, novo_fim_dt, excluir_id=item["_id"] 
+            )
+            
+            if conflitos_atuais >= NUM_ATENDENTES:
+                return {"erro": f"Novo horário {h_new} indisponível. O proprietário já estará ocupado."}
+
+            documento_id = item["_id"] 
+            novos_dados = {
+                "inicio": novo_inicio_dt, 
+                "fim": novo_fim_dt
+            }
+            resultado = self.collection.update_one(
+                {"_id": documento_id},
+                {"$set": novos_dados}
+            )
+            
+            if resultado.matched_count == 0:
+                 log_info(f"Falha ao alterar: update_one não encontrou o _id {documento_id}")
+                 return {"erro": "Falha ao encontrar o documento para atualizar, pode ter sido removido."}
+
+            return {"sucesso": True, "msg": f"Agendamento alterado para {dt_new.strftime('%d/%m/%Y')} às {h_new}."}
+        
+        except Exception as e:
+            log_info(f"Erro em alterar: {e}") 
+            return {"erro": f"Falha ao alterar no banco de dados: {e}"}
+        
+    def listar_horarios_disponiveis(self, data_str: str, servico_str: str) -> Dict[str, Any]:
+        dt = parse_data(data_str)
+        if not dt:
+            return {"erro": "Data inválida."}
+        
+        folga = self._checar_dia_de_folga(dt)
+        if folga:
+            return {"erro": f"Desculpe, não trabalhamos aos {folga}s. O dia {data_str} está indisponível."}
+
+        agora = datetime.now()
+        duracao_minutos = self._get_duracao_servico(servico_str)
+        if duracao_minutos is None:
+            return {"erro": f"Serviço '{servico_str}' não reconhecido. Os serviços válidos são: {LISTA_SERVICOS_PROMPT}"}
+
+        agendamentos_do_dia = self._buscar_agendamentos_do_dia(dt)
+        horarios_disponiveis = []
+        slots_de_inicio_validos = gerar_slots_de_trabalho(INTERVALO_SLOTS_MINUTOS)
+
+        for slot_hora_str in slots_de_inicio_validos:
+            slot_dt_completo = datetime.combine(dt.date(), str_to_time(slot_hora_str))
+
+            if slot_dt_completo < agora:
+                continue
+
+            if not self._cabe_no_bloco(dt, slot_hora_str, duracao_minutos):
+                continue
+
+            slot_fim_dt = slot_dt_completo + timedelta(minutes=duracao_minutos)
+            
+            conflitos_atuais = self._contar_conflitos_em_lista(
+                agendamentos_do_dia, slot_dt_completo, slot_fim_dt
+            )
+
+            if conflitos_atuais < NUM_ATENDENTES:
+                horarios_disponiveis.append(slot_hora_str)
+
+        return {
+            "sucesso": True,
+            "data": dt.strftime('%d/%m/%Y'),
+            "servico_consultado": servico_str,
+            "duracao_calculada_min": duracao_minutos,
+            "horarios_disponiveis": horarios_disponiveis
+        }
+
+# ==========================================================
+# CONEXÃO DB 2: AGENDA (Instanciação)
+# ==========================================================
+agenda_instance = None
+if MONGO_AGENDA_URI and GEMINI_API_KEY:
+    try:
+        agenda_instance = Agenda(
+            uri=MONGO_AGENDA_URI, 
+            db_name=MONGO_AGENDA_DB, 
+            collection_name=MONGO_AGENDA_COLLECTION
+        )
+    except Exception as e:
+        print(f"❌ ERRO CRÍTICO: Não foi possível conectar ao MongoDB da Agenda. Funções de agendamento desabilitadas. Erro: {e}")
+else:
+    if not MONGO_AGENDA_URI:
+        print("⚠️ AVISO: MONGO_AGENDA_URI não definida. Funções de agendamento desabilitadas.")
+    if not GEMINI_API_KEY:
+         print("⚠️ AVISO: GEMINI_API_KEY não definida. Bot desabilitado.")
+
+
+# ==========================================================
+# DEFINIÇÃO DAS FERRAMENTAS (TOOLS) - A GRANDE FUSÃO
+# ==========================================================
+tools = []
+if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
+    tools = [
+        {
+            "function_declarations": [
+                # --- Ferramentas da AGENDA ---
+                {
+                    "name": "fn_listar_horarios_disponiveis",
+                    "description": "Verifica e retorna horários VAGOS para uma REUNIÃO em uma DATA específica. ESSENCIAL usar esta função antes de oferecer horários.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "data": {"type_": "STRING", "description": "A data (DD/MM/AAAA) que o cliente quer verificar."},
+                            "servico": {
+                                "type_": "STRING",
+                                "description": "O nome EXATO do serviço (ex: 'reunião', 'consultoria inicial').",
+                                "enum": SERVICOS_PERMITIDOS_ENUM
+                            }
+                        },
+                        "required": ["data", "servico"]
+                    }
+                },
+                {
+                    "name": "fn_buscar_por_cpf",
+                    "description": "Busca todos os agendamentos existentes para um único CPF.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "cpf": {"type_": "STRING", "description": "O CPF de 11 dígitos do cliente."}
+                        },
+                        "required": ["cpf"]
+                    }
+                },
+                {
+                    "name": "fn_salvar_agendamento",
+                    "description": "Salva um novo agendamento. Use apenas quando tiver todos os 6 campos obrigatórios E o usuário já tiver confirmado o 'gabarito' (resumo).",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "nome": {"type_": "STRING"},
+                            "cpf": {"type_": "STRING"},
+                            "telefone": {"type_": "STRING"},
+                            "servico": {
+                                "type_": "STRING",
+                                "description": "O nome EXATO do serviço.",
+                                "enum": SERVICOS_PERMITIDOS_ENUM
+                            },
+                            "data": {"type_": "STRING", "description": "A data no formato DD/MM/AAAA."},
+                            "hora": {"type_": "STRING", "description": "A hora no formato HH:MM."}
+                        },
+                        "required": ["nome", "cpf", "telefone", "servico", "data", "hora"]
+                    }
+                },
+                {
+                    "name": "fn_excluir_agendamento",
+                    "description": "Exclui um AGENDAMENTO ESPECÍFICO. Requer CPF, data e hora exatos.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "cpf": {"type_": "STRING"},
+                            "data": {"type_": "STRING", "description": "A data DD/MM/AAAA do agendamento a excluir."},
+                            "hora": {"type_": "STRING", "description": "A hora HH:MM do agendamento a excluir."}
+                        },
+                        "required": ["cpf", "data", "hora"]
+                    }
+                },
+                {
+                    "name": "fn_alterar_agendamento",
+                    "description": "Altera um agendamento antigo para uma nova data/hora.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "cpf": {"type_": "STRING"},
+                            "data_antiga": {"type_": "STRING", "description": "Data (DD/MM/AAAA) do agendamento original."},
+                            "hora_antiga": {"type_": "STRING", "description": "Hora (HH:MM) do agendamento original."},
+                            "data_nova": {"type_": "STRING", "description": "A nova data (DD/MM/AAAA) desejada."},
+                            "hora_nova": {"type_": "STRING", "description": "A nova hora (HH:MM) desejada."}
+                        },
+                        "required": ["cpf", "data_antiga", "hora_antiga", "data_nova", "hora_nova"]
+                    }
+                },
+                
+                # --- NOVAS Ferramentas (do Bot NEURO) ---
+                {
+                    "name": "fn_solicitar_intervencao",
+                    "description": "Aciona o atendimento humano. Use esta função se o cliente pedir para 'falar com o Lucas', 'falar com o dono', ou 'falar com um humano'.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "motivo": {"type_": "STRING", "description": "O motivo exato pelo qual o cliente pediu para falar com Lucas."}
+                        },
+                        "required": ["motivo"]
+                    }
+                },
+                {
+                    "name": "fn_capturar_nome",
+                    "description": "Salva o nome do cliente no banco de dados quando ele se apresenta pela primeira vez.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "nome_extraido": {"type_": "STRING", "description": "O nome que o cliente acabou de informar (ex: 'Marcos', 'Ana')."}
+                        },
+                        "required": ["nome_extraido"]
+                    }
+                }
+            ]
+        }
+    ]
+
+# ==========================================================
+# INICIALIZAÇÃO DO MODELO GEMINI (Agora com TOOLS)
+# ==========================================================
+modelo_ia = None
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
+        # SÓ inicializa o modelo se as tools (agenda) estiverem prontas
+        if tools: 
+            modelo_ia = genai.GenerativeModel('gemini-1.5-flash', tools=tools)
+            print("✅ Modelo do Gemini (gemini-1.5-flash) inicializado com FERRAMENTAS.")
+        else:
+             print("AVISO: Modelo do Gemini não inicializado pois a conexão com a Agenda falhou (tools vazias).")
     except Exception as e:
-        print(f"AVISO: A chave de API do Google não foi configurada corretamente. Erro: {e}")
+        print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
 else:
     print("AVISO: A variável de ambiente GEMINI_API_KEY não foi definida.")
 
-modelo_ia = None
-try:
-    modelo_ia = genai.GenerativeModel('gemini-2.5-flash')
-    print("✅ Modelo do Gemini (gemini-2.5-flash) inicializado com sucesso.")
-except Exception as e:
-    print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
 
-# --- MELHORIA: Funções de DB 'Stateless' (DO CÓDIGO ATUAL) ---
+# ==========================================================
+# FUNÇÕES DE BANCO DE DADOS (Conversas - Bot Neuro)
+# ==========================================================
+# (Copiadas do Bot Neuro)
 def append_message_to_db(contact_id, role, text, message_id=None):
-    """Salva uma única mensagem no histórico do DB."""
+    if not conversation_collection: return False
     try:
         tz = pytz.timezone('America/Sao_Paulo')
         now = datetime.now(tz)
@@ -76,7 +662,7 @@ def append_message_to_db(contact_id, role, text, message_id=None):
         return False
 
 def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used):
-    """Salva metadados (nomes, tokens) no MongoDB."""
+    if not conversation_collection: return
     try:
         update_payload = {
             'sender_name': sender_name,
@@ -97,22 +683,22 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used)
         print(f"❌ Erro ao salvar metadados da conversa no MongoDB para {contact_id}: {e}")
 
 def load_conversation_from_db(contact_id):
-    """Carrega o histórico de uma conversa do MongoDB, ordenando por timestamp."""
+    if not conversation_collection: return None
     try:
         result = conversation_collection.find_one({'_id': contact_id})
         if result:
             history = result.get('history', [])
-            history_sorted = sorted(history, key=lambda m: m.get('ts', ''))
+            # Filtra o prompt do sistema antigo (boa prática)
+            history_filtered = [msg for msg in history if not msg.get('text', '').strip().startswith("A data e hora atuais são:")]
+            history_sorted = sorted(history_filtered, key=lambda m: m.get('ts', ''))
             result['history'] = history_sorted
             print(f"🧠 Histórico anterior encontrado e carregado para {contact_id} ({len(history_sorted)} entradas).")
             return result
     except Exception as e:
         print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
     return None
-# --- FIM DAS FUNÇÕES DE DB ---
 
 def get_last_messages_summary(history, max_messages=4):
-    """Formata as últimas mensagens de um histórico para um resumo legível, ignorando prompts do sistema."""
     summary = []
     relevant_history = history[-max_messages:]
     
@@ -122,7 +708,6 @@ def get_last_messages_summary(history, max_messages=4):
 
         if role == "Cliente" and text.startswith("A data e hora atuais são:"):
             continue 
-        # --- ADAPTADO: Texto de 'ack' do bot da Neuro Soluções ---
         if role == "Bot" and text.startswith("Entendido. A Regra de Ouro"):
             continue 
             
@@ -137,49 +722,255 @@ def get_last_messages_summary(history, max_messages=4):
             
     return "\n".join(summary)
 
-def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name): 
+
+# ==========================================================
+# O NOVO "CÉREBRO" (PROMPT DE SISTEMA UNIFICADO)
+# ==========================================================
+def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, sender_name: str) -> str:
+    
+    # Lógica de Nome Dinâmico
+    prompt_name_instruction = ""
+    if known_customer_name:
+        prompt_name_instruction = f"O nome do usuário com quem você está falando é: {known_customer_name}. Trate-o por este nome."
+    else:
+        prompt_name_instruction = f"""
+        REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
+          Seu nome é {{Lyra}} e você é atendente da {{Neuro'Up Soluçoes em Tecnologia}}.
+          Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido.
+          1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi"), peça o nome dele.
+          2. Se a primeira mensagem já contiver uma pergunta (ex: "oi, qual o preço?"), acalme o cliente, diga que já vai responder, e PEÇA O NOME.
+          3. Quando o cliente responder com o nome (ex: "Meu nome é Marcos"):
+             - Você DEVE OBRIGATORIAMENTRE chamar a função `fn_capturar_nome` com o nome extraído.
+             - Agradeça ao cliente.
+             - RESPONDA IMEDIATAMENTE à pergunta original que ele fez.
+        """
+
+    # O PROMPT GIGANTE (SEM AS TAGS MANUAIS)
+    prompt_final = f"""
+        A data e hora atuais são: {horario_atual}.
+        
+        =====================================================
+        🆘 REGRAS DE FUNÇÕES (TOOLS) - PRIORIDADE ABSOLUTA
+        =====================================================
+        Você tem ferramentas para executar ações. NUNCA execute uma ação sem usar a ferramenta.
+
+        1.   **INTERVENÇÃO HUMANA (Falar com Lucas):**
+            - SE a mensagem do cliente contiver QUALQUER PEDIDO para falar com "Lucas" (ex: "quero falar com o Lucas", "falar com o dono", "chama o Lucas").
+            - Você DEVE chamar a função `fn_solicitar_intervencao` com o motivo.
+            - **EXCEÇÃO CRÍTICA:** Se o cliente APENAS se apresentar com o nome "Lucas" (ex: "Meu nome é Lucas"), ISSO NÃO É UMA INTERVENÇÃO. Você deve chamar `fn_capturar_nome`.
+
+        2.  **CAPTURA DE NOME:**
+            - {prompt_name_instruction}
+
+        3.  **AGENDAMENTO DE REUNIÃO (Seu novo poder):**
+            - Seu novo dever é agendar reuniões com o proprietário (Lucas).
+            - Os serviços de agendamento são: {LISTA_SERVICOS_PROMPT}. O padrão é "reunião" (60 min).
+            - O número de atendentes é {NUM_ATENDENTES}.
+            - Horário de atendimento para reuniões: {', '.join([f"das {b['inicio']} às {b['fim']}" for b in BLOCOS_DE_TRABALHO])}.
+            
+            - **FLUXO OBRIGATÓRIO DE AGENDAMENTO:**
+            - a. **NÃO OFEREÇA HORÁRIOS SEM CHECAR:** Você NÃO sabe os horários vagos.
+            - b. Se o usuário pedir "tem horário?", "quero agendar":
+            - c. PRIMEIRO, pergunte o **SERVIÇO** (ex: "Claro, seria uma 'reunião' ou 'consultoria inicial'?").
+            - d. SEGUNDO, pergunte a **DATA** (ex: "E para qual data você gostaria de verificar?").
+            - e. Quando tiver DATA e SERVIÇO, você DEVE chamar `fn_listar_horarios_disponiveis`.
+            - f. **HUMANIZE A RESPOSTA:** Mostre ao usuário a lista de horários. Se for longa, RESUMA (ex: "Para 'reunião' no dia [data], tenho horários das 08:00 às 10:30, e das 14:00 às 17:15.")
+            - g. Quando o cliente escolher um horário VÁLIDO da lista, colete os dados que faltam (Nome, CPF, Telefone).
+            - h. Quando tiver os 6 dados, APRESENTE UM "GABARITO" (resumo) e pergunte "Está tudo correto?".
+            - i. SÓ ENTÃO, após a confirmação, chame `fn_salvar_agendamento`.
+            - j. **Se ALTERAR/EXCLUIR:** Chame `fn_buscar_por_cpf`, mostre a lista, e depois use `fn_alterar_agendamento` ou `fn_excluir_agendamento`.
+        
+        =====================================================
+        🏢 IDENTIDADE DA EMPRESA (Neuro Soluções)
+        =====================================================
+        nome da empresa: {{Neuro Soluções em Tecnologia}}
+        setor: {{Tecnologia e Automação}} 
+        missão: {{Facilitar e organizar as empresas de clientes por meio de soluções inteligentes e automação. AGENDAR REUNIÕES com o proprietário.}}
+        valores: {{Organização, transparência, persistência e ascensão.}}
+        horário de atendimento: {{De segunda a sexta, das 8:00 às 18:00.}}
+        endereço: {{R. Pioneiro Alfredo José da Costa, 157 - Jardim Alvorada, Maringá - PR, 87035-270}}
+        
+        =====================================================
+        🏷️ IDENTIDADE DO ATENDENTE (Lyra)
+        =====================================================
+        nome: {{Lyra}}
+        sexo: {{Feminina}}
+        função: {{Atendente, vendedora e AGORA TAMBÉM secretária especialista em agendamentos.}} 
+        papel: {{Atender o cliente, entender sua necessidade, vender o plano ideal E, se necessário, agendar uma reunião com o Lucas usando as ferramentas.}} 
+        
+        =====================================================
+        💼 SERVIÇOS / CARDÁPIO (Vendas)
+        =====================================================
+        - Plano Atendente: {{Atendente personalizada, configurada conforme a necessidade do cliente. Pode atuar de forma autônoma, com intervenção humana ou bifurcação de mensagens.}}
+        - Plano Secretário: {{Agendamento Inteligente, Avisos Automáticos e Agenda Integrada.}}
+        - Plano Premium: {{Em construção.}}
+        
+        =====================================================
+        💰 PLANOS E VALORES (Vendas)
+        =====================================================
+        Instalação: {{R$250,00 taxa única}} para setup inicial do projeto e requisitos da IA. 
+        Plano Atendente: {{R$400,00 mensal}}
+        Plano Secretário: {{R$700,00 mensal}}
+        Plano Avançado: {{Em análise}}
+        
+        =====================================================
+        🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO (Vendas)
+        =====================================================
+        - Ações: Seja profissional, empática, natural, objetiva e prestativa. Use frases curtas e diretas.
+        - Estratégia de venda: Sempre inicie entendendo a dor ou necessidade do cliente, recomende a melhor solução.
+        - Use apenas 1 ou 2 paragrafos no maximo, evite blocos grandes.
+        
+        =====================================================
+        🧩 TÉCNICAS DE OBJEÇÕES E CONVERSÃO (Vendas)
+        =====================================================
+        *Não fique repetindo as mesmas tecnicas para o mesmo cliente. 
+        
+        ### 💬 1. QUANDO O CLIENTE RECLAMA DO PREÇO
+        > “Entendo perfeitamente! Posso te perguntar, você achou o valor justo pelo que o sistema entrega?”
+        
+        ### 💡 2. QUANDO O CLIENTE DIZ “VOU PENSAR”
+        > “Perfeito, é bom pensar mesmo! Posso te perguntar o que você gostaria de analisar melhor? Assim vejo se consigo te ajudar com alguma dúvida antes.”
+        
+        =====================================================
+        📜 ABERTURA PADRÃO DE ATENDIMENTO
+        =====================================================
+        *Use apenas quando não tiver historico de converssa e for a primeira vez que entra em contato com o usuario 
+        👋 Olá! Tudo bem? 
+        Eu sou Lyra, da Neuro Soluções em Tecnologia. 
+        Seja muito bem-vindo(a)! Pode me contar o que você está precisando hoje? Assim eu já te ajudo da melhor forma. Ou se quiser agendar uma reunião com o Lucas, também posso verificar os horários! 😊
     """
-    (VERSÃO FINAL - QUALIDADE MÁXIMA + MEMÓRIA TOTAL)
-    Usa 'system_instruction' para inteligência E carrega o histórico completo para memória.
+    return prompt_final
+
+
+# ==========================================================
+# PROCESSADOR DE FERRAMENTAS (O "CORPO" DA AGENDA)
+# ==========================================================
+def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> str:
     """
-    global modelo_ia # Pega o modelo global (gemini-1.5-flash)
+    Processa a chamada de ferramenta vinda da IA.
+    NOTA: 'agenda_instance' e 'conversation_collection' são globais.
+    """
+    global agenda_instance, conversation_collection
+    
+    try:
+        # --- Ferramentas da AGENDA ---
+        if not agenda_instance and call_name.startswith("fn_"):
+             if call_name in ["fn_listar_horarios_disponiveis", "fn_buscar_por_cpf", "fn_salvar_agendamento", "fn_excluir_agendamento", "fn_alterar_agendamento"]:
+                return json.dumps({"erro": "A função de agendamento está desabilitada (Sem conexão com o DB da Agenda)."}, ensure_ascii=False)
+
+        if call_name == "fn_listar_horarios_disponiveis":
+            data = args.get("data", "")
+            servico = args.get("servico", "") 
+            resp = agenda_instance.listar_horarios_disponiveis(data_str=data, servico_str=servico)
+            return json.dumps(resp, ensure_ascii=False)
+
+        elif call_name == "fn_buscar_por_cpf":
+            cpf = args.get("cpf")
+            resp = agenda_instance.buscar_por_cpf(cpf)
+            return json.dumps(resp, ensure_ascii=False)
+
+        elif call_name == "fn_salvar_agendamento":
+            resp = agenda_instance.salvar(
+                nome=args.get("nome", ""),
+                cpf_raw=args.get("cpf", ""),
+                telefone=args.get("telefone", ""),
+                servico=args.get("servico", ""),
+                data_str=args.get("data", ""),
+                hora_str=args.get("hora", "")
+            )
+            return json.dumps(resp, ensure_ascii=False)
+
+        elif call_name == "fn_excluir_agendamento":
+            resp = agenda_instance.excluir(
+                cpf_raw=args.get("cpf", ""),
+                data_str=args.get("data", ""),
+                hora_str=args.get("hora", "")
+            )
+            return json.dumps(resp, ensure_ascii=False)
+
+        elif call_name == "fn_alterar_agendamento":
+            resp = agenda_instance.alterar(
+                cpf_raw=args.get("cpf", ""),
+                data_antiga=args.get("data_antiga", ""),
+                hora_antiga=args.get("hora_antiga", ""),
+                data_nova=args.get("data_nova", ""),
+                hora_nova=args.get("hora_nova", "")
+            )
+            return json.dumps(resp, ensure_ascii=False)
+
+        # --- Ferramentas do BOT NEURO ---
+        
+        elif call_name == "fn_capturar_nome":
+            try:
+                nome = args.get("nome_extraido", "").strip()
+                if not nome:
+                    return json.dumps({"erro": "Nome estava vazio."}, ensure_ascii=False)
+                
+                if conversation_collection:
+                    conversation_collection.update_one(
+                        {'_id': contact_id},
+                        {'$set': {'customer_name': nome}},
+                        upsert=True
+                    )
+                return json.dumps({"sucesso": True, "nome_salvo": nome}, ensure_ascii=False)
+            except Exception as e:
+                return json.dumps({"erro": f"Erro ao salvar nome no DB: {e}"}, ensure_ascii=False)
+        
+        elif call_name == "fn_solicitar_intervencao":
+            motivo = args.get("motivo", "Motivo não especificado pela IA.")
+            # Retorna uma 'tag' especial que a lógica principal vai entender
+            return json.dumps({"sucesso": True, "motivo": motivo, "tag_especial": "[HUMAN_INTERVENTION]"})
+
+        else:
+            return json.dumps({"erro": f"Ferramenta desconhecida: {call_name}"}, ensure_ascii=False)
+            
+    except Exception as e:
+        log_info(f"Erro fatal em handle_tool_call ({call_name}): {e}")
+        return json.dumps({"erro": f"Exceção ao processar ferramenta: {e}"}, ensure_ascii=False)
+
+
+# ==========================================================
+# GERADOR DE RESPOSTA (REFATORADO PARA TOOLS)
+# ==========================================================
+def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
+    """
+    (VERSÃO FINAL - COM TOOLS)
+    Esta função agora gerencia o loop de ferramentas.
+    """
+    global modelo_ia 
 
     if not modelo_ia:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
+    if not conversation_collection:
+         return "Desculpe, estou com um problema interno (DB de conversas não carregado)."
 
-    print(f"🧠 Lendo o estado do DB para {contact_id}...")
+    # 1. Carregar histórico (do Bot Neuro)
     convo_data = load_conversation_from_db(contact_id)
-    old_history = []
+    old_history_gemini_format = []
     
     if convo_data:
-        # A lógica para buscar o nome (que não é do histórico) funciona perfeitamente
         known_customer_name = convo_data.get('customer_name', known_customer_name) 
-        if 'history' in convo_data:
+        history_from_db = convo_data.get('history', [])
+        
+        for msg in history_from_db:
+            role = msg.get('role', 'user')
+            if role == 'assistant':
+                role = 'model'
             
-            # --- MEMÓRIA TOTAL (BOLA DE NEVE) ---
-            # Carrega o histórico COMPLETO, sem truncamento.
-            history_full = convo_data.get('history', []) 
-            print(f"📜 MEMÓRIA LONGA ATIVA. Carregando histórico completo ({len(history_full)} msgs).")
-            # --- FIM ---
-            
-            # Filtra o prompt antigo (boa prática, caso ainda exista no DB)
-            history_from_db = [msg for msg in history_full if not msg.get('text', '').strip().startswith("A data e hora atuais são:")]
-            
-            for msg in history_from_db:
-                role = msg.get('role', 'user')
-                if role == 'assistant':
-                    role = 'model'
+            if 'text' in msg:
+                # Adaptação: Se o histórico for uma chamada de função (que não salvamos), pulamos
+                if msg['text'].startswith("Chamando função:") or msg['text'].startswith("Resultado da função:"):
+                     continue
                 
-                if 'text' in msg:
-                    old_history.append({
-                        'role': role,
-                        'parts': [msg['text']]
-                    })
-    
+                old_history_gemini_format.append({
+                    'role': role,
+                    'parts': [msg['text']]
+                })
+
     if known_customer_name:
         print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
 
-    # (Lógica de Fuso Horário)
+    # 2. Obter Fuso Horário e Prompt de Sistema
     try:
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
@@ -187,279 +978,109 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
     except Exception as e:
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    # --- PROMPT DE NOME DINÂMICO ---
-    # Esta é a lógica que garante que ele pergunte o nome se não souber.
-    prompt_name_instruction = ""
-    if known_customer_name:
-        # Se JÁ SABE o nome, a instrução é simples:
-        final_user_name_for_prompt = known_customer_name
-        prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este nome."
-    else:
-        # Se NÃO SABE o nome, a instrução é a regra de captura:
-        final_user_name_for_prompt = sender_name
-        prompt_name_instruction = f"""
-            REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
-              (Esta regra SÓ se aplica se a REGRA DE OURO de intervenção não for acionada primeiro)
-              Seu nome é {{Lyra}} e você é atendente da {{Mengatto Estratégia Digital}}.
-              Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido. No entanto, você deve fazer isso de forma natural.
-              1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi", "boa noite"), peça o nome dele de forma direta e educada.
-              2. Se a primeira mensagem do cliente já contiver uma pergunta (ex: "oi, qual o preço?", "quero saber como funciona"), você deve:
-                 - Primeiro, acalmar o cliente dizendo que já vai responder.
-                 - Em seguida, peça o nome para personalizar o atendimento.
-                 - *IMPORTANTE*: Você deve guardar a pergunta original do cliente na memória.
-              3. Quando o cliente responder com o nome dele (ex: "Meu nome é Marcos"), sua próxima resposta DEVE OBRIGATORIAMENTE:
-                 - Começar com a tag: [NOME_CLIENTE]O nome do cliente é: [Nome Extraído].
-                 - Agradecer ao cliente pelo nome.
-                 - *RESPONDER IMEDIATAMENTE à pergunta original que ele fez no início da conversa.* Não o faça perguntar de novo.
-              4. Se não tiver historico de converssa anterior faça a aprensetação de forma amigavel e dinamica, se apresente, apresente a empresa, e continue para saber o nome. 
-            """
-    # --- FIM DO PROMPT DE NOME ---
-    
-    # --- SYSTEM INSTRUCTION (O "TREINAMENTO") ---
-    # Aqui colocamos seu prompt gigante inteiro, incluindo a instrução de nome dinâmica
-    prompt_inicial_de_sistema = f"""
-            A data e hora atuais são: {horario_atual}.
-            
-            =====================================================
-            🆘 REGRA DE OURO: ANÁLISE DE INTERVENÇÃO (PRIORIDADE ABSOLUTA)
-            =====================================================
-            - SUA TAREFA MAIS IMPORTANTE é identificar se o cliente quer falar com "Lucas" (o proprietário).
-            - Se a mensagem do cliente contiver QUALQUER PEDIDO para falar com "Lucas" (ex: "quero falar com o Lucas", "falar com o dono", "chama o Lucas", "o Lucas está?"), esta regra ANULA TODAS AS OUTRAS.
-            
-            1.  **CENÁRIO 1: NOME + INTERVENÇÃO JUNTOS**
-                - Se o nome AINDA NÃO FOI CAPTURADO.
-                - E o cliente responder com o nome E o pedido de intervenção na MESMA FRASE (ex: "Meu nome é Marcos e quero falar com o Lucas").
-                - Você DEVE capturar o nome E acionar a intervenção SIMULTANEAMENTE.
-                - **Resposta Correta (EXATA):** `[NOME_CLIENTE]O nome do cliente é: Marcos. [HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o Lucas.`
-                
-            2.  **CENÁRIO 2: APENAS INTERVENÇÃO**
-                - Se o cliente (com nome já conhecido ou não) pedir para falar com o Lucas.
-                - **Resposta Correta (EXATA):** `[HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o Lucas.`
-
-            3.  **CENÁRIO 3: EXCEÇÃO CRÍTICA (FALSO POSITIVO)**
-                - Se o cliente APENAS se apresentar com o nome "Lucas" (ex: "Meu nome é Lucas", ou "Lucas").
-                - ISSO **NÃO** É UMA INTERVENÇÃO. É uma apresentação.
-                - **Resposta Correta (se o nome não foi capturado):** `[NOME_CLIENTE]O nome do cliente é: Lucas. Prazer em conhecê-lo, Lucas! Como posso te ajudar?`
-            =====================================================
-            
-            {prompt_name_instruction}
-            
-            Dever : Potencializar os nossos planos entendendo como pode ajudar o clinte, se quer saber sobre a empresa ou falar com o Lucas(Proprietario).
-            Missão : Agendar um horario para reunião com o proprietario. 
-            
-            =====================================================
-            🏷️ IDENTIDADE DO ATENDENTE
-            =====================================================
-            nome: {{Lyra}}
-            sexo: {{Feminina}}
-            idade: {{40}}
-            função: {{Atendente, vendedora, especialista em TI e machine learning}} 
-            papel: {{Atender o cliente de forma profissional e amigável, entender sua necessidade, oferecer soluções personalizadas, tirar dúvidas, vender o plano ideal, enviar catálogos e agendar horários quando necessário.}} 
-            =====================================================
-            🏢 IDENTIDADE DA EMPRESA
-            =====================================================
-            nome da empresa: {{Neuro Soluções em Tecnologia}}
-            setor: {{Tecnologia e Automação}} 
-            missão: {{Facilitar e organizar as empresas de clientes por meio de soluções inteligentes e automação.}}
-            valores: {{Organização, transparência, persistência e ascensão.}}
-            horário de atendimento: {{De segunda a sexta, das 8:00 às 18:00.}}
-            endereço: {{R. Pioneiro Alfredo José da Costa, 157 - Jardim Alvorada, Maringá - PR, 87035-270}}
-            =====================================================
-            🏛️ HISTÓRIA DA EMPRESA
-            =====================================================
-            {{Fundada em Maringá - PR, em 2025, a Neuro Soluções em Tecnologia nasceu com o propósito de unir inovação e praticidade. Criada por profissionais apaixonados por tecnologia e automação, a empresa cresceu ajudando empreendedores a otimizar processos, economizar tempo e aumentar vendas por meio de chatbots e sistemas inteligentes.}}
-            =====================================================
-            ℹ️ INFORMAÇÕES GERAIS
-            =====================================================
-            público-alvo: {{Empresas, empreendedores e prestadores de serviço que desejam automatizar atendimentos e integrar inteligência artificial ao seu negócio.}}
-            diferencial: {{Atendimento personalizado, chatbots sob medida e integração total com o WhatsApp e ferramentas de IA.}}
-            tempo de mercado: {{Desde 2025}}
-            slogan: {{O futuro é agora!}}
-            =====================================================
-            💼 SERVIÇOS / CARDÁPIO
-            =====================================================
-            - Plano Atendente: {{Atendente personalizada, configurada conforme a necessidade do cliente. Pode atuar de forma autônoma, com intervenção humana ou bifurcação de mensagens.}}
-            - Plano Secretário: {{Agendamento Inteligente, Avisos Automáticos e Agenda Integrada.}}
-            - Plano Premium: {{Em construção.}}
-            =====================================================
-            💰 PLANOS E VALORES
-            =====================================================
-            Instalação: {{R$250,00 taxa única}} para setup inicial do projeto e requisitos da IA. 
-            Plano Atendente: {{R$400,00 mensal}}
-            Plano Secretário: {{R$700,00 mensal}}
-            Plano Avançado: {{Em análise}}
-            observações: {{Valores podem variar conforme personalização ou integrações extras.}}
-            =====================================================
-            🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO
-            =====================================================
-            - Ações: Seja profissional, empática, natural, objetiva e prestativa. Use frases curtas e diretas, mantenha tom positivo e humano. Entenda a necessidade do cliente, utilize técnicas de venda consultiva, aplique gatilhos mentais com sutileza (autoridade, escassez, reciprocidade, afinidade), e conduza a conversa para o fechamento de forma leve, parecendo que está ajudando, não vendendo.
-            - Linguagem adaptável (modo camaleão): ajuste o tom conforme o cliente — simpático e leve com conversadores, direto com apressados, técnico com desconfiados, e descontraído com clientes informais.
-            - Estratégia de venda: Sempre inicie entendendo a dor ou necessidade do cliente, recomende a melhor solução como um “especialista” que orienta com confiança (como um médico que indica o tratamento ideal), e finalize de forma natural e segura.
-            - Não fazer: Não invente informações, não discuta, não compartilhe dados pessoais, não responda fora de contexto e evite encerrar sem oferecer uma solução. Como último recurso, ofereça uma semana grátis antes da despedida.
-            - Use apenas 1 ou 2 paragrafos no maximo, evite blocos grandes, normalmete o ultimo sempre sera uma pergunta aberta!
-            - Apenas fale o necessario sem ser rude. 
-            =====================================================
-            ⚙️ PERSONALIDADE DO ATENDENTE
-            =====================================================
-            - Tom de voz: {{profissional, alegre e amigável, ajustável conforme o cliente.}}
-            - Estilo: {{Secretária inteligente, observadora, esperta e proativa — transmite segurança e conhecimento técnico, com leveza e empatia.}}
-            - Emojis: {{usar com moderação — máximo 2 por mensagem.}}
-            - Identidade comportamental: {{Parece humana e confiante. Mantém equilíbrio entre simpatia e eficiência. Atua como especialista que realmente quer ajudar.}}
-            - Mentalidade: {{“Não vendo apenas um serviço; resolvo o problema do cliente de forma personalizada.”}}
-            =====================================================
-            📜 ABERTURA PADRÃO DE ATENDIMENTO
-            =====================================================
-            *Use apenas quando não tiver historico de converssa e for a primeira vez que entra em contato com o usuario 
-            👋 Olá! Tudo bem?  
-            Eu sou **Lyra**, da **Neuro Soluções em Tecnologia**.  
-            Seja muito bem-vindo(a)! Pode me contar o que você está precisando hoje? Assim eu já te ajudo da melhor forma. Ou se quiser falar com o Lucas me avisa! 😊
-            
-            =====================================================
-            🧩 TÉCNICAS DE OBJEÇÕES E CONVERSÃO
-            =====================================================
-            *Não fique repetindo as mesmas tecnicas para o mesmo cliente. 
-            A função da Lyra é compreender o motivo da dúvida ou recusa e usar **técnicas inteligentes de objeção**, sempre de forma natural, empática e estratégica — nunca forçada ou mecânica.  
-            Essas técnicas devem ser aplicadas apenas **quando fizerem sentido no contexto** da conversa, com base na necessidade e comportamento do cliente.
-            🎯 **OBJETIVO:** Transformar objeções em diálogo e mostrar valor de forma consultiva, até o fechamento do agendameto .
-            ---
-            ### 💬 1. QUANDO O CLIENTE RECLAMA DO PREÇO
-            - Mantenha calma e empatia, e pergunte com interesse genuíno:
-            > “Entendo perfeitamente! Posso te perguntar, você achou o valor justo pelo que o sistema entrega?”
-            - Depois, demonstre o valor agregado:
-            > “Lembrando que aqui não é só um chatbot — é **atendimento, automação e venda 24h**, com suporte personalizado e tecnologia de ponta. Enquanto você trabalha, eu atendo sem erros. 😉”
-            - Se o cliente ainda demonstrar resistência:
-            > “Você investe em marketing? Porque o que mais acontece é pessoas chamarem fora do horário — e com a IA, **nenhum cliente fica sem resposta**.”
-            ---
-            ### 💡 2. QUANDO O CLIENTE DIZ “VOU PENSAR”
-            - Não pressione, mas mantenha o interesse vivo:
-            > “Perfeito, é bom pensar mesmo! Posso te perguntar o que você gostaria de analisar melhor? Assim vejo se consigo te ajudar com alguma dúvida antes.”
-            - Se ele não souber responder:
-            > “Muitos clientes me dizem isso quando ainda estão comparando valores, mas quando percebem o tempo que o sistema economiza e a credibilidade que passa, percebem que o retorno vem rápido.”
-            - E complete com gatilho de valor:
-            > “Se a gente dividir o valor do plano por 30 dias, ele sai menos que uma refeição por dia — e trabalha por você 24 horas.”  
-            ---
-            ### 🧠 3. QUANDO O CLIENTE DEMONSTRA DESINTERESSE OU DÚVIDA
-            - Tente entender o motivo real:
-            > “Posso te perguntar o que fez você achar que talvez não seja o momento certo? Assim vejo se faz sentido pra sua realidade.”  
-            - Faça perguntas estratégicas:
-            > “Você trabalha e atende sozinha?”  
-            > “Já teve problemas com mal atendimento ou respostas atrasadas?”  
-            > “Quanto tempo, em média, seus clientes esperam uma resposta quando você está ocupada ou fora do horário?”
-            - Depois de ouvir, conecte com a solução:
-            > “O sistema resolve exatamente isso — ele **atende rápido, sem erro e com empatia**, garantindo que nenhum cliente fique esperando.”
-            ---
-            ### ⚙️ 4. QUANDO O CLIENTE COMPARA COM OUTROS OU ACHA DESNECESSÁRIO
-            - Mostre diferenciação técnica e valor:
-            > “Entendo, mas vale destacar que aqui usamos **as tecnologias mais avançadas de IA e machine learning**, e o suporte é 100% personalizado — diferente dos sistemas prontos e genéricos do mercado.”
-            - Se o cliente disser que outro é mais barato:
-            > “Sim, pode até ter preço menor, mas não entrega o mesmo resultado. A diferença está na performance: nossos clientes fecham mais rápido, e seus concorrentes muitas vezes nem têm tempo de atender — porque **você já terá fechado com o seu cliente.** 😎”
-            ---
-            ### 💬 5. QUANDO O CLIENTE NÃO VÊ VALOR IMEDIATO
-            - Reforce o retorno sobre o investimento:
-            > “Pensa assim: se o sistema fechar apenas um cliente novo por mês, ele já se paga — e ainda sobra. É investimento, não gasto.”
-            - Mostre o impacto real:
-            > “Enquanto você dorme, ele continua atendendo. Enquanto você trabalha, ele já inicia novas conversas. Isso é **tempo transformado em resultado.**”
-            ---
-            ### ⚡ DICAS GERAIS DE CONDUTA
-            - Use apenas **uma ou duas técnicas por conversa**, de forma natural.  
-            - Evite repetir a mesma justificativa — varie conforme a reação do cliente.  
-            - Mantenha o tom calmo, positivo e consultivo — nunca defensivo.  
-            - Finalize sempre reforçando o valor e o benefício real.  
-            💬 Exemplo de fechamento leve:
-            > “Posso já reservar a sua vaga pra ativar hoje? Assim você já aproveita o suporte completo e começa a economizar tempo ainda essa semana. 😉”
-
-            - Final : Se nada der certo antes de se despedir ofereça 1 semana gratis.
-
-            =====================================================
-            PRONTO PARA ATENDER O CLIENTE
-            =====================================================
-            Quando o cliente enviar uma mensagem, inicie o atendimento com essa apresentação profissional e amigável.  
-            Adapte o tom conforme o comportamento do cliente, mantenha foco em entender a necessidade e conduza naturalmente até o fechamento da venda.  
-            Lembre-se: o objetivo é vender ajudando — com empatia, segurança e inteligência.
-        """
+    system_instruction = get_system_prompt_unificado(
+        horario_atual,
+        known_customer_name,
+        sender_name
+    )
 
     try:
-        # 1. Inicializa o modelo COM a instrução de sistema
+        # 3. Inicializa o modelo COM a instrução de sistema
         modelo_com_sistema = genai.GenerativeModel(
-            modelo_ia.model_name, # Reutiliza o nome do modelo global ('gemini-1.5-flash')
-            system_instruction=prompt_inicial_de_sistema 
+            modelo_ia.model_name,
+            system_instruction=system_instruction,
+            tools=tools # Passa as tools globais
         )
         
-        # 2. Inicia o chat SÓ com o histórico (COMPLETO, para memória longa)
-        chat_session = modelo_com_sistema.start_chat(history=old_history) 
+        # 4. Inicia o chat SÓ com o histórico
+        chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
         
-        customer_name_to_save = known_customer_name
-
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
-        # (O resto da função: contagem de tokens, envio, extração de nome, etc... é IDÊNTICO)
+        # 5. Envio inicial para a IA
+        # (Contagem de tokens removida para simplicidade, a lógica de loop é mais importante)
+        resposta_ia = chat_session.send_message(user_message)
         
-        try:
-            # Conta tokens do (histórico completo + nova mensagem)
-            input_tokens = modelo_com_sistema.count_tokens(chat_session.history + [{'role':'user', 'parts': [user_message]}]).total_tokens
-        except Exception:
-            input_tokens = 0
-
-        resposta = chat_session.send_message(user_message)
-        
-        try:
-            output_tokens = modelo_com_sistema.count_tokens(resposta.text).total_tokens
-        except Exception:
-            output_tokens = 0
-            
-        total_tokens_na_interacao = input_tokens + output_tokens
-        
-        if total_tokens_na_interacao > 0:
-            print(f"📊 Consumo de Tokens (Nesta Interação): Total={total_tokens_na_interacao}")
-        
-        ai_reply = resposta.text
-
-        if ai_reply.strip().startswith("[NOME_CLIENTE]"):
-            print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
+        # 6. O LOOP DE FERRAMENTAS
+        while True:
+            cand = resposta_ia.candidates[0]
+            func_call = None
             try:
-                name_part = ai_reply.split("[HUMAN_INTERVENTION]")[0]
-                full_response_part = name_part.split("O nome do cliente é:")[1].strip()
-                extracted_name = full_response_part.split('.')[0].strip()
-                extracted_name = extracted_name.split(' ')[0].strip() 
-                
-                conversation_collection.update_one(
-                    {'_id': contact_id},
-                    {'$set': {'customer_name': extracted_name}},
-                    upsert=True
-                )
-                customer_name_to_save = extracted_name
-                print(f"✅ Nome '{extracted_name}' salvo para o cliente {contact_id}.")
+                func_call = cand.content.parts[0].function_call
+            except Exception:
+                func_call = None
 
-                if "[HUMAN_INTERVENTION]" in ai_reply:
-                    ai_reply = "[HUMAN_INTERVENTION]" + ai_reply.split("[HUMAN_INTERVENTION]")[1]
-                else:
-                    start_of_message_index = full_response_part.find(extracted_name) + len(extracted_name)
-                    ai_reply = full_response_part[start_of_message_index:].lstrip('.!?, ').strip()
-            except Exception as e:
-                print(f"❌ Erro ao extrair o nome da tag: {e}")
-                ai_reply = ai_reply.replace("[NOME_CLIENTE]", "").strip()
+            # 6a. Se NÃO for chamada de função, é a resposta final.
+            if not func_call or not getattr(func_call, "name", None):
+                break # Sai do loop
 
-        if not ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
-             save_conversation_to_db(contact_id, sender_name, customer_name_to_save, total_tokens_na_interacao)
+            # 6b. É uma chamada de função
+            call_name = func_call.name
+            call_args = {key: value for key, value in func_call.args.items()}
+            
+            log_info(f"🔧 IA chamou a função: {call_name} com args: {call_args}")
+            # Salva no histórico que a IA chamou a função
+            append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
+
+            # 6c. Executa a função
+            resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
+            log_info(f"📤 Resultado da função: {resultado_json_str}")
+            
+            try:
+                # Verifica se a função retornou uma tag especial (Intervenção)
+                resultado_data = json.loads(resultado_json_str)
+                if resultado_data.get("tag_especial") == "[HUMAN_INTERVENTION]":
+                    print("‼️ Intervenção detectada pela Tool. Encerrando o loop.")
+                    return f"[HUMAN_INTERVENTION] Motivo: {resultado_data.get('motivo', 'Solicitado pelo cliente.')}"
+            except Exception:
+                pass # Não era um JSON ou não tinha a tag
+
+            # 6d. Devolve o resultado para a IA
+            resposta_ia = chat_session.send_message(
+                [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
+            )
+            # (O loop continuará)
+
+        # 7. Resposta final (texto)
+        ai_reply_text = ""
+        try:
+            ai_reply_text = resposta_ia.text
+        except Exception:
+            try:
+                ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
+            except Exception:
+                ai_reply_text = "Desculpe, tive um problema ao processar sua solicitação. Pode repetir?"
         
-        return ai_reply
+        # A lógica de salvar o nome foi MOVIDA para a 'handle_tool_call'
+        # A lógica de tokens é simplificada (não implementada neste refactor)
+        save_conversation_to_db(contact_id, sender_name, known_customer_name, 0) # Salva 0 tokens
+        
+        return ai_reply_text
     
     except Exception as e:
-        print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
-        return "Desculpe, estou com um problema técnico no momento (IA_GEN_FAIL). Por favor, tente novamente em um instante."
-    
+        print(f"❌ Erro ao comunicar com a API do Gemini (loop de tools): {e}")
+        return "Desculpe, estou com um problema técnico no momento (IA_TOOL_FAIL). Por favor, tente novamente em um instante."
+   
+# ==========================================================
+# FUNÇÕES DE WHATSAPP (Copiadas do Bot Neuro)
+# ==========================================================
+
 def transcrever_audio_gemini(caminho_do_audio):
     global modelo_ia 
     if not modelo_ia:
         print("❌ Modelo de IA não inicializado. Impossível transcrever.")
         return None
+    
+    # Usa o modelo 'base' sem tools, que é mais simples para transcrição
+    modelo_base_gemini = genai.GenerativeModel('gemini-1.5-flash') 
+    
     print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição no Gemini...")
     try:
         audio_file = genai.upload_file(
             path=caminho_do_audio, 
-            mime_type="audio/ogg"
+            mime_type="audio/ogg" # Assumindo ogg, como no seu código
         )
-        response = modelo_ia.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
+        response = modelo_base_gemini.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
         genai.delete_file(audio_file.name)
         
         if response.text:
@@ -472,12 +1093,8 @@ def transcrever_audio_gemini(caminho_do_audio):
         print(f"❌ Erro ao transcrever áudio com Gemini: {e}")
         return None
 
-# --- MELHORIA: Função de envio robusta (DO CÓDIGO ATUAL) ---
 def send_whatsapp_message(number, text_message):
-    """Envia uma mensagem de texto via Evolution API, corrigindo a URL dinamicamente."""
-    
-    INSTANCE_NAME = "chatbot" # Nome da sua instância
-    
+    INSTANCE_NAME = "chatbot" 
     clean_number = number.split('@')[0]
     payload = {"number": clean_number, "textMessage": {"text": text_message}}
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
@@ -486,7 +1103,6 @@ def send_whatsapp_message(number, text_message):
     api_path = f"/message/sendText/{INSTANCE_NAME}"
     
     final_url = ""
-    
     if not base_url:
         print("❌ ERRO: EVOLUTION_API_URL não está definida no .env")
         return
@@ -510,15 +1126,17 @@ def send_whatsapp_message(number, text_message):
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro de CONEXÃO ao enviar mensagem para {clean_number}: {e}")
 
+# ==========================================================
+# LÓGICA DE RELATÓRIOS (Copiada do Bot Neuro)
+# ==========================================================
 def gerar_e_enviar_relatorio_semanal():
-    """Calcula um RESUMO do uso de tokens e envia por e-mail usando SendGrid."""
     print(f"🗓️ Gerando relatório semanal para o cliente: {CLIENT_NAME}...")
     
     SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
     EMAIL_RELATORIOS = os.environ.get('EMAIL_RELATORIOS')
 
-    if not all([SENDGRID_API_KEY, EMAIL_RELATORIOS]):
-        print("⚠️ Variáveis SENDGRID_API_KEY e EMAIL_RELATORIOS não configuradas. Relatório não pode ser enviado.")
+    if not all([SENDGRID_API_KEY, EMAIL_RELATORIOS, conversation_collection]):
+        print("⚠️ Variáveis de Relatório não configuradas ou DB de Conversas indisponível.")
         return
 
     hoje = datetime.now()
@@ -537,13 +1155,10 @@ def gerar_e_enviar_relatorio_semanal():
         corpo_email_texto = f"""
         Relatório de Consumo Acumulado do Cliente: '{CLIENT_NAME}'
         Data do Relatório: {hoje.strftime('%d/%m/%Y')}
-
         --- RESUMO GERAL DE USO ---
-
         👤 Número de Contatos Únicos: {numero_de_contatos}
         🔥 Consumo Total de Tokens (Acumulado): {total_geral_tokens}
         📊 Média de Tokens por Contato: {media_por_contato:.0f}
-
         ---------------------------
         Atenciosamente,
         Seu Sistema de Monitoramento.
@@ -567,7 +1182,9 @@ def gerar_e_enviar_relatorio_semanal():
     except Exception as e:
         print(f"❌ Erro ao gerar ou enviar relatório para '{CLIENT_NAME}': {e}")
 
-# --- MELHORIA: Inicialização Global (DO CÓDIGO ATUAL) ---
+# ==========================================================
+# LÓGICA DE SERVIDOR E WEBHOOK (Copiada do Bot Neuro)
+# ==========================================================
 scheduler = BackgroundScheduler(daemon=True, timezone='America/Sao_Paulo')
 scheduler.start()
 
@@ -576,27 +1193,21 @@ processed_messages = set()
 
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
-    """
-    (VERSÃO MELHORADA - DO CÓDIGO ATUAL)
-    Recebe mensagens do WhatsApp e as coloca no buffer.
-    """
     data = request.json
-    print(f"📦 DADO BRUTO RECEBIDO NO WEBHOOK: {data}")
+    # print(f"📦 DADO BRUTO RECEBIDO NO WEBHOOK: {data}") # Muito verboso
 
     event_type = data.get('event')
-    
     if event_type and event_type != 'messages.upsert':
-        print(f"➡️  Ignorando evento: {event_type} (não é uma nova mensagem)")
+        # print(f"➡️  Ignorando evento: {event_type}")
         return jsonify({"status": "ignored_event_type"}), 200
 
     try:
         message_data = data.get('data', {}) 
         if not message_data:
-             message_data = data
-             
+            message_data = data
+            
         key_info = message_data.get('key', {})
         if not key_info:
-            print("➡️ Evento sem 'key'. Ignorando.")
             return jsonify({"status": "ignored_no_key"}), 200
 
         if key_info.get('fromMe'):
@@ -607,7 +1218,7 @@ def receive_webhook():
             clean_number = sender_number_full.split('@')[0]
             
             if clean_number != RESPONSIBLE_NUMBER:
-                print(f"➡️  Mensagem do próprio bot ignorada (remetente: {clean_number}).")
+                # print(f"➡️  Mensagem do próprio bot ignorada (remetente: {clean_number}).")
                 return jsonify({"status": "ignored_from_me"}), 200
             
             print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {clean_number}).")
@@ -617,7 +1228,7 @@ def receive_webhook():
             return jsonify({"status": "ignored_no_id"}), 200
 
         if message_id in processed_messages:
-            print(f"⚠️ Mensagem {message_id} já processada, ignorando.")
+            # print(f"⚠️ Mensagem {message_id} já processada, ignorando.")
             return jsonify({"status": "ignored_duplicate"}), 200
         processed_messages.add(message_id)
         if len(processed_messages) > 1000:
@@ -634,13 +1245,12 @@ def receive_webhook():
 
 @app.route('/', methods=['GET'])
 def health_check():
-    return f"Estou vivo! ({CLIENT_NAME} Bot)", 200 # <-- Nome do cliente adaptado
+    return f"Estou vivo! ({CLIENT_NAME} Bot v2 - com Agenda)", 200 
 
-# --- MELHORIA: Funções de Buffer Otimizadas (DO CÓDIGO ATUAL) ---
+# ==========================================================
+# LÓGICA DE BUFFER (Copiada do Bot Neuro)
+# ==========================================================
 def handle_message_buffering(message_data):
-    """
-    Agrupa mensagens de texto e processa áudio imediatamente.
-    """
     global message_buffer, message_timers, BUFFER_TIME_SECONDS
     
     try:
@@ -686,15 +1296,12 @@ def handle_message_buffering(message_data):
         )
         message_timers[clean_number] = timer
         timer.start()
-        print(f"⏰ Buffer de {clean_number} resetado. Aguardando {BUFFER_TIME_SECONDS}s...")
+        # print(f"⏰ Buffer de {clean_number} resetado. Aguardando {BUFFER_TIME_SECONDS}s...")
 
     except Exception as e:
         print(f"❌ Erro no 'handle_message_buffering': {e}")
             
 def _trigger_ai_processing(clean_number, last_message_data):
-    """
-    Função chamada pelo Timer. Junta as mensagens e chama a 'process_message_logic'.
-    """
     global message_buffer, message_timers
     
     if clean_number not in message_buffer:
@@ -712,21 +1319,20 @@ def _trigger_ai_processing(clean_number, last_message_data):
     print(f"⚡️ DISPARANDO IA para {clean_number} com mensagem agrupada: '{full_user_message}'")
 
     threading.Thread(target=process_message_logic, args=(last_message_data, full_user_message)).start()
-# --- FIM DAS FUNÇÕES DE BUFFER ---
 
-# --- MELHORIA: Comando do Responsável (DO CÓDIGO ATUAL) ---
-# (Substitua sua função 'handle_responsible_command' inteira por esta)
+# ==========================================================
+# LÓGICA DE COMANDOS (Copiada do Bot Neuro)
+# ==========================================================
 def handle_responsible_command(message_content, responsible_number):
-    """
-    Processa comandos enviados pelo número do responsável.
-    INCLUI: 'bot on', 'bot off' e 'ok <numero>'
-    """
+    if not conversation_collection:
+        send_whatsapp_message(responsible_number, "❌ Erro: Comandos desabilitados (DB de Conversas indisponível).")
+        return True
+        
     print(f"⚙️  Processando comando do responsável: '{message_content}'")
     
     command_lower = message_content.lower().strip()
     command_parts = command_lower.split()
 
-    # --- COMANDO LIGA/DESLIGA ---
     if command_lower == "bot off":
         try:
             conversation_collection.update_one(
@@ -752,9 +1358,7 @@ def handle_responsible_command(message_content, responsible_number):
         except Exception as e:
             send_whatsapp_message(responsible_number, f"❌ Erro ao reativar o bot: {e}")
             return True
-    # --- FIM DO COMANDO LIGA/DESLIGA ---
 
-    # --- Comando 'ok <numero>' ---
     if len(command_parts) == 2 and command_parts[0] == "ok":
         customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
         
@@ -770,11 +1374,8 @@ def handle_responsible_command(message_content, responsible_number):
                 {'$set': {'intervention_active': False}}
             )
 
-            # O cache de sessão não é mais usado, então não precisamos limpá-lo
-
             if result.modified_count > 0:
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
-                # --- MENSAGEM ADAPTADA (DO CÓDIGO 2) ---
                 send_whatsapp_message(customer_number_to_reactivate, "Oi sou eu a Lyra novamente, voltei pro seu atendimento. se precisar de algo me diga! 😊")
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
@@ -786,8 +1387,6 @@ def handle_responsible_command(message_content, responsible_number):
             send_whatsapp_message(responsible_number, f"❌ Ocorreu um erro técnico ao tentar reativar o cliente. Verifique o log do sistema.")
             return True
             
-    # --- Mensagem de ajuda ---
-    print("⚠️ Comando não reconhecido do responsável.")
     help_message = (
         "Comando não reconhecido. 🤖\n\n"
         "*COMANDOS DISPONÍVEIS:*\n\n"
@@ -797,18 +1396,25 @@ def handle_responsible_command(message_content, responsible_number):
     )
     send_whatsapp_message(responsible_number, help_message)
     return True
-# --- FIM DO COMANDO DO RESPONSÁVEL ---
 
-
-# --- MELHORIA: Lógica de Processamento com LOCK (DO CÓDIGO ATUAL) ---
+# ==========================================================
+# LÓGICA PRINCIPAL DE PROCESSAMENTO (REFATORADA)
+# ==========================================================
 def process_message_logic(message_data, buffered_message_text=None):
     """
-    (VERSÃO FINAL)
-    Esta é a função "worker" principal. Ela pega o lock e chama a IA.
+    (VERSÃO FINAL - UNIFICADA)
+    Esta é a função "worker" principal. Ela pega o lock e chama a IA (com tools).
     """
     lock_acquired = False
     clean_number = None
     
+    if not conversation_collection:
+        print("❌ Processamento interrompido: DB de Conversas indisponível.")
+        return
+    if not modelo_ia:
+        print("❌ Processamento interrompido: Modelo IA não inicializado.")
+        return
+        
     try:
         key_info = message_data.get('key', {})
         sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
@@ -817,7 +1423,7 @@ def process_message_logic(message_data, buffered_message_text=None):
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
-        # --- Lógica de LOCK (do Código 1) ---
+        # --- Lógica de LOCK ---
         now = datetime.now()
         res = conversation_collection.update_one(
             {'_id': clean_number, 'processing': {'$ne': True}},
@@ -837,13 +1443,10 @@ def process_message_logic(message_data, buffered_message_text=None):
             return 
         
         lock_acquired = True
-        if res.upserted_id:
-             print(f"✅ Novo usuário {clean_number}. Documento criado e lock adquirido.")
         # --- Fim do Lock ---
         
         user_message_content = None
         
-        # --- Lógica de Buffer/Áudio (do Código 1) ---
         if buffered_message_text:
             user_message_content = buffered_message_text
             messages_to_save = user_message_content.split(". ")
@@ -851,7 +1454,6 @@ def process_message_logic(message_data, buffered_message_text=None):
                 if msg_text and msg_text.strip():
                     append_message_to_db(clean_number, 'user', msg_text)
         else:
-            # Lógica de Áudio (processamento imediato)
             message = message_data.get('message', {})
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
@@ -874,11 +1476,9 @@ def process_message_logic(message_data, buffered_message_text=None):
                     user_message_content = "[Usuário enviou um áudio incompreensível]"
             
             if not user_message_content:
-                 user_message_content = "[Usuário enviou uma mensagem não suportada]"
-                 
-            # Salva a mensagem (de áudio ou não) no DB ANTES de chamar a IA
+                user_message_content = "[Usuário enviou uma mensagem não suportada]"
+                
             append_message_to_db(clean_number, 'user', user_message_content)
-        # --- Fim da Lógica de Buffer/Áudio ---
 
         print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
         
@@ -907,9 +1507,8 @@ def process_message_logic(message_data, buffered_message_text=None):
 
         known_customer_name = conversation_status.get('customer_name') if conversation_status else None
         
-        # --- CHAMADA PADRÃO ---
-        # A 'gerar_resposta_ia' agora é inteligente o suficiente para fazer tudo
-        ai_reply = gerar_resposta_ia(
+        # --- CHAMADA DA IA (AGORA COM TOOLS) ---
+        ai_reply = gerar_resposta_ia_com_tools(
             clean_number,
             sender_name_from_wpp,
             user_message_content,
@@ -925,6 +1524,8 @@ def process_message_logic(message_data, buffered_message_text=None):
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
             # --- LÓGICA DE INTERVENÇÃO (Pós-IA) ---
+            # Esta lógica continua a mesma e vai funcionar, 
+            # pois 'gerar_resposta_ia_com_tools' retorna a tag exata.
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
                 
@@ -938,10 +1539,8 @@ def process_message_logic(message_data, buffered_message_text=None):
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                     display_name = known_customer_name or sender_name_from_wpp
                     
-                    # Pega o histórico mais recente (que já inclui a msg do usuário)
                     history_summary = "Nenhum histórico de conversa encontrado."
-                    if conversation_status and 'history' in conversation_status:
-                        # Recarrega o histórico completo com a ÚLTIMA msg do usuário
+                    if conversation_status:
                         history_com_ultima_msg = load_conversation_from_db(clean_number).get('history', [])
                         history_summary = get_last_messages_summary(history_com_ultima_msg)
 
@@ -969,22 +1568,24 @@ def process_message_logic(message_data, buffered_message_text=None):
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
         # --- Libera o Lock ---
-        if clean_number and lock_acquired: 
+        if clean_number and lock_acquired and conversation_collection: 
             conversation_collection.update_one(
                 {'_id': clean_number},
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
-            print(f"🔓 Lock liberado para {clean_number}.")
+            # print(f"🔓 Lock liberado para {clean_number}.")
 
-
-if modelo_ia:
+# ==========================================================
+# INICIALIZAÇÃO DO SERVIDOR
+# ==========================================================
+if modelo_ia and conversation_collection and agenda_instance:
     print("\n=============================================")
-    print("   CHATBOT WHATSAPP COM IA INICIADO")
-    print(f"   CLIENTE: {CLIENT_NAME}")
+    print("   CHATBOT WHATSAPP COM IA INICIADO (V2 - COM AGENDA)")
+    print(f"   CLIENTE: {CLIENT_NAME}")
     if not RESPONSIBLE_NUMBER:
-        print("   AVISO: 'RESPONSIBLE_NUMBER' não configurado. O recurso de intervenção humana não notificará ninguém.")
+        print("   AVISO: 'RESPONSIBLE_NUMBER' não configurado.")
     else:
-        print(f"   Intervenção Humana notificará: {RESPONSIBLE_NUMBER}")
+        print(f"   Intervenção Humana notificará: {RESPONSIBLE_NUMBER}")
     print("=============================================")
     print("Servidor aguardando mensagens no webhook...")
 
@@ -995,9 +1596,12 @@ if modelo_ia:
     atexit.register(lambda: scheduler.shutdown())
     
 else:
-    print("\nEncerrando o programa devido a erros na inicialização.")
+    print("\nEncerrando o programa devido a erros na inicialização (Verifique APIs e DBs).")
+    # (O programa não deve continuar se os componentes principais falharem)
+    exit() # Encerra se o modelo ou DBs falharem
 
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))
+    # Desative o 'debug=True' em produção. Use 'debug=False'.
     app.run(host='0.0.0.0', port=port, debug=False)
