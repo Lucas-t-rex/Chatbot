@@ -12,7 +12,7 @@ import logging
 import base64
 import threading
 from flask import Flask, request, jsonify
-from datetime import datetime, timedelta, UTC, time as dt_time
+from datetime import datetime, timedelta, timezone, time as dt_time
 from dateutil import parser as dateparser
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -332,7 +332,7 @@ class Agenda:
                 "duracao_minutos": duracao_minutos,
                 "inicio": inicio_dt, 
                 "fim": fim_dt,
-                "created_at": datetime.now(UTC)
+                "created_at": datetime.now(timezone.utc)
             }
             
             self.collection.insert_one(novo_documento)
