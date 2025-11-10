@@ -13,20 +13,22 @@ from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
 import json 
 
-CLIENT_NAME = "Mengatto Estratégia Digital" # <--- EDITAR final_user_name_for_prompt DO CLIENTE
-RESPONSIBLE_NUMBER = "554985033507" # <--- EDITAR: Número do responsável com 55+DDD
+# --- CONFIGURAÇÃO DO CLIENTE (DO CÓDIGO ANTIGO) ---
+CLIENT_NAME = "Neuro Soluções em Tecnologia"
+RESPONSIBLE_NUMBER = "554898389781" # <-- MANTIDO DO CÓDIGO ANTIGO
+# --- FIM DA CONFIGURAÇÃO ---
 
 load_dotenv()
-EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL") # <--- EDITAR NO .ENV
-EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234") # <--- EDITAR NO .ENV
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY") # <--- EDITAR NO .ENV
-MONGO_DB_URI = os.environ.get("MONGO_DB_URI") # <--- EDITAR NO .ENV
+EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
+EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+MONGO_DB_URI = os.environ.get("MONGO_DB_URI")
 
-
+# --- MELHORIA: Sistema de Buffer (DO CÓDIGO ATUAL) ---
 message_buffer = {}
 message_timers = {}
 BUFFER_TIME_SECONDS = 8 
-
+# --- FIM DA MELHORIA ---
 
 try:
     client = MongoClient(MONGO_DB_URI)
@@ -46,7 +48,6 @@ if GEMINI_API_KEY:
 else:
     print("AVISO: A variável de ambiente GEMINI_API_KEY não foi definida.")
 
-
 modelo_ia = None
 try:
     modelo_ia = genai.GenerativeModel('gemini-2.5-flash')
@@ -54,7 +55,7 @@ try:
 except Exception as e:
     print(f"❌ ERRO: Não foi possível inicializar o modelo do Gemini. Verifique sua API Key. Erro: {e}")
 
-# <--- MELHORIA: Nova função para salvar mensagens individuais ---
+# --- MELHORIA: Funções de DB 'Stateless' (DO CÓDIGO ATUAL) ---
 def append_message_to_db(contact_id, role, text, message_id=None):
     """Salva uma única mensagem no histórico do DB."""
     try:
@@ -73,11 +74,9 @@ def append_message_to_db(contact_id, role, text, message_id=None):
     except Exception as e:
         print(f"❌ Erro ao append_message_to_db: {e}")
         return False
-# --- Fim da Melhoria ---
 
-# <--- MELHORIA: Função de salvar foi simplificada para salvar apenas METADADOS ---
 def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used):
-    """Salva metadados (final_user_name_for_prompts, tokens) no MongoDB."""
+    """Salva metadados (nomes, tokens) no MongoDB."""
     try:
         update_payload = {
             'sender_name': sender_name,
@@ -96,15 +95,12 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used)
         )
     except Exception as e:
         print(f"❌ Erro ao salvar metadados da conversa no MongoDB para {contact_id}: {e}")
-# --- Fim da MelhorIA ---
 
-# <--- MELHORIA: Função de carregar agora ordena o histórico por data/hora ---
 def load_conversation_from_db(contact_id):
     """Carrega o histórico de uma conversa do MongoDB, ordenando por timestamp."""
     try:
         result = conversation_collection.find_one({'_id': contact_id})
         if result:
-            # Garante que 'history' exista e ordena
             history = result.get('history', [])
             history_sorted = sorted(history, key=lambda m: m.get('ts', ''))
             result['history'] = history_sorted
@@ -113,32 +109,26 @@ def load_conversation_from_db(contact_id):
     except Exception as e:
         print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
     return None
-# --- Fim da Melhoria ---
+# --- FIM DAS FUNÇÕES DE DB ---
 
-# (Função 'get_last_messages_summary' mantida - é essencial para a intervenção)
 def get_last_messages_summary(history, max_messages=4):
     """Formata as últimas mensagens de um histórico para um resumo legível, ignorando prompts do sistema."""
     summary = []
-    
-    # <--- MELHORIA: Pequena correção no 'get_last_messages_summary' ---
-    # O histórico agora vem no formato {'role': ..., 'text': ...}
     relevant_history = history[-max_messages:]
     
     for message in relevant_history:
         role = "Cliente" if message.get('role') == 'user' else "Bot"
         text = message.get('text', '').strip()
 
-        # Ignora prompts do sistema (esta parte é do seu código de intervenção, mas adaptada)
         if role == "Cliente" and text.startswith("A data e hora atuais são:"):
             continue 
+        # --- ADAPTADO: Texto de 'ack' do bot da Neuro Soluções ---
         if role == "Bot" and text.startswith("Entendido. A Regra de Ouro"):
             continue 
             
         summary.append(f"*{role}:* {text}")
         
     if not summary:
-        # Pega a última mensagem de texto do cliente se o histórico estiver "poluído"
-        # Esta é uma salvaguarda
         user_messages = [msg.get('text') for msg in history if msg.get('role') == 'user' and not msg.get('text', '').startswith("A data e hora atuais são:")]
         if user_messages:
             return f"*Cliente:* {user_messages[-1]}"
@@ -146,14 +136,13 @@ def get_last_messages_summary(history, max_messages=4):
             return "Nenhum histórico de conversa encontrado."
             
     return "\n".join(summary)
-# --- Fim da Melhoria ---
 
-def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name):
+def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name): 
     """
-    (VERSÃO CORRIGIDA - BUGS 1 e 2)
-    Gera uma resposta usando a IA, agora com lógica de prioridade de intervenção.
+    (VERSÃO FINAL - QUALIDADE MÁXIMA + MEMÓRIA TOTAL)
+    Usa 'system_instruction' para inteligência E carrega o histórico completo para memória.
     """
-    global modelo_ia
+    global modelo_ia # Pega o modelo global (gemini-1.5-flash)
 
     if not modelo_ia:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
@@ -163,9 +152,19 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
     old_history = []
     
     if convo_data:
+        # A lógica para buscar o nome (que não é do histórico) funciona perfeitamente
         known_customer_name = convo_data.get('customer_name', known_customer_name) 
         if 'history' in convo_data:
-            history_from_db = [msg for msg in convo_data['history'] if not msg.get('text', '').strip().startswith("A data e hora atuais são:")]
+            
+            # --- MEMÓRIA TOTAL (BOLA DE NEVE) ---
+            # Carrega o histórico COMPLETO, sem truncamento.
+            history_full = convo_data.get('history', []) 
+            print(f"📜 MEMÓRIA LONGA ATIVA. Carregando histórico completo ({len(history_full)} msgs).")
+            # --- FIM ---
+            
+            # Filtra o prompt antigo (boa prática, caso ainda exista no DB)
+            history_from_db = [msg for msg in history_full if not msg.get('text', '').strip().startswith("A data e hora atuais são:")]
+            
             for msg in history_from_db:
                 role = msg.get('role', 'user')
                 if role == 'assistant':
@@ -176,161 +175,127 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
                         'role': role,
                         'parts': [msg['text']]
                     })
+    
     if known_customer_name:
         print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
 
+    # (Lógica de Fuso Horário)
     try:
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
         horario_atual = agora_local.strftime("%Y-%m-%d %H:%M:%S")
-        print(f"⏰ Hora local (America/Sao_Paulo) definida para: {horario_atual}")
     except Exception as e:
-        print(f"⚠️ Erro ao definir fuso horário, usando hora do servidor. Erro: {e}")
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # --- PROMPT DE NOME DINÂMICO ---
+    # Esta é a lógica que garante que ele pergunte o nome se não souber.
     prompt_name_instruction = ""
-    final_user_name_for_prompt = ""
-
     if known_customer_name:
+        # Se JÁ SABE o nome, a instrução é simples:
         final_user_name_for_prompt = known_customer_name
-        prompt_name_instruction = f"O final_user_name_for_prompt do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este final_user_name_for_prompt."
+        prompt_name_instruction = f"O nome do usuário com quem você está falando é: {final_user_name_for_prompt}. Trate-o por este nome."
     else:
+        # Se NÃO SABE o nome, a instrução é a regra de captura:
         final_user_name_for_prompt = sender_name
-        # (A regra de captura de final_user_name_for_prompt original será inserida abaixo)
         prompt_name_instruction = f"""
-            REGRA CRÍTICA - CAPTURA DE final_user_name_for_prompt INTELIGENTE (PRIORIDADE MÁXIMA):
+            REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
               (Esta regra SÓ se aplica se a REGRA DE OURO de intervenção não for acionada primeiro)
-              Seu final_user_name_for_prompt é {{Lyra}} e você é atendente da {{Mengatto Estratégia Digital}}.
-              Seu primeiro objetivo é sempre descobrir o final_user_name_for_prompt real do cliente, pois o final_user_name_for_prompt de contato ('{sender_name}') pode ser um apelido. No entanto, você deve fazer isso de forma natural.
-              1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi", "boa noite"), peça o final_user_name_for_prompt dele de forma direta e educada.
+              Seu nome é {{Lyra}} e você é atendente da {{Mengatto Estratégia Digital}}.
+              Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido. No entanto, você deve fazer isso de forma natural.
+              1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi", "boa noite"), peça o nome dele de forma direta e educada.
               2. Se a primeira mensagem do cliente já contiver uma pergunta (ex: "oi, qual o preço?", "quero saber como funciona"), você deve:
                  - Primeiro, acalmar o cliente dizendo que já vai responder.
-                 - Em seguida, peça o final_user_name_for_prompt para personalizar o atendimento.
+                 - Em seguida, peça o nome para personalizar o atendimento.
                  - *IMPORTANTE*: Você deve guardar a pergunta original do cliente na memória.
-              3. Quando o cliente responder com o final_user_name_for_prompt dele (ex: "Meu final_user_name_for_prompt é Marcos"), sua próxima resposta DEVE OBRIGATORIAMENTE:
-                 - Começar com a tag: [final_user_name_for_prompt_CLIENTE]O final_user_name_for_prompt do cliente é: [final_user_name_for_prompt Extraído].
-                 - Agradecer ao cliente pelo final_user_name_for_prompt.
+              3. Quando o cliente responder com o nome dele (ex: "Meu nome é Marcos"), sua próxima resposta DEVE OBRIGATORIAMENTE:
+                 - Começar com a tag: [NOME_CLIENTE]O nome do cliente é: [Nome Extraído].
+                 - Agradecer ao cliente pelo nome.
                  - *RESPONDER IMEDIATAMENTE à pergunta original que ele fez no início da conversa.* Não o faça perguntar de novo.
-              4. Se não tiver historico de converssa anterior faça a aprensetação de forma amigavel e dinamica, se apresente, apresente a empresa, e continue para saber o final_user_name_for_prompt. 
-            EXEMPLO DE FLUXO IDEAL:
-                Cliente: "boa noite, queria saber o preço da assessoria"
-                Você: "Boa noite! Claro, já te passo os detalhes. Para que nosso atendimento fique mais próximo, como posso te chamar?"
-                Cliente: "pode me chamar de Marcos"
-                Sua Resposta: "[final_user_name_for_prompt_CLIENTE]O final_user_name_for_prompt do cliente é: Marcos. Prazer, Marcos! A assessoria é o caminho para quem busca previsibilidade e posicionamento. Para entender seu momento, o Raffael prefere fazer uma 'Call de Alinhamento'. Podemos marcar?"
-
+              4. Se não tiver historico de converssa anterior faça a aprensetação de forma amigavel e dinamica, se apresente, apresente a empresa, e continue para saber o nome. 
             """
-        
-    # --- INÍCIO DA CORREÇÃO (BUG 1 e 2) ---
-    # O prompt foi reestruturado para dar prioridade à intervenção.
-    prompt_inicial = f"""
+    # --- FIM DO PROMPT DE NOME ---
+    
+    # --- SYSTEM INSTRUCTION (O "TREINAMENTO") ---
+    # Aqui colocamos seu prompt gigante inteiro, incluindo a instrução de nome dinâmica
+    prompt_inicial_de_sistema = f"""
             A data e hora atuais são: {horario_atual}.
             
             =====================================================
             🆘 REGRA DE OURO: ANÁLISE DE INTERVENÇÃO (PRIORIDADE ABSOLUTA)
             =====================================================
-            - SUA TAREFA MAIS IMPORTANTE é identificar se o cliente quer falar com "Raffael" (o proprietário).
-            - Se a mensagem do cliente contiver QUALQUER PEDIDO para falar com "Raffael" (ex: "quero falar com o Raffael", "falar com o dono", "chama o Raffael", "o Raffael está?"), esta regra ANULA TODAS AS OUTRAS.
+            - SUA TAREFA MAIS IMPORTANTE é identificar se o cliente quer falar com "Lucas" (o proprietário).
+            - Se a mensagem do cliente contiver QUALQUER PEDIDO para falar com "Lucas" (ex: "quero falar com o Lucas", "falar com o dono", "chama o Lucas", "o Lucas está?"), esta regra ANULA TODAS AS OUTRAS.
             
-            1.  **CENÁRIO 1 (BUG 1): final_user_name_for_prompt + INTERVENÇÃO JUNTOS**
-                - Se o final_user_name_for_prompt AINDA NÃO FOI CAPTURADO (prompt_name_instruction está ativo).
-                - E o cliente responder com o final_user_name_for_prompt E o pedido de intervenção na MESMA FRASE (ex: "Meu final_user_name_for_prompt é Lucas e quero falar com o Raffael" ou "Lucas, quero falar com o Raffael").
-                - Você DEVE capturar o final_user_name_for_prompt E acionar a intervenção SIMULTANEAMENTE.
-                - **Resposta Correta (EXATA):** `[final_user_name_for_prompt_CLIENTE]O final_user_name_for_prompt do cliente é: Lucas. [HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o Raffael.`
-                - (O código do sistema irá tratar as duas tags. NÃO adicione "Prazer em conhecê-lo" ou qualquer outro texto).
-                - - **EXEMPLO DO QUE NÃO FAZER (ERRADO):** `Prazer em conhecê-lo, Lucas! Entendi. Para que eu possa te ajudar... [HUMAN_INTERVENTION]...` <-- ISSO ESTÁ ERRADO. A REGRA DE OURO EXIGE A TAG IMEDIATA.
+            1.  **CENÁRIO 1: NOME + INTERVENÇÃO JUNTOS**
+                - Se o nome AINDA NÃO FOI CAPTURADO.
+                - E o cliente responder com o nome E o pedido de intervenção na MESMA FRASE (ex: "Meu nome é Marcos e quero falar com o Lucas").
+                - Você DEVE capturar o nome E acionar a intervenção SIMULTANEAMENTE.
+                - **Resposta Correta (EXATA):** `[NOME_CLIENTE]O nome do cliente é: Marcos. [HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o Lucas.`
                 
             2.  **CENÁRIO 2: APENAS INTERVENÇÃO**
-                - Se o cliente (com final_user_name_for_prompt já conhecido ou não) pedir para falar com o Raffael.
-                - **Resposta Correta (EXATA):** `[HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o Raffael.`
+                - Se o cliente (com nome já conhecido ou não) pedir para falar com o Lucas.
+                - **Resposta Correta (EXATA):** `[HUMAN_INTERVENTION] Motivo: Cliente solicitou falar com o Lucas.`
 
-            3.  **CENÁRIO 3 (BUG 2): EXCEÇÃO CRÍTICA (FALSO POSITIVO)**
-                - Se o cliente APENAS se apresentar com o final_user_name_for_prompt "Raffael" (ex: "Meu final_user_name_for_prompt é Raffael", "Pode me chamar de Raffael").
+            3.  **CENÁRIO 3: EXCEÇÃO CRÍTICA (FALSO POSITIVO)**
+                - Se o cliente APENAS se apresentar com o nome "Lucas" (ex: "Meu nome é Lucas", ou "Lucas").
                 - ISSO **NÃO** É UMA INTERVENÇÃO. É uma apresentação.
-                - **Resposta Correta (se o final_user_name_for_prompt não foi capturado):** `[final_user_name_for_prompt_CLIENTE]O final_user_name_for_prompt do cliente é: Raffael. Prazer em conhecê-lo, Raffael! Como posso te ajudar?`
+                - **Resposta Correta (se o nome não foi capturado):** `[NOME_CLIENTE]O nome do cliente é: Lucas. Prazer em conhecê-lo, Lucas! Como posso te ajudar?`
             =====================================================
             
-            {prompt_name_instruction} # A regra de final_user_name_for_prompt original agora vem DEPOIS da regra de intervenção
+            {prompt_name_instruction}
             
-            Dever: Vender o Acompanhamento 1:1 ou a Assessoria do Raffael Mengatto, qualificando o lead para uma "Call de Alinhamento". Se o cliente pedir explicitamente para "falar com Raffael" ou "falar com o dono", acionar a intervenção humana.
-                        
+            Dever : Potencializar os nossos planos entendendo como pode ajudar o clinte, se quer saber sobre a empresa ou falar com o Lucas(Proprietario).
+            Missão : Agendar um horario para reunião com o proprietario. 
+            
             =====================================================
             🏷️ IDENTIDADE DO ATENDENTE
             =====================================================
-            final_user_name_for_prompt: {{Lyra}}
+            nome: {{Lyra}}
             sexo: {{Feminina}}
             idade: {{40}}
-            função: {{Assistente Estratégica}} 
-            papel: {{Você é a "triagem" do Raffael. Sua função é entender a dor do cliente (geralmente terapeutas ou experts perdidos no digital ) e qualificá-lo para a "Call de Alinhamento".}}
-            Tom de voz: {{Humana, direta, estratégica, consciente e firme (sem ser arrogante). Use a filosofia DEP (Decisão, Estratégia, Persistência) nas metáforas }} 
+            função: {{Atendente, vendedora, especialista em TI e machine learning}} 
+            papel: {{Atender o cliente de forma profissional e amigável, entender sua necessidade, oferecer soluções personalizadas, tirar dúvidas, vender o plano ideal, enviar catálogos e agendar horários quando necessário.}} 
             =====================================================
             🏢 IDENTIDADE DA EMPRESA
             =====================================================
-            final_user_name_for_prompt da empresa: {{Raffael Mengatto (trate como a marca pessoal dele)}}
-            setor: {{Estratégia Digital, Posicionamento e Performance}}
-            Diferencial: {{"Nós não somos uma agência comum que aperta botões. O Raffael entra no seu negócio como se fosse dele, alinhando estratégia e execução."}}
-            Filosofia: {{DEP (Decisão, Estratégia, Persistência). Metáfora: "O digital é como o tatame: não basta força, é preciso estratégia e saber respirar sob pressão."}}
-            Slogan: {{"Vitórias nascem de decisões conscientes."}}
-            Horário de atendimento: {{Segunda a sexta, das 8h às 18h.}}(Voce pode atender fora de horario tambem, apenas tem horario caso a pessoa pergunte)
-            endereço: {{Treze Tílias - SC, Brasil}}
+            nome da empresa: {{Neuro Soluções em Tecnologia}}
+            setor: {{Tecnologia e Automação}} 
+            missão: {{Facilitar e organizar as empresas de clientes por meio de soluções inteligentes e automação.}}
+            valores: {{Organização, transparência, persistência e ascensão.}}
+            horário de atendimento: {{De segunda a sexta, das 8:00 às 18:00.}}
+            endereço: {{R. Pioneiro Alfredo José da Costa, 157 - Jardim Alvorada, Maringá - PR, 87035-270}}
             =====================================================
             🏛️ HISTÓRIA DA EMPRESA
             =====================================================
-            {{Criada por Raffael Mengatto, estrategista digital e mentor de performance, a Mengatto Estratégia Digital nasceu para transformar negócios em marcas conscientes. 
-            Unindo o humano e o tecnológico, a empresa entrega estratégias de posicionamento, automação e presença digital real — com inteligência aplicada à alma do negócio.}}
+            {{Fundada em Maringá - PR, em 2025, a Neuro Soluções em Tecnologia nasceu com o propósito de unir inovação e praticidade. Criada por profissionais apaixonados por tecnologia e automação, a empresa cresceu ajudando empreendedores a otimizar processos, economizar tempo e aumentar vendas por meio de chatbots e sistemas inteligentes.}}
             =====================================================
             ℹ️ INFORMAÇÕES GERAIS
             =====================================================
-            público-alvo: {{Empreendedores, terapeutas, prestadores de serviço e empresas que desejam crescer com posicionamento e previsibilidade.}}
-            diferencial: {{Atendimento humano, estratégia personalizada e integração com tecnologia de ponta.}}
-            slogan: {{Consciência que converte. Estratégia que sustenta.}}
+            público-alvo: {{Empresas, empreendedores e prestadores de serviço que desejam automatizar atendimentos e integrar inteligência artificial ao seu negócio.}}
+            diferencial: {{Atendimento personalizado, chatbots sob medida e integração total com o WhatsApp e ferramentas de IA.}}
+            tempo de mercado: {{Desde 2025}}
+            slogan: {{O futuro é agora!}}
             =====================================================
-            💼 SERVIÇOS / SOLUÇÕES
+            💼 SERVIÇOS / CARDÁPIO
             =====================================================
-            Objetivo: Você NUNCA descreve o serviço em detalhes. Você o apresenta como uma solução e direciona para a Call.
-            Gestão de Tráfego (Meta & Google):
-                Copy (se perguntarem): "É o serviço para quem quer previsibilidade e atrair os clientes certos, sem queimar dinheiro com anúncios que não convertem."
-            Posicionamento & Social Media:
-                Copy: "Para quem quer transformar seguidores em clientes e ter uma marca com autoridade real no digital."
-            Criação de Sites/Landing Pages:
-                Copy: "É a sua 'casa' digital, o seu tatame. Um site focado em converter 24 horas por dia."
-            Assistente IA (Exclusivo):
-                Copy: "Um 'funcionário' digital que o Raffael mesmo treina, capaz de atender e vender por você no WhatsApp 24h por dia."
-            Acompanhamento 1:1 (Assessoria Estratégica):
-                Copy: "É o serviço principal. O Raffael entra 1:1 com você para alinhar todas as peças: posicionamento, comunicação, tráfego e vendas."
+            - Plano Atendente: {{Atendente personalizada, configurada conforme a necessidade do cliente. Pode atuar de forma autônoma, com intervenção humana ou bifurcação de mensagens.}}
+            - Plano Secretário: {{Agendamento Inteligente, Avisos Automáticos e Agenda Integrada.}}
+            - Plano Premium: {{Em construção.}}
             =====================================================
-            💰 PLANOS E INVESTIMENTO
+            💰 PLANOS E VALORES
             =====================================================
-            REGRA: Você NUNCA informa valores. O valor depende do diagnóstico na call.
-            Se o cliente insistir no preço, use a Técnica da Ancoragem de Valor:
-                Script: "Entendo, {final_user_name_for_prompt}. Mas como o Raffael diz, o digital é como o jiu-jitsu: cada movimento é único. O investimento depende do seu momento e do seu 'desafio' atual. É por isso que o primeiro passo é a 'Call de Alinhamento' com ele. Nela, ele te dá clareza e já desenha o plano. Podemos agendar?"
+            Instalação: {{R$250,00 taxa única}} para setup inicial do projeto e requisitos da IA. 
+            Plano Atendente: {{R$400,00 mensal}}
+            Plano Secretário: {{R$700,00 mensal}}
+            Plano Avançado: {{Em análise}}
+            observações: {{Valores podem variar conforme personalização ou integrações extras.}}
             =====================================================
-            🧭 COMPORTAMENTO DE ATENDIMENTO
+            🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO
             =====================================================
-            SEJA CONCISA (A DOR DO USUÁRIO):
-            Suas respostas devem ser curtas, diretas e humanas.
-             	MÁXIMO de 2 ou 3 frases por mensagem. Evite blocos longos de texto.
-            NÃO ENTREGUE O OURO:
-             	NUNCA explique o "como" (a estratégia, o método DEP em detalhes).
-             	SEMPRE foque na "transformação" (clareza, previsibilidade, posicionamento).
-            FOCO TOTAL NO AGENDAMENTO:
-             	Sua meta principal é levar o cliente para a "Call de Alinhamento" com o Raffael.
-             	Toda resposta deve terminar, idealmente, com uma pergunta que leve ao agendamento. (Ex: "Faz sentido para você?", "Podemos agendar sua Call?", "Qual melhor horário para falarmos?").
-            USE AS METÁFORAS (GERAR DESEJO):
-             	Use o jiu-jitsu e o DEP de forma sutil para gerar autoridade.
-             	Ex: "Ficar parado é o maior custo." (DEP)
-             	Ex: "Sem estratégia, o esforço é desperdiçado." (DEP)
-             	Ex: "É preciso saber respirar sob pressão no digital." (Jiu-jitsu)
-            ===================================================== 
-            🧩 TÉCNICAS DE OBJEÇÕES (CURTAS E ESTRATÉGICAS)
-            ===================================================== 
-            Se o cliente diz: "Vou pensar."
-                Sua resposta: "Claro, {final_user_name_for_prompt}. Mas como o Raffael sempre diz, 'Decisão' é o primeiro passo. O que te impede de ter clareza sobre seu negócio agora, na Call de Alinhamento?"
-            Se o cliente diz: "Não tenho tempo."
-                Sua resposta: "Entendo. É por isso que a 'Estratégia' é crucial. O acompanhamento do Raffael serve para te devolver tempo, não tomar. Podemos marcar uma call curta de 20 minutos?"
-            Se o cliente diz: "Já tentei com outra agência e não funcionou."
-                Sua resposta: "Eu entendo essa dor. É por isso que o Raffael não atua como uma agência comum. Ele entra no seu negócio como se fosse dele. Vamos conversar 20 minutos para você sentir a diferença?"
-            Se o cliente diz: "Só quero saber o preço."
-                Sua resposta: "O investimento depende do seu 'desafio' atual. Na 'Call de Alinhamento', o Raffael te passa o diagnóstico e o valor exato. Qual o melhor horário para você?"
+            - Ações: Seja profissional, empática, natural, objetiva e prestativa. Use frases curtas e diretas, mantenha tom positivo e humano. Entenda a necessidade do cliente, utilize técnicas de venda consultiva, aplique gatilhos mentais com sutileza (autoridade, escassez, reciprocidade, afinidade), e conduza a conversa para o fechamento de forma leve, parecendo que está ajudando, não vendendo.
+            - Linguagem adaptável (modo camaleão): ajuste o tom conforme o cliente — simpático e leve com conversadores, direto com apressados, técnico com desconfiados, e descontraído com clientes informais.
+            - Estratégia de venda: Sempre inicie entendendo a dor ou necessidade do cliente, recomende a melhor solução como um “especialista” que orienta com confiança (como um médico que indica o tratamento ideal), e finalize de forma natural e segura.
+            - Não fazer: Não invente informações, não discuta, não compartilhe dados pessoais, não responda fora de contexto e evite encerrar sem oferecer uma solução. Como último recurso, ofereça uma semana grátis antes da despedida.
             =====================================================
             ⚙️ PERSONALIDADE DO ATENDENTE
             =====================================================
@@ -339,31 +304,81 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
             - Emojis: {{usar com moderação — máximo 2 por mensagem.}}
             - Identidade comportamental: {{Parece humana e confiante. Mantém equilíbrio entre simpatia e eficiência. Atua como especialista que realmente quer ajudar.}}
             - Mentalidade: {{“Não vendo apenas um serviço; resolvo o problema do cliente de forma personalizada.”}}
-            ===================================================== 
-            🔄 REGRA DE FOLLOW-UP (ANTI-GHOSTING)
-            ===================================================== 
-            ●	Se o cliente parar de responder após a qualificação inicial (ex: parou na hora de agendar), reative a conversa UMA VEZ após 24 horas.
-            ●	Use um tom direto, estratégico e que lembre a filosofia DEP.
-            Scripts de Follow-up (24h depois):
-            ●	Opção 1 (DEP - Decisão):
-            ○	"Oi {final_user_name_for_prompt}, voltando aqui. Como o Raffael sempre diz, 'Decisão' é o primeiro passo. O que te impede de ter clareza sobre seu negócio agora, na Call de Alinhamento?"
-            ●	Opção 2 (DEP - Persistência/Dor):
-            ○	"Opa, {final_user_name_for_prompt}. Só para lembrar que a falta de 'Persistência' é o que mantém a maioria dos negócios travados. Se você quer mesmo mudar o jogo, o primeiro passo é essa Call. Qual melhor horário amanhã?"
-            ●	Opção 3 (Jiu-Jitsu):
-            ○	"Oi {final_user_name_for_prompt}. No tatame e nos negócios, quem hesita perde a posição. Ainda quer agendar sua Call de Alinhamento para esta semana?"
             =====================================================
-            PRONTO PARA ATENDER
+            📜 ABERTURA PADRÃO DE ATENDIMENTO
             =====================================================
-            Quando o cliente enviar mensagem, cumprimente de forma natural, descubra o final_user_name_for_prompt e a necessidade, e conduza o fechamento com empatia e autoridade.
-    """
-    # --- FIM DA CORREÇÃO ---
+            👋 Olá! Tudo bem?  
+            Eu sou **Lyra**, da **Neuro Soluções em Tecnologia**.  
+            Seja muito bem-vindo(a)! Pode me contar o que você está precisando hoje? Assim eu já te ajudo da melhor forma. 😊
+            
+            =====================================================
+            🧩 TÉCNICAS DE OBJEÇÕES E CONVERSÃO
+            =====================================================
+            A função da Lyra é compreender o motivo da dúvida ou recusa e usar **técnicas inteligentes de objeção**, sempre de forma natural, empática e estratégica — nunca forçada ou mecânica.  
+            Essas técnicas devem ser aplicadas apenas **quando fizerem sentido no contexto** da conversa, com base na necessidade e comportamento do cliente.
+            🎯 **OBJETIVO:** Transformar objeções em diálogo e mostrar valor de forma consultiva, até o fechamento do agendameto .
+            ---
+            ### 💬 1. QUANDO O CLIENTE RECLAMA DO PREÇO
+            - Mantenha calma e empatia, e pergunte com interesse genuíno:
+            > “Entendo perfeitamente! Posso te perguntar, você achou o valor justo pelo que o sistema entrega?”
+            - Depois, demonstre o valor agregado:
+            > “Lembrando que aqui não é só um chatbot — é **atendimento, automação e venda 24h**, com suporte personalizado e tecnologia de ponta. Enquanto você trabalha, eu atendo sem erros. 😉”
+            - Se o cliente ainda demonstrar resistência:
+            > “Você investe em marketing? Porque o que mais acontece é pessoas chamarem fora do horário — e com a IA, **nenhum cliente fica sem resposta**.”
+            ---
+            ### 💡 2. QUANDO O CLIENTE DIZ “VOU PENSAR”
+            - Não pressione, mas mantenha o interesse vivo:
+            > “Perfeito, é bom pensar mesmo! Posso te perguntar o que você gostaria de analisar melhor? Assim vejo se consigo te ajudar com alguma dúvida antes.”
+            - Se ele não souber responder:
+            > “Muitos clientes me dizem isso quando ainda estão comparando valores, mas quando percebem o tempo que o sistema economiza e a credibilidade que passa, percebem que o retorno vem rápido.”
+            - E complete com gatilho de valor:
+            > “Se a gente dividir o valor do plano por 30 dias, ele sai menos que uma refeição por dia — e trabalha por você 24 horas.”  
+            ---
+            ### 🧠 3. QUANDO O CLIENTE DEMONSTRA DESINTERESSE OU DÚVIDA
+            - Tente entender o motivo real:
+            > “Posso te perguntar o que fez você achar que talvez não seja o momento certo? Assim vejo se faz sentido pra sua realidade.”  
+            - Faça perguntas estratégicas:
+            > “Você trabalha e atende sozinha?”  
+            > “Já teve problemas com mal atendimento ou respostas atrasadas?”  
+            > “Quanto tempo, em média, seus clientes esperam uma resposta quando você está ocupada ou fora do horário?”
+            - Depois de ouvir, conecte com a solução:
+            > “O sistema resolve exatamente isso — ele **atende rápido, sem erro e com empatia**, garantindo que nenhum cliente fique esperando.”
+            ---
+            ### ⚙️ 4. QUANDO O CLIENTE COMPARA COM OUTROS OU ACHA DESNECESSÁRIO
+            - Mostre diferenciação técnica e valor:
+            > “Entendo, mas vale destacar que aqui usamos **as tecnologias mais avançadas de IA e machine learning**, e o suporte é 100% personalizado — diferente dos sistemas prontos e genéricos do mercado.”
+            - Se o cliente disser que outro é mais barato:
+            > “Sim, pode até ter preço menor, mas não entrega o mesmo resultado. A diferença está na performance: nossos clientes fecham mais rápido, e seus concorrentes muitas vezes nem têm tempo de atender — porque **você já terá fechado com o seu cliente.** 😎”
+            ---
+            ### 💬 5. QUANDO O CLIENTE NÃO VÊ VALOR IMEDIATO
+            - Reforce o retorno sobre o investimento:
+            > “Pensa assim: se o sistema fechar apenas um cliente novo por mês, ele já se paga — e ainda sobra. É investimento, não gasto.”
+            - Mostre o impacto real:
+            > “Enquanto você dorme, ele continua atendendo. Enquanto você trabalha, ele já inicia novas conversas. Isso é **tempo transformado em resultado.**”
+            ---
+            ### ⚡ DICAS GERAIS DE CONDUTA
+            - Use apenas **uma ou duas técnicas por conversa**, de forma natural.  
+            - Evite repetir a mesma justificativa — varie conforme a reação do cliente.  
+            - Mantenha o tom calmo, positivo e consultivo — nunca defensivo.  
+            - Finalize sempre reforçando o valor e o benefício real.  
+            💬 Exemplo de fechamento leve:
+            > “Posso já reservar a sua vaga pra ativar hoje? Assim você já aproveita o suporte completo e começa a economizar tempo ainda essa semana. 😉”
 
-    
+            - Final : Se nada der certo antes de se despedir ofereça 1 semana gratis.
+
+            =====================================================
+            PRONTO PARA ATENDER O CLIENTE
+            =====================================================
+            Quando o cliente enviar uma mensagem, inicie o atendimento com essa apresentação profissional e amigável.  
+            Adapte o tom conforme o comportamento do cliente, mantenha foco em entender a necessidade e conduza naturalmente até o fechamento da venda.  
+            Lembre-se: o objetivo é vender ajudando — com empatia, segurança e inteligência.
+        """
+
     try:
         # 1. Inicializa o modelo COM a instrução de sistema
         modelo_com_sistema = genai.GenerativeModel(
-            modelo_ia.model_name, # Reutiliza o final_user_name_for_prompt do modelo global ('gemini-1.5-flash')
-            system_instruction=prompt_inicial
+            modelo_ia.model_name, # Reutiliza o nome do modelo global ('gemini-1.5-flash')
+            system_instruction=prompt_inicial_de_sistema 
         )
         
         # 2. Inicia o chat SÓ com o histórico (COMPLETO, para memória longa)
@@ -373,18 +388,17 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
 
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
-        # --- INÍCIO DA CORREÇÃO ---
+        # (O resto da função: contagem de tokens, envio, extração de nome, etc... é IDÊNTICO)
+        
         try:
-            # 3. Usa o 'modelo_com_sistema' para contar tokens de ENTRADA
+            # Conta tokens do (histórico completo + nova mensagem)
             input_tokens = modelo_com_sistema.count_tokens(chat_session.history + [{'role':'user', 'parts': [user_message]}]).total_tokens
         except Exception:
             input_tokens = 0
-        # --- FIM DA CORREÇÃO ---
 
         resposta = chat_session.send_message(user_message)
         
         try:
-            # 4. Usa o 'modelo_com_sistema' para contar tokens de SAÍDA
             output_tokens = modelo_com_sistema.count_tokens(resposta.text).total_tokens
         except Exception:
             output_tokens = 0
@@ -392,41 +406,34 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
         total_tokens_na_interacao = input_tokens + output_tokens
         
         if total_tokens_na_interacao > 0:
-            print(f"📊 Consumo de Tokens: Total={total_tokens_na_interacao}")
+            print(f"📊 Consumo de Tokens (Nesta Interação): Total={total_tokens_na_interacao}")
         
         ai_reply = resposta.text
 
-        # Lógica de extração de final_user_name_for_prompt (agora funciona em conjunto com a intervenção)
-        if ai_reply.strip().startswith("[final_user_name_for_prompt_CLIENTE]"):
-            print("📝 Tag [final_user_name_for_prompt_CLIENTE] detectada. Extraindo e salvando final_user_name_for_prompt...")
+        if ai_reply.strip().startswith("[NOME_CLIENTE]"):
+            print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
             try:
-                # Isola a parte do final_user_name_for_prompt
                 name_part = ai_reply.split("[HUMAN_INTERVENTION]")[0]
-                full_response_part = name_part.split("O final_user_name_for_prompt do cliente é:")[1].strip()
+                full_response_part = name_part.split("O nome do cliente é:")[1].strip()
                 extracted_name = full_response_part.split('.')[0].strip()
                 extracted_name = extracted_name.split(' ')[0].strip() 
                 
-                # Salva o final_user_name_for_prompt limpo no banco de dados
                 conversation_collection.update_one(
                     {'_id': contact_id},
                     {'$set': {'customer_name': extracted_name}},
                     upsert=True
                 )
                 customer_name_to_save = extracted_name
-                print(f"✅ final_user_name_for_prompt '{extracted_name}' salvo para o cliente {contact_id}.")
+                print(f"✅ Nome '{extracted_name}' salvo para o cliente {contact_id}.")
 
-                # Remonta a 'ai_reply' APENAS com o que sobrou
                 if "[HUMAN_INTERVENTION]" in ai_reply:
-                    # Se tinha final_user_name_for_prompt + INTERVENÇÃO, a 'ai_reply' agora é SÓ a intervenção
                     ai_reply = "[HUMAN_INTERVENTION]" + ai_reply.split("[HUMAN_INTERVENTION]")[1]
                 else:
-                    # Se era só o final_user_name_for_prompt, extrai o texto de "Prazer em conhecê-lo..."
                     start_of_message_index = full_response_part.find(extracted_name) + len(extracted_name)
                     ai_reply = full_response_part[start_of_message_index:].lstrip('.!?, ').strip()
-
             except Exception as e:
-                print(f"❌ Erro ao extrair o final_user_name_for_prompt da tag: {e}")
-                ai_reply = ai_reply.replace("[final_user_name_for_prompt_CLIENTE]", "").strip()
+                print(f"❌ Erro ao extrair o nome da tag: {e}")
+                ai_reply = ai_reply.replace("[NOME_CLIENTE]", "").strip()
 
         if not ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
              save_conversation_to_db(contact_id, sender_name, customer_name_to_save, total_tokens_na_interacao)
@@ -436,24 +443,18 @@ def gerar_resposta_ia(contact_id, sender_name, user_message, known_customer_name
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini: {e}")
         return "Desculpe, estou com um problema técnico no momento (IA_GEN_FAIL). Por favor, tente novamente em um instante."
+    
 def transcrever_audio_gemini(caminho_do_audio):
-    """
-    Envia um arquivo de áudio para a API do Gemini e retorna a transcrição em texto.
-    (Função mantida)
-    """
     global modelo_ia 
-
     if not modelo_ia:
         print("❌ Modelo de IA não inicializado. Impossível transcrever.")
         return None
-
     print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição no Gemini...")
     try:
         audio_file = genai.upload_file(
             path=caminho_do_audio, 
             mime_type="audio/ogg"
         )
-        
         response = modelo_ia.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
         genai.delete_file(audio_file.name)
         
@@ -467,11 +468,11 @@ def transcrever_audio_gemini(caminho_do_audio):
         print(f"❌ Erro ao transcrever áudio com Gemini: {e}")
         return None
 
-# <--- MELHORIA: Função de envio de mensagem robusta (do 'codigo atual') ---
+# --- MELHORIA: Função de envio robusta (DO CÓDIGO ATUAL) ---
 def send_whatsapp_message(number, text_message):
     """Envia uma mensagem de texto via Evolution API, corrigindo a URL dinamicamente."""
     
-    INSTANCE_NAME = "chatbot" # <--- EDITAR se o final_user_name_for_prompt da sua instância for outro
+    INSTANCE_NAME = "chatbot" # Nome da sua instância
     
     clean_number = number.split('@')[0]
     payload = {"number": clean_number, "textMessage": {"text": text_message}}
@@ -482,7 +483,6 @@ def send_whatsapp_message(number, text_message):
     
     final_url = ""
     
-    # Lógica para corrigir a URL
     if not base_url:
         print("❌ ERRO: EVOLUTION_API_URL não está definida no .env")
         return
@@ -493,7 +493,6 @@ def send_whatsapp_message(number, text_message):
         final_url = base_url[:-1] + api_path
     else:
         final_url = base_url + api_path
-    # --- Fim da Lógica ---
 
     try:
         print(f"✅ Enviando resposta para a URL: {final_url} (Destino: {clean_number})")
@@ -506,8 +505,6 @@ def send_whatsapp_message(number, text_message):
             
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro de CONEXÃO ao enviar mensagem para {clean_number}: {e}")
-# --- Fim da Melhoria ---
-
 
 def gerar_e_enviar_relatorio_semanal():
     """Calcula um RESUMO do uso de tokens e envia por e-mail usando SendGrid."""
@@ -566,17 +563,17 @@ def gerar_e_enviar_relatorio_semanal():
     except Exception as e:
         print(f"❌ Erro ao gerar ou enviar relatório para '{CLIENT_NAME}': {e}")
 
-# <--- MELHORIA: Scheduler e App inicializados globalmente ---
+# --- MELHORIA: Inicialização Global (DO CÓDIGO ATUAL) ---
 scheduler = BackgroundScheduler(daemon=True, timezone='America/Sao_Paulo')
 scheduler.start()
 
 app = Flask(__name__)
-processed_messages = set() # <--- MELHORIA: Adicionado set de mensagens processadas
+processed_messages = set() 
 
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
     """
-    (VERSÃO MELHORADA)
+    (VERSÃO MELHORADA - DO CÓDIGO ATUAL)
     Recebe mensagens do WhatsApp e as coloca no buffer.
     """
     data = request.json
@@ -584,25 +581,20 @@ def receive_webhook():
 
     event_type = data.get('event')
     
-    # <--- MELHORIA: Adicionado filtro de 'event' (do 'codigo atual') ---
     if event_type and event_type != 'messages.upsert':
         print(f"➡️  Ignorando evento: {event_type} (não é uma nova mensagem)")
         return jsonify({"status": "ignored_event_type"}), 200
 
     try:
-        # <--- MELHORIA: Lógica de extração de 'data' e 'key' ---
         message_data = data.get('data', {}) 
         if not message_data:
-             # Fallback para o formato do 'codigo intervenção'
              message_data = data
              
         key_info = message_data.get('key', {})
         if not key_info:
             print("➡️ Evento sem 'key'. Ignorando.")
             return jsonify({"status": "ignored_no_key"}), 200
-        # --- Fim da Melhoria ---
 
-        # (Lógica 'fromMe' mantida, mas adaptada)
         if key_info.get('fromMe'):
             sender_number_full = key_info.get('remoteJid')
             if not sender_number_full:
@@ -615,24 +607,19 @@ def receive_webhook():
                 return jsonify({"status": "ignored_from_me"}), 200
             
             print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {clean_number}).")
-            # Deixa o comando do responsável passar para a lógica de buffer/processamento
 
         message_id = key_info.get('id')
         if not message_id:
             return jsonify({"status": "ignored_no_id"}), 200
 
-        # <--- MELHORIA: Verificação de duplicatas ---
         if message_id in processed_messages:
             print(f"⚠️ Mensagem {message_id} já processada, ignorando.")
             return jsonify({"status": "ignored_duplicate"}), 200
         processed_messages.add(message_id)
         if len(processed_messages) > 1000:
             processed_messages.clear()
-        # --- Fim da Melhoria ---
 
-        # <--- MELHORIA: Chama o BUFFER em vez de processar direto ---
         handle_message_buffering(message_data)
-        # --- Fim da Melhoria ---
         
         return jsonify({"status": "received"}), 200
 
@@ -643,13 +630,12 @@ def receive_webhook():
 
 @app.route('/', methods=['GET'])
 def health_check():
-    return f"Estou vivo! ({CLIENT_NAME} Bot - Intervenção)", 200
+    return f"Estou vivo! ({CLIENT_NAME} Bot)", 200 # <-- Nome do cliente adaptado
 
-# <--- MELHORIA: Nova função de buffering (do 'codigo atual') ---
+# --- MELHORIA: Funções de Buffer Otimizadas (DO CÓDIGO ATUAL) ---
 def handle_message_buffering(message_data):
     """
-    Agrupa mensagens de um mesmo usuário que chegam rápido
-    e dispara o processamento após um 'delay'.
+    Agrupa mensagens de texto e processa áudio imediatamente.
     """
     global message_buffer, message_timers, BUFFER_TIME_SECONDS
     
@@ -700,12 +686,10 @@ def handle_message_buffering(message_data):
 
     except Exception as e:
         print(f"❌ Erro no 'handle_message_buffering': {e}")
-# --- Fim da Melhoria ---
             
-# <--- MELHORIA: Nova função de trigger (do 'codigo atual') ---
 def _trigger_ai_processing(clean_number, last_message_data):
     """
-    Função chamada pelo Timer. Junta as mensagens e chama a IA.
+    Função chamada pelo Timer. Junta as mensagens e chama a 'process_message_logic'.
     """
     global message_buffer, message_timers
     
@@ -724,20 +708,21 @@ def _trigger_ai_processing(clean_number, last_message_data):
     print(f"⚡️ DISPARANDO IA para {clean_number} com mensagem agrupada: '{full_user_message}'")
 
     threading.Thread(target=process_message_logic, args=(last_message_data, full_user_message)).start()
-# --- Fim da Melhoria ---
+# --- FIM DAS FUNÇÕES DE BUFFER ---
 
-
+# --- MELHORIA: Comando do Responsável (DO CÓDIGO ATUAL) ---
+# (Substitua sua função 'handle_responsible_command' inteira por esta)
 def handle_responsible_command(message_content, responsible_number):
     """
     Processa comandos enviados pelo número do responsável.
-    AGORA INCLUI: 'bot on', 'bot off' e 'ok <numero>'
+    INCLUI: 'bot on', 'bot off' e 'ok <numero>'
     """
     print(f"⚙️  Processando comando do responsável: '{message_content}'")
     
     command_lower = message_content.lower().strip()
     command_parts = command_lower.split()
 
-    # --- NOVO: COMANDO LIGA/DESLIGA ---
+    # --- COMANDO LIGA/DESLIGA ---
     if command_lower == "bot off":
         try:
             conversation_collection.update_one(
@@ -758,14 +743,14 @@ def handle_responsible_command(message_content, responsible_number):
                 {'$set': {'is_active': True}},
                 upsert=True
             )
-            send_whatsapp_message(responsible_number, "✅ *Bot REATIVADO.* O bot está respondendo aos clientes normalmente.")
+            send_whatsapp_message(responsible_number, "✅ *Bot REATIVADO.* O bot está respondendo aos clientes normally.")
             return True
         except Exception as e:
             send_whatsapp_message(responsible_number, f"❌ Erro ao reativar o bot: {e}")
             return True
-    # --- FIM DO NOVO COMANDO ---
+    # --- FIM DO COMANDO LIGA/DESLIGA ---
 
-    # --- Comando 'ok <numero>' existente ---
+    # --- Comando 'ok <numero>' ---
     if len(command_parts) == 2 and command_parts[0] == "ok":
         customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
         
@@ -774,27 +759,30 @@ def handle_responsible_command(message_content, responsible_number):
 
             if not customer:
                 send_whatsapp_message(responsible_number, f"⚠️ *Atenção:* O cliente com o número `{customer_number_to_reactivate}` não foi encontrado no banco de dados.")
-                return True # Retorna True para parar o processamento
+                return True 
 
             result = conversation_collection.update_one(
                 {'_id': customer_number_to_reactivate},
                 {'$set': {'intervention_active': False}}
             )
 
+            # O cache de sessão não é mais usado, então não precisamos limpá-lo
+
             if result.modified_count > 0:
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
-                send_whatsapp_message(customer_number_to_reactivate, "Oi sou eu a Lyra novamente, espero que tenha resolvido o que precisava.\nSe quiser tirar mais alguma duvida só me avisar!😊")
+                # --- MENSAGEM ADAPTADA (DO CÓDIGO 2) ---
+                send_whatsapp_message(customer_number_to_reactivate, "Oi sou eu a Lyra novamente, voltei pro seu atendimento. se precisar de algo me diga! 😊")
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
             
-            return True # Retorna True para parar o processamento
+            return True 
 
         except Exception as e:
             print(f"❌ Erro ao tentar reativar cliente: {e}")
             send_whatsapp_message(responsible_number, f"❌ Ocorreu um erro técnico ao tentar reativar o cliente. Verifique o log do sistema.")
-            return True # Retorna True para parar o processamento
+            return True
             
-    # --- Mensagem de ajuda se nenhum comando for reconhecido ---
+    # --- Mensagem de ajuda ---
     print("⚠️ Comando não reconhecido do responsável.")
     help_message = (
         "Comando não reconhecido. 🤖\n\n"
@@ -805,13 +793,14 @@ def handle_responsible_command(message_content, responsible_number):
     )
     send_whatsapp_message(responsible_number, help_message)
     return True
+# --- FIM DO COMANDO DO RESPONSÁVEL ---
 
-# <--- MELHORIA: Esta é a fusão das duas lógicas de processamento ---
+
+# --- MELHORIA: Lógica de Processamento com LOCK (DO CÓDIGO ATUAL) ---
 def process_message_logic(message_data, buffered_message_text=None):
     """
-    (VERSÃO CORRIGIDA - BUG 3)
+    (VERSÃO FINAL)
     Esta é a função "worker" principal. Ela pega o lock e chama a IA.
-    Corrigida a lógica de geração de resumo para evitar duplicatas.
     """
     lock_acquired = False
     clean_number = None
@@ -824,12 +813,12 @@ def process_message_logic(message_data, buffered_message_text=None):
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
-        # --- Lógica de LOCK ---
+        # --- Lógica de LOCK (do Código 1) ---
         now = datetime.now()
         res = conversation_collection.update_one(
             {'_id': clean_number, 'processing': {'$ne': True}},
             {'$set': {'processing': True, 'processing_started_at': now}},
-            upsert=True
+            upsert=True 
         )
 
         if res.matched_count == 0 and res.upserted_id is None:
@@ -845,12 +834,12 @@ def process_message_logic(message_data, buffered_message_text=None):
         
         lock_acquired = True
         if res.upserted_id:
-            print(f"✅ Novo usuário {clean_number}. Documento criado e lock adquirido.")
+             print(f"✅ Novo usuário {clean_number}. Documento criado e lock adquirido.")
         # --- Fim do Lock ---
         
         user_message_content = None
         
-        # --- Lógica de Buffer/Áudio ---
+        # --- Lógica de Buffer/Áudio (do Código 1) ---
         if buffered_message_text:
             user_message_content = buffered_message_text
             messages_to_save = user_message_content.split(". ")
@@ -858,27 +847,32 @@ def process_message_logic(message_data, buffered_message_text=None):
                 if msg_text and msg_text.strip():
                     append_message_to_db(clean_number, 'user', msg_text)
         else:
+            # Lógica de Áudio (processamento imediato)
             message = message_data.get('message', {})
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
                 print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
                 audio_base64 = message['base64']
                 audio_data = base64.b64decode(audio_base64)
-                os.makedirs("/tmp", exist_ok=True)
+                os.makedirs("/tmp", exist_ok=True) 
                 temp_audio_path = f"/tmp/audio_{clean_number}_{message_id}.ogg"
                 with open(temp_audio_path, 'wb') as f: f.write(audio_data)
+                
                 user_message_content = transcrever_audio_gemini(temp_audio_path)
+                
                 try:
                     os.remove(temp_audio_path)
                 except Exception as e:
                     print(f"Aviso: não foi possível remover áudio temporário. {e}")
+
                 if not user_message_content:
                     send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
                     user_message_content = "[Usuário enviou um áudio incompreensível]"
             
             if not user_message_content:
-                user_message_content = "[Usuário enviou uma mensagem não suportada]"
-                
+                 user_message_content = "[Usuário enviou uma mensagem não suportada]"
+                 
+            # Salva a mensagem (de áudio ou não) no DB ANTES de chamar a IA
             append_message_to_db(clean_number, 'user', user_message_content)
         # --- Fim da Lógica de Buffer/Áudio ---
 
@@ -886,11 +880,9 @@ def process_message_logic(message_data, buffered_message_text=None):
         
         # --- LÓGICA DE INTERVENÇÃO (Verifica se é o Admin) ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
-            # A função handle_responsible_command já retorna True
-            # Se for um comando, ele é executado e a função para aqui
             if handle_responsible_command(user_message_content, clean_number):
-                return 
-        
+                return # 'finally' vai liberar o lock
+
         # --- LÓGICA DE "BOT LIGADO/DESLIGADO" ---
         try:
             bot_status_doc = conversation_collection.find_one({'_id': 'BOT_STATUS'})
@@ -898,25 +890,21 @@ def process_message_logic(message_data, buffered_message_text=None):
             
             if not is_active:
                 print(f"🤖 Bot está em standby (desligado). Ignorando mensagem de {sender_name_from_wpp} ({clean_number}).")
-                return
+                return # 'finally' vai liberar o lock
                 
         except Exception as e:
             print(f"⚠️ Erro ao verificar o status do bot: {e}. Assumindo que está ligado.")
-        # --- FIM DA LÓGICA "BOT LIGADO/DESLIGADO" ---
 
-        # --- LÓGICA DE INTERVENÇÃO (Verifica se o Cliente está pausado) ---
         conversation_status = conversation_collection.find_one({'_id': clean_number})
 
         if conversation_status and conversation_status.get('intervention_active', False):
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
-            return 
+            return # 'finally' vai liberar o lock
 
         known_customer_name = conversation_status.get('customer_name') if conversation_status else None
-        if known_customer_name:
-            print(f"👤 Cliente já conhecido: {known_customer_name} ({clean_number})")
-        # --- FIM DA LÓGICA DE INTERVENÇÃO (Pré-IA) ---
-
         
+        # --- CHAMADA PADRÃO ---
+        # A 'gerar_resposta_ia' agora é inteligente o suficiente para fazer tudo
         ai_reply = gerar_resposta_ia(
             clean_number,
             sender_name_from_wpp,
@@ -925,8 +913,8 @@ def process_message_logic(message_data, buffered_message_text=None):
         )
         
         if not ai_reply:
-            print("⚠️ A IA não gerou resposta.")
-            return
+             print("⚠️ A IA não gerou resposta.")
+             return # 'finally' vai liberar o lock
 
         try:
             # Salva a resposta da IA (mesmo que seja uma tag de intervenção)
@@ -940,35 +928,18 @@ def process_message_logic(message_data, buffered_message_text=None):
                     {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
                 )
                 
-                send_whatsapp_message(sender_number_full, "Entendido. Já avisei o Raffael. Por favor, aguarde um momento. 👨‍💼")
+                send_whatsapp_message(sender_number_full, "Entendido. Já notifiquei um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
                 
                 if RESPONSIBLE_NUMBER:
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                     display_name = known_customer_name or sender_name_from_wpp
                     
-                    # --- INÍCIO DA CORREÇÃO (BUG 3) ---
-                    # O 'conversation_status' foi carregado ANTES do append_message_to_db
-                    # do 'user_message_content'.
-                    # A lógica anterior estava correta ao adicionar manualmente, mas
-                    # vamos garantir que o 'conversation_status' seja o mais recente.
-                    
-                    # Vamos recarregar o histórico DEPOIS que as mensagens do usuário
-                    # e do bot foram salvas para ter o resumo mais fiel.
-                    
-                    # ATUALIZAÇÃO DA CORREÇÃO:
-                    # A sua lógica original estava quase certa. O 'conversation_status'
-                    # foi carregado ANTES do 'append_message_to_db' do usuário.
-                    # O erro é que 'append_message_to_db' do usuário é chamado
-                    # no início da função.
-                    # Portanto, 'conversation_status' JÁ TEM a última msg do usuário.
-                    
+                    # Pega o histórico mais recente (que já inclui a msg do usuário)
                     history_summary = "Nenhum histórico de conversa encontrado."
                     if conversation_status and 'history' in conversation_status:
-                        # CORREÇÃO: Não adicionamos 'user_message_content' de novo.
-                        # Apenas usamos o histórico como ele está.
-                        history_com_ultima_msg = conversation_status.get('history', [])
+                        # Recarrega o histórico completo com a ÚLTIMA msg do usuário
+                        history_com_ultima_msg = load_conversation_from_db(clean_number).get('history', [])
                         history_summary = get_last_messages_summary(history_com_ultima_msg)
-                    # --- FIM DA CORREÇÃO (BUG 3) ---
 
                     notification_msg = (
                         f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
@@ -1001,7 +972,7 @@ def process_message_logic(message_data, buffered_message_text=None):
             )
             print(f"🔓 Lock liberado para {clean_number}.")
 
-# <--- MELHORIA: Estrutura de inicialização para Gunicorn ---
+
 if modelo_ia:
     print("\n=============================================")
     print("   CHATBOT WHATSAPP COM IA INICIADO")
@@ -1023,8 +994,6 @@ else:
     print("\nEncerrando o programa devido a erros na inicialização.")
 
 if __name__ == '__main__':
-    # Esta parte só roda se você executar 'python main.py'
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))
     app.run(host='0.0.0.0', port=port, debug=False)
-# --- Fim da Melhoria ---
