@@ -628,8 +628,8 @@ if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
         # SÓ inicializa o modelo se as tools (agenda) estiverem prontas
         if tools: 
-            modelo_ia = genai.GenerativeModel('gemini-1.5-flash', tools=tools)
-            print("✅ Modelo do Gemini (gemini-1.5-flash) inicializado com FERRAMENTAS.")
+            modelo_ia = genai.GenerativeModel('gemini-2.5-flash', tools=tools)
+            print("✅ Modelo do Gemini (gemini-2.5-flash) inicializado com FERRAMENTAS.")
         else:
              print("AVISO: Modelo do Gemini não inicializado pois a conexão com a Agenda falhou (tools vazias).")
     except Exception as e:
@@ -843,9 +843,6 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
     return prompt_final
 
 
-# ==========================================================
-# PROCESSADOR DE FERRAMENTAS (O "CORPO" DA AGENDA)
-# ==========================================================
 def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> str:
     """
     Processa a chamada de ferramenta vinda da IA.
