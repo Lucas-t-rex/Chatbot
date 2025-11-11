@@ -817,7 +817,7 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
 
             -    **Exemplo CORRETO (Ação Imediata):**
             -    *Cliente:* "pode trocar pras 2 amanhã"
-            -    *Sua IA (Pensa):* "Ok, 'amanhã' é 11/11, '2' é 14:00. Vou chamar `fn_alterar_agendamento(cpf='...', data_antiga='11/11', hora_antiga='10:00', data_nova='11/11', hora_nova='14:00')`... (Recebe: {sucesso: True, msg: "Agendamento alterado..."})"
+            -    *Sua IA (Pensa):* "Ok, 'amanhã' é 11/11, '2' é 14:00. Vou chamar `fn_alterar_agendamento(...)`... (Recebe: {{sucesso: True, msg: "Agendamento alterado..."}})""
             -    *Sua IA (Responde):* "Perfeito, Lucas! Já fiz a alteração. Seu agendamento foi atualizado para amanhã, 11/11, às 14:00. Posso te ajudar em algo mais?"
             -    
             -    **Exemplo ERRADO (NÃO FAÇA):**
@@ -1257,7 +1257,36 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini (loop de tools): {e}")
         return "Desculpe, estou com um problema técnico no momento (IA_TOOL_FAIL). Por favor, tente novamente em um instante."
+
+def transcrever_audio_gemini(caminho_do_audio):
+    global modelo_ia 
     
+    if not modelo_ia:
+        print("❌ Modelo de IA não inicializado. Impossível transcrever.")
+        return None
+    
+    # Usa o modelo 'base' sem tools, que é mais simples para transcrição
+    modelo_base_gemini = genai.GenerativeModel('gemini-1.5-flash') 
+    
+    print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição no Gemini...")
+    try:
+        audio_file = genai.upload_file(
+            path=caminho_do_audio,
+            mime_type="audio/ogg" # Assumindo ogg, como no seu código
+        )
+        response = modelo_base_gemini.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
+        genai.delete_file(audio_file.name)
+        
+        if response.text:
+            print(f"✅ Transcrição recebida: '{response.text}'")
+            return response.text
+        else:
+            print("⚠️ A IA não retornou texto para o áudio. Pode ser um áudio sem falas.")
+            return None
+    except Exception as e:
+        print(f"❌ Erro ao transcrever áudio com Gemini: {e}")
+        return None
+
 def send_whatsapp_message(number, text_message):
     INSTANCE_NAME = "chatbot" 
     clean_number = number.split('@')[0]
@@ -1620,6 +1649,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                 if msg_text and msg_text.strip():
                     append_message_to_db(clean_number, 'user', msg_text)
         else:
+            # --- INÍCIO DA CORREÇÃO DE INDENTAÇÃO ---
             message = message_data.get('message', {})
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
@@ -1641,10 +1671,12 @@ def process_message_logic(message_data, buffered_message_text=None):
                     send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
                     user_message_content = "[Usuário enviou um áudio incompreensível]"
             
+            # Estas duas linhas foram movidas PARA DENTRO do 'else'
             if not user_message_content:
                 user_message_content = "[Usuário enviou uma mensagem não suportada]"
                 
             append_message_to_db(clean_number, 'user', user_message_content)
+            # --- FIM DA CORREÇÃO DE INDENTAÇÃO ---
 
         print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
         
@@ -1682,16 +1714,14 @@ def process_message_logic(message_data, buffered_message_text=None):
         )
         
         if not ai_reply:
-             print("⚠️ A IA não gerou resposta.")
-             return # 'finally' vai liberar o lock
+            print("⚠️ A IA não gerou resposta.")
+            return # 'finally' vai liberar o lock
 
         try:
             # Salva a resposta da IA (mesmo que seja uma tag de intervenção)
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
             # --- LÓGICA DE INTERVENÇÃO (Pós-IA) ---
-            # Esta lógica continua a mesma e vai funcionar, 
-            # pois 'gerar_resposta_ia_com_tools' retorna a tag exata.
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
                 
