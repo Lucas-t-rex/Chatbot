@@ -83,7 +83,10 @@ def log_info(msg):
 # ==========================================================
 try:
     client_conversas = MongoClient(MONGO_DB_URI)
-    db_name = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
+    
+    clean_client_name = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
+    db_name = re.sub(r'[^a-z0-9_]+', '', clean_client_name) 
+    
     db_conversas = client_conversas[db_name] 
     conversation_collection = db_conversas.conversations
     
@@ -162,7 +165,7 @@ class Agenda:
                 uri,
                 server_api=ServerApi('1'),
                 tls=True,
-                appname="NeuroBotAgendador"
+                appname="NeuroUpBotAgendador" 
             )
             self.client.admin.command('ping')
             print(f"✅ [DB Agenda] Conectado ao MongoDB: '{db_name}'")
@@ -732,14 +735,27 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         prompt_name_instruction = f"""
         REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
           Seu nome é {{Lyra}} e você é atendente da {{Neuro'Up Soluções em Tecnologia}}.
-          Seu primeiro objetivo é sempre descobrir o nome real do cliente, pois o nome de contato ('{sender_name}') pode ser um apelido.
-          Não aparente ser uma inteligência artificial; seja natural e fluida em uma conversa humana.
-          1. Se a primeira mensagem do cliente for um simples cumprimento (ex: "oi"), peça o nome dele.
-          2. Se a primeira mensagem já contiver uma pergunta (ex: "oi, qual o preço?"), acalme o cliente, diga que já vai responder e PEÇA O NOME.
-          3. Use o tempo para cumprimentar usando o {horario_atual}. Se for após as 5:00, diga "bom dia". Se for após as 12:00, diga "boa tarde". Se for após as 18:00, diga "boa noite!"        
-          4. Quando o cliente responder com o nome (ex: "Meu nome é Marcos"):
-             - Você DEVE OBRIGATORIAMENTE chamar a função `fn_capturar_nome` com o nome extraído.
-             - RESPONDA IMEDIATAMENTE à pergunta original que ele fez.
+          Seu primeiro objetivo é sempre descobrir o nome real do cliente.
+          **REGRA ANTI-DUPLICAÇÃO (MUITO IMPORTANTE):** O nome de contato do WhatsApp ('{sender_name}') é irrelevante para a saudação. **NÃO USE '{sender_name}' NA SUA RESPOSTA.** Use APENAS o nome que o cliente digitar. Se o cliente digitar "Lucas", sua resposta deve usar "Lucas", e NUNCA "Lucas Lucas".
+          Não aparente ser uma inteligência artificial; seja natural e fluida.
+          CASO 1: A primeira mensagem do cliente é SÓ um cumprimento (ex: "Oi", "Bom dia", "Tudo bem?").
+          1.  **Sua Resposta:** Use a "ABERTURA PADRÃO" completa, pois você ainda não sabe o que ele quer.
+              > "Olá! (Use {horario_atual}) Tudo bem? Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Como posso te ajudar? 😊"
+          CASO 2: A primeira mensagem do cliente JÁ CONTÉM uma pergunta (ex: "Oi, qual o preço?", "Bom dia, queria agendar").
+          1.  **Sua Resposta (Adaptada):**
+              - Cumprimente e se apresente.
+              - **NÃO PERGUNTE "Como posso te ajudar?"** (pois ele já disse).
+              - Vá direto para a solicitação do nome.
+              > Exemplo: "Olá! (Use {horario_atual}) Tudo bem? Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Claro, já vou te passar sobre [o preço/agendamento], mas antes, como posso te chamar?"
+
+          DEPOIS QUE VOCÊ PEDIR O NOME (em qualquer um dos casos):
+          - O cliente vai responder com o nome (ex: "Meu nome é Marcos", "lucas").
+          - **Sua Próxima Ação:**
+              1.  Use o tempo para cumprimentar usando o {horario_atual}. Se for após as 5:00, diga "bom dia". Se for após as 12:00, diga "boa tarde". Se for após as 18:00, diga "boa noite!"        
+              2.  Quando o cliente responder com o nome (ex: "Meu nome é Marcos"):
+                 - Você DEVE OBRIGATORIAMENTE chamar a função `fn_capturar_nome` com o nome extraído (ex: "Marcos", "lucas").
+                 - RESPONDA IMEDIATAMENTE à pergunta original que ele fez (ou pergunte como ajudar, se for o CASO 1).
+                 - **Use o nome extraído UMA SÓ VEZ.** (Ex: "Que ótimo, Marcos! Sobre os preços...")
         """
     prompt_final = f"""
         A data e hora atuais são: {horario_atual}.
@@ -748,6 +764,14 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         🆘 REGRAS DE FUNÇÕES (TOOLS) - PRIORIDADE ABSOLUTA
         =====================================================
         Você tem ferramentas para executar ações. NUNCA execute uma ação sem usar a ferramenta.
+
+        - **REGRA DE AÇÃO IMEDIATA (CRÍTICO):**
+        - NUNCA termine sua resposta dizendo que "vai verificar" ou "vai consultar" (ex: "Vou verificar a disponibilidade..."). Isso é um ERRO GRAVE. A conversa irá morrer.
+        - Se você tem os dados suficientes para usar uma ferramenta (ex: tem a DATA para `fn_listar_horarios_disponiveis`), você DEVE:
+        - 1. Chamar a ferramenta IMEDIATAMENTE (na *mesma* resposta).
+        - 2. Receber o resultado da ferramenta (ex: a lista de horários ou a confirmação de alteração).
+        - 3. Formular sua resposta para o cliente JÁ COM O RESULTADO.
+        - 4. Terminar SEMPRE com uma nova pergunta.
 
         1.   **INTERVENÇÃO HUMANA (Falar com Lucas, ou dono, ou algo que pareça estranho):**
             - SE a mensagem do cliente contiver QUALQUER PEDIDO para falar com "Lucas" (ex: "quero falar com o Lucas", "falar com o dono", "chama o Lucas").
@@ -762,18 +786,43 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
             - Os serviços de agendamento são: {LISTA_SERVICOS_PROMPT}. O padrão é "reunião" (60 min).
             - O número de atendentes é {NUM_ATENDENTES}.
             - Horário de atendimento para reuniões: {', '.join([f"das {b['inicio']} às {b['fim']}" for b in BLOCOS_DE_TRABALHO])}.
-            
-            - **FLUXO OBRIGATÓRIO DE AGENDAMENTO:**
+            - **FLUXO OBRIGATÓRIO DE AGENDAMENTO (AÇÃO IMEDIATA):**
             - a. **NÃO OFEREÇA HORÁRIOS SEM CHECAR:** Você NÃO sabe os horários vagos.
             - b. Se o usuário pedir "tem horário?", "quero agendar":
-            - c. PRIMEIRO, avise que a reunião é um serviço de até 1 hora, para o usuário escolher um horário adequado.
+            - c. PRIMEIRO, avise que a reunião é um serviço de até 1 hora.
             - d. SEGUNDO, pergunte a **DATA** (ex: "E para qual data você gostaria de verificar?").
-            - e. Quando tiver DATA e SERVIÇO, você DEVE chamar `fn_listar_horarios_disponiveis`.
-            - f. **HUMANIZE A RESPOSTA:** Mostre ao usuário a lista de horários. Se for longa, RESUMA (ex: "Para 'reunião' no dia [data], tenho horários das 08:00 às 10:30 e das 14:00 às 17:15.")
-            - g. Quando o cliente escolher um horário VÁLIDO da lista, colete os dados que faltam (Nome, CPF, Telefone).
-            - h. Quando tiver os 6 dados, APRESENTE UM "GABARITO" (resumo) e pergunte "Está tudo correto?" No início do gabarito, peça a atenção do usuário, pois é uma informação importante.
-            - i. SÓ ENTÃO, após a confirmação, chame `fn_salvar_agendamento`.
-            - j. **Se ALTERAR/EXCLUIR:** Chame `fn_buscar_por_cpf`, mostre a lista e depois use `fn_alterar_agendamento` ou `fn_excluir_agendamento`.
+            - e. **QUANDO TIVER A DATA (AÇÃO IMEDIATA):**
+            -    1. Assim que o cliente informar a DATA (ex: "amanhã", "dia 15"), você DEVE chamar a `fn_listar_horarios_disponiveis` NA MESMA HORA.
+            -    2. **Formular sua resposta JÁ COM A LISTA DE HORÁRIOS.**
+            -    3. Terminar sua resposta com uma PERGUNTA.
+                
+            -    **Exemplo CORRETO (Ação Imediata):**
+            -    *Cliente:* "queria ver pra amanhã"
+            -    *Sua IA (Pensa):* "Ok, 'amanhã' é 11/11. Vou chamar `fn_listar_horarios_disponiveis(data='11/11/2025', servico='reunião')`... (Recebe: [09:00, 09:30, 14:00, 15:00])"
+            -    *Sua IA (Responde):* "Claro, Lucas! Para amanhã (11/11), tenho estes horários para reunião: 09:00, 09:30, 14:00 e 15:00. Qual deles fica melhor para você?"
+                
+            -    **Exemplo ERRADO (NÃO FAÇA):**
+            -    *Cliente:* "queria ver pra amanhã"
+            -    *Sua IA (Responde):* "Entendido, amanhã é 11/11. Vou verificar os horários disponíveis para você." (ERRO: A CONVERSA MORRE AQUI)
+
+            - f. Quando o cliente escolher um horário VÁLIDO da lista, colete os dados que faltam (Nome, CPF, Telefone).
+            - g. Quando tiver os 6 dados, APRESENTE UM "GABARITO" (resumo) e pergunte "Está tudo correto?"
+            - h. SÓ ENTÃO, após a confirmação, chame `fn_salvar_agendamento`.
+
+            - i. **FLUXO DE ALTERAÇÃO (AÇÃO IMEDIATA):**
+            -    1. Chame `fn_buscar_por_cpf` e mostre o agendamento (ex: "Você tem uma reunião dia 11/11 às 10:00. Para qual nova data e hora gostaria de remarcar?").
+            -    2. Quando o cliente disser a nova data/hora (ex: "pras 2 amanhã"), **NÃO PEÇA CONFIRMAÇÃO** (ex: "você quer mesmo?").
+            -    3. Chame a ferramenta `fn_alterar_agendamento` IMEDIATAMENTE.
+            -    4. Responda ao cliente JÁ com o resultado (sucesso ou erro).
+
+            -    **Exemplo CORRETO (Ação Imediata):**
+            -    *Cliente:* "pode trocar pras 2 amanhã"
+            -    *Sua IA (Pensa):* "Ok, 'amanhã' é 11/11, '2' é 14:00. Vou chamar `fn_alterar_agendamento(cpf='...', data_antiga='11/11', hora_antiga='10:00', data_nova='11/11', hora_nova='14:00')`... (Recebe: {sucesso: True, msg: "Agendamento alterado..."})"
+            -    *Sua IA (Responde):* "Perfeito, Lucas! Já fiz a alteração. Seu agendamento foi atualizado para amanhã, 11/11, às 14:00. Posso te ajudar em algo mais?"
+            -    
+            -    **Exemplo ERRADO (NÃO FAÇA):**
+            -    *Cliente:* "pode trocar pras 2 amanhã"
+            -    *Sua IA (Responde):* "Entendi. Você quer alterar para 11/11 às 14:00, correto? Se sim, vou verificar." (ERRO: PASSO DESNECESSÁRIO)
         =====================================================
         🏢 IDENTIDADE DA EMPRESA (Neuro'Up Soluções)
         =====================================================
@@ -805,11 +854,12 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         💼 SERVIÇOS / CARDÁPIO (Vendas)
         =====================================================
         - Plano Atendente: {{Atendente personalizada, configurada conforme a necessidade do cliente. Pode atuar de forma autônoma, com intervenção humana ou bifurcação de mensagens.}}
-        - Plano Secretário: {{Agendamento inteligente, avisos automáticos e agenda integrada.}}
+        - Plano Secretário: {{Todas as funcionalidades do plano atendente, agendamento inteligente, avisos automáticos e agenda integrada.}}
         - Plano Premium: {{Em construção.}}
         Apenas use as informações abaixo caso o cliente não entenda, use-as como venda:
             Informações: 
                 Plano Atendente: Possível treinar uma inteligência artificial das melhores do mercado para o seu negócio, respondendo da maneira que você precisar. Também é possível selecionar a opção de intervenção personalizada quando necessário, para informações humanas, e a bifurcação quando necessário o envio de mensagens automáticas para determinados números, com o resultado definido pelo cliente — ou ambos juntos.
+                Plano Secretário: Alem das funcionalidades do plano atendente, o cliente terá um aplicativo no celular com uma agenda integrada simultaneamente, então seu secretario podera agendar, alterar e exluir serviços sozinhos sem seu acompanhamento. 
         *Se a pessoa mencionar sobre uma informação não descrita acima, diga que o ideal é marcar uma reunião.
         =====================================================
         💰 PLANOS E VALORES (Vendas)
@@ -826,6 +876,10 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         - Ações: Seja profissional, empática, natural, objetiva e prestativa. Use frases curtas e diretas, mantenha tom positivo e humano. Entenda a necessidade do cliente, utilize técnicas de venda consultiva, aplique gatilhos mentais com sutileza (autoridade, escassez, reciprocidade, afinidade) e conduza a conversa para o fechamento de forma leve, parecendo que está ajudando, não vendendo.
         - Linguagem adaptável (modo camaleão): ajuste o tom conforme o cliente — simpático e leve com conversadores, direto com apressados, técnico com desconfiados e descontraído com clientes informais.
         - Estratégia de venda: Sempre inicie entendendo a dor ou necessidade do cliente, recomende a melhor solução como um “especialista” que orienta com confiança (como um médico que indica o tratamento ideal), e finalize de forma natural e segura.
+        - **TÉCNICA DE SONDAGEM (PERGUNTA-CHAVE):** Logo após capturar o nome e enquanto responde à primeira dúvida (sobre preços ou serviços), **FAÇA UMA PERGUNTA RÁPIDA** para descobrir o segmento do cliente.
+            - **Por quê?** Para dar exemplos RELEVANTES e mostrar como o bot funciona PARA ELE.
+            - **Exemplos de como perguntar:** "Perfeito, [Nome]! E só para eu te ajudar melhor, qual é o seu segmento?" ou "Claro, [Nome]. E você trabalha com o quê? Assim já te dou um exemplo focado para a sua área."
+            - **Exemplo de como usar:** Se ele disser "Sou dentista", responda "Ah, ótimo! Para dentistas, o Plano Secretário é incrível para confirmar consultas e reduzir faltas."
         - Não fazer: Não invente informações, não discuta, não compartilhe dados pessoais, não responda fora de contexto e evite encerrar sem oferecer uma solução. Como último recurso, ofereça uma semana grátis antes da despedida.
         =====================================================
         ⚙️ PERSONALIDADE DO ATENDENTE
@@ -1058,12 +1112,9 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         return json.dumps({"erro": f"Exceção ao processar ferramenta: {e}"}, ensure_ascii=False)
 
 
-# ==========================================================
-# GERADOR DE RESPOSTA (REFATORADO PARA TOOLS)
-# ==========================================================
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
     """
-    (VERSÃO FINAL - COM TOOLS)
+    (VERSÃO FINAL - COM TOOLS E CONTAGEM DE TOKENS)
     Esta função agora gerencia o loop de ferramentas.
     """
     global modelo_ia 
@@ -1071,9 +1122,13 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     if modelo_ia is None:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
     if conversation_collection is None:
-         return "Desculpe, estou com um problema interno (DB de conversas não carregado)."
+        return "Desculpe, estou com um problema interno (DB de conversas não carregado)."
 
-    # 1. Carregar histórico (do Bot Neuro)
+    # *** INÍCIO DA ALTERAÇÃO (TOKENS) ***
+    total_tokens_this_turn = 0
+    # *** FIM DA ALTERAÇÃO ***
+
+    # 1. Carregar histórico (do Bot Neuro'up)
     convo_data = load_conversation_from_db(contact_id)
     old_history_gemini_format = []
     
@@ -1087,9 +1142,8 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 role = 'model'
             
             if 'text' in msg:
-                # Adaptação: Se o histórico for uma chamada de função (que não salvamos), pulamos
                 if msg['text'].startswith("Chamando função:") or msg['text'].startswith("Resultado da função:"):
-                     continue
+                    continue
                 
                 old_history_gemini_format.append({
                     'role': role,
@@ -1127,9 +1181,15 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
         
         # 5. Envio inicial para a IA
-        # (Contagem de tokens removida para simplicidade, a lógica de loop é mais importante)
         resposta_ia = chat_session.send_message(user_message)
-        
+
+        # *** INÍCIO DA ALTERAÇÃO (TOKENS) ***
+        try:
+            total_tokens_this_turn += resposta_ia.usage_metadata.total_token_count
+        except Exception as e:
+            print(f"Aviso: Não foi possível somar tokens (chamada inicial): {e}")
+        # *** FIM DA ALTERAÇÃO ***
+
         # 6. O LOOP DE FERRAMENTAS
         while True:
             cand = resposta_ia.candidates[0]
@@ -1148,7 +1208,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             call_args = {key: value for key, value in func_call.args.items()}
             
             log_info(f"🔧 IA chamou a função: {call_name} com args: {call_args}")
-            # Salva no histórico que a IA chamou a função
             append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
 
             # 6c. Executa a função
@@ -1156,18 +1215,25 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             log_info(f"📤 Resultado da função: {resultado_json_str}")
             
             try:
-                # Verifica se a função retornou uma tag especial (Intervenção)
                 resultado_data = json.loads(resultado_json_str)
                 if resultado_data.get("tag_especial") == "[HUMAN_INTERVENTION]":
                     print("‼️ Intervenção detectada pela Tool. Encerrando o loop.")
                     return f"[HUMAN_INTERVENTION] Motivo: {resultado_data.get('motivo', 'Solicitado pelo cliente.')}"
             except Exception:
-                pass # Não era um JSON ou não tinha a tag
+                pass 
 
             # 6d. Devolve o resultado para a IA
             resposta_ia = chat_session.send_message(
                 [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
             )
+            
+            # *** INÍCIO DA ALTERAÇÃO (TOKENS) ***
+            try:
+                total_tokens_this_turn += resposta_ia.usage_metadata.total_token_count
+            except Exception as e:
+                print(f"Aviso: Não foi possível somar tokens (loop de ferramenta): {e}")
+            # *** FIM DA ALTERAÇÃO ***
+            
             # (O loop continuará)
 
         # 7. Resposta final (texto)
@@ -1180,48 +1246,18 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             except Exception:
                 ai_reply_text = "Desculpe, tive um problema ao processar sua solicitação. Pode repetir?"
         
-        # A lógica de salvar o nome foi MOVIDA para a 'handle_tool_call'
-        # A lógica de tokens é simplificada (não implementada neste refactor)
-        save_conversation_to_db(contact_id, sender_name, known_customer_name, 0) # Salva 0 tokens
+        # *** INÍCIO DA ALTERAÇÃO (TOKENS) ***
+        # Salva o total de tokens da rodada
+        save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn)
+        print(f"🔥 Tokens consumidos nesta rodada para {contact_id}: {total_tokens_this_turn}")
+        # *** FIM DA ALTERAÇÃO ***
         
         return ai_reply_text
     
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini (loop de tools): {e}")
         return "Desculpe, estou com um problema técnico no momento (IA_TOOL_FAIL). Por favor, tente novamente em um instante."
-   
-# ==========================================================
-# FUNÇÕES DE WHATSAPP (Copiadas do Bot Neuro)
-# ==========================================================
-
-def transcrever_audio_gemini(caminho_do_audio):
-    global modelo_ia 
-    if not modelo_ia:
-        print("❌ Modelo de IA não inicializado. Impossível transcrever.")
-        return None
     
-    # Usa o modelo 'base' sem tools, que é mais simples para transcrição
-    modelo_base_gemini = genai.GenerativeModel('gemini-1.5-flash') 
-    
-    print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição no Gemini...")
-    try:
-        audio_file = genai.upload_file(
-            path=caminho_do_audio, 
-            mime_type="audio/ogg" # Assumindo ogg, como no seu código
-        )
-        response = modelo_base_gemini.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
-        genai.delete_file(audio_file.name)
-        
-        if response.text:
-            print(f"✅ Transcrição recebida: '{response.text}'")
-            return response.text
-        else:
-            print("⚠️ A IA não retornou texto para o áudio. Pode ser um áudio sem falas.")
-            return None
-    except Exception as e:
-        print(f"❌ Erro ao transcrever áudio com Gemini: {e}")
-        return None
-
 def send_whatsapp_message(number, text_message):
     INSTANCE_NAME = "chatbot" 
     clean_number = number.split('@')[0]
@@ -1258,7 +1294,7 @@ def send_whatsapp_message(number, text_message):
 # ==========================================================
 # LÓGICA DE RELATÓRIOS (Copiada do Bot Neuro)
 # ==========================================================
-def gerar_e_enviar_relatorio_semanal():
+def gerar_e_enviar_relatorio_diario(): # <-- NOME MUDOU
     # ...
     SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
     EMAIL_RELATORIOS = os.environ.get('EMAIL_RELATORIOS')
@@ -1270,7 +1306,10 @@ def gerar_e_enviar_relatorio_semanal():
     hoje = datetime.now()
     
     try:
-        usuarios_do_bot = list(conversation_collection.find({}))
+        # Filtro para buscar apenas documentos de usuários (ignorando 'BOT_STATUS')
+        query_filter = {"_id": {"$ne": "BOT_STATUS"}}
+        usuarios_do_bot = list(conversation_collection.find(query_filter))
+        
         numero_de_contatos = len(usuarios_do_bot)
         total_geral_tokens = 0
         media_por_contato = 0
@@ -1295,7 +1334,8 @@ def gerar_e_enviar_relatorio_semanal():
         message = Mail(
             from_email=EMAIL_RELATORIOS,
             to_emails=EMAIL_RELATORIOS,
-            subject=f"Relatório Semanal de Tokens - {CLIENT_NAME} - {hoje.strftime('%d/%m')}",
+            # ALTERE O ASSUNTO AQUI:
+            subject=f"Relatório Diário de Tokens - {CLIENT_NAME} - {hoje.strftime('%d/%m')}",
             plain_text_content=corpo_email_texto
         )
         
@@ -1303,9 +1343,10 @@ def gerar_e_enviar_relatorio_semanal():
         response = sendgrid_client.send(message)
         
         if response.status_code == 202:
-             print(f"✅ Relatório semanal para '{CLIENT_NAME}' enviado com sucesso via SendGrid!")
+             # NOME MUDOU AQUI:
+            print(f"✅ Relatório diário para '{CLIENT_NAME}' enviado com sucesso via SendGrid!")
         else:
-             print(f"❌ Erro ao enviar e-mail via SendGrid. Status: {response.status_code}. Body: {response.body}")
+            print(f"❌ Erro ao enviar e-mail via SendGrid. Status: {response.status_code}. Body: {response.body}")
 
     except Exception as e:
         print(f"❌ Erro ao gerar ou enviar relatório para '{CLIENT_NAME}': {e}")
@@ -1705,17 +1746,19 @@ def process_message_logic(message_data, buffered_message_text=None):
 # ==========================================================
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
-    print("   CHATBOT WHATSAPP COM IA INICIADO (V2 - COM AGENDA)")
-    print(f"   CLIENTE: {CLIENT_NAME}")
+    print("    CHATBOT WHATSAPP COM IA INICIADO (V2 - COM AGENDA)")
+    print(f"    CLIENTE: {CLIENT_NAME}")
     if not RESPONSIBLE_NUMBER:
-        print("   AVISO: 'RESPONSIBLE_NUMBER' não configurado.")
+        print("    AVISO: 'RESPONSIBLE_NUMBER' não configurado.")
     else:
-        print(f"   Intervenção Humana notificará: {RESPONSIBLE_NUMBER}")
+        print(f"    Intervenção Humana notificará: {RESPONSIBLE_NUMBER}")
     print("=============================================")
     print("Servidor aguardando mensagens no webhook...")
 
-    scheduler.add_job(gerar_e_enviar_relatorio_semanal, 'cron', day_of_week='sun', hour=8, minute=0)
-    print("⏰ Agendador de relatórios iniciado. O relatório será enviado todo Domingo às 08:00.")
+    # --- ALTERE AS DUAS LINHAS ABAIXO ---
+    scheduler.add_job(gerar_e_enviar_relatorio_diario, 'cron', hour=8, minute=0)
+    print("⏰ Agendador de relatórios iniciado. O relatório será enviado DIARIAMENTE às 08:00.")
+    # --- FIM DA ALTERAÇÃO ---
     
     import atexit
     atexit.register(lambda: scheduler.shutdown())
