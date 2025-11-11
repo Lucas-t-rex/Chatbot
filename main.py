@@ -1164,7 +1164,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     system_instruction = get_system_prompt_unificado(
         horario_atual,
         known_customer_name,
-        sender_name
+        "" if not known_customer_name else sender_name
     )
 
     try:
@@ -1265,16 +1265,15 @@ def transcrever_audio_gemini(caminho_do_audio):
         print("❌ Modelo de IA não inicializado. Impossível transcrever.")
         return None
     
-    # Usa o modelo 'base' sem tools, que é mais simples para transcrição
-    modelo_base_gemini = genai.GenerativeModel('gemini-1.5-flash') 
-    
     print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição no Gemini...")
     try:
         audio_file = genai.upload_file(
             path=caminho_do_audio,
             mime_type="audio/ogg" # Assumindo ogg, como no seu código
         )
-        response = modelo_base_gemini.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
+        
+        # CORRIGIDO: Usando 'modelo_ia' (o global)
+        response = modelo_ia.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
         genai.delete_file(audio_file.name)
         
         if response.text:
