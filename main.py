@@ -770,7 +770,6 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         🆘 REGRAS DE FUNÇÕES (TOOLS) - PRIORIDADE ABSOLUTA
         =====================================================
         Você tem ferramentas para executar ações. NUNCA execute uma ação sem usar a ferramenta.
-
         - **REGRA DE AÇÃO IMEDIATA (CRÍTICO):**
         - NUNCA termine sua resposta dizendo que "vai verificar" ou "vai consultar" (ex: "Vou verificar a disponibilidade..."). Isso é um ERRO GRAVE. A conversa irá morrer.
         - Se você tem os dados suficientes para usar uma ferramenta (ex: tem a DATA para `fn_listar_horarios_disponiveis`), você DEVE:
@@ -1174,13 +1173,13 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         return s
 
     sender_name = _normalize_name(sender_name) or ""
-    known_customer_name = _normalize_name(known_customer_name)
-
-    # Escolhe o nome final a ser passado ao prompt (prefere known_customer_name)
-    final_name_for_prompt = known_customer_name or sender_name or ""
-
-    if final_name_for_prompt:
-        print(f"👤 Cliente já conhecido (nome normalizado): {final_name_for_prompt}")
+    known_customer_name = _normalize_name(known_customer_name) # <-- Limpa o nome do DB
+    
+    if known_customer_name:
+        print(f"👤 Cliente já conhecido (nome real): {known_customer_name}")
+    else:
+        # O sender_name é usado apenas para a REGRA ANTI-DUPLICAÇÃO dentro do prompt
+        print(f"👤 Cliente novo. Sender_name (ignorar na saudação): {sender_name}")
 
     # 2. Obter Fuso Horário e Prompt de Sistema
     try:
@@ -1200,12 +1199,12 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         saudacao = "Olá" # Saudação padrão em caso de erro
 
-    # Passa o nome final normalizado ao prompt de sistema (evita duplicação)
+    # Passa os nomes separadamente
     system_instruction = get_system_prompt_unificado(
         saudacao, 
         horario_atual,
-        final_name_for_prompt,
-        "" if not final_name_for_prompt else sender_name
+        known_customer_name, # <-- Passa o nome real (que será None)
+        sender_name          # <-- Passa o sender_name (Dani Trindade)
     )
 
     try:
@@ -1219,8 +1218,8 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         # 4. Inicia o chat SÓ com o histórico
         chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
         
-        # Log mais claro usando o nome final (se houver)
-        log_display = final_name_for_prompt or sender_name or contact_id
+        # Log mais claro (agora usa 'known_customer_name' ou 'sender_name' corretamente)
+        log_display = known_customer_name or sender_name or contact_id
         print(f"Enviando para a IA: '{user_message}' (De: {log_display})")
         
         # 5. Envio inicial para a IA
