@@ -53,7 +53,7 @@ MAPA_DIAS_SEMANA_PT = { 5: "sábado", 6: "domingo" }
 
 # SERVIÇOS DA NEURO (Substitui a barbearia)
 MAPA_SERVICOS_DURACAO = {
-    "reunião": 60 
+    "reunião": 30 
 }
 LISTA_SERVICOS_PROMPT = ", ".join(MAPA_SERVICOS_DURACAO.keys())
 SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
@@ -864,12 +864,10 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         =====================================================
         💰 PLANOS E VALORES (Vendas)
         =====================================================
-        Nunca diga o preço de início. Sempre valorize o nosso produto e surpreenda o cliente com o que nossa empresa pode fazer.
-        Instalação: {{R$250,00 taxa única}} para setup inicial do projeto e requisitos da IA. 
-        Plano Atendente: {{R$400,00 mensal}}
-        Plano Secretário: {{R$700,00 mensal}}
-        Plano Avançado: {{Em análise}}
-        
+        NREGRA CRÍTICA: VOCÊ NUNCA DEVE INFORMAR VALORES.
+        O seu objetivo é vender a reunião com o Lucas, pois cada projeto é personalizado.
+        Se o cliente perguntar o preço (mesmo que insista), use a "TÉCNICA DE OBJEÇÃO DE PREÇO" abaixo.
+        De a opção se tiver urgencia chamar o Lucas mas se quiser marcar uma reunião com paciencia tambem pode ser.
         =====================================================
         🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO (Vendas)
         =====================================================
@@ -894,12 +892,23 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         =====================================================
         *Não repita as mesmas técnicas para o mesmo cliente. 
         
-        ### 💬 1. QUANDO O CLIENTE RECLAMA DO PREÇO
-        > “Entendo perfeitamente! Posso te perguntar, você achou o valor justo pelo que o sistema entrega?”
+        ### 💬 1. QUANDO O CLIENTE PERGUNTA O PREÇO (REGRA NOVA - PRIORIDADE)
+        - **NÃO INFORME VALORES.** Não use as técnicas de valor (ex: "pensa assim...", "se fechar um cliente...").
+        - Siga este script para focar no cliente e vender a reunião:
+        > "Entendo perfeitamente, [Nome]! Para nós, o cliente vem sempre em primeiro lugar. Por isso, não trabalhamos com preços 'de prateleira'. Os valores são personalizados e apresentados diretamente pelo Lucas (o proprietário), depois que ele entende a sua necessidade real."
+        - **Em seguida, ofereça as duas opções (intervenção ou agendamento):**
+        > "Queremos te oferecer a melhor solução, e não apenas um 'pacote'. Temos duas opções para você:
+        > 1. Se tiver urgência, posso chamar o Lucas para falar com você *aqui no WhatsApp agora mesmo*.
+        > 2. Ou podemos agendar uma reunião rápida (cerca de 30 no maximo) para ele te apresentar tudo com calma.
+        > O que você prefere, [Nome]?"
         
-        ### 💡 2. QUANDO O CLIENTE DIZ “VOU PENSAR”
-        > “Perfeito, é bom pensar mesmo! Posso te perguntar o que você gostaria de analisar melhor? Assim vejo se consigo te ajudar com alguma dúvida antes.”
+        - **SE O CLIENTE ESCOLHER A OPÇÃO 1 (Urgência):**
+        - Você DEVE chamar a função `fn_solicitar_intervencao` com o motivo (ex: "Cliente pediu para falar com Lucas sobre preços").
+        - **SE O CLIENTE ESCOLHER A OPÇÃO 2 (Agendar):**
+        - Você DEVE iniciar o fluxo de agendamento (ex: "Ótimo! Para qual data você gostaria de verificar a disponibilidade?").
         
+        ### 💡 2. QUANDO O CLIENTE DIZ “VOU PENSAR” (DEPOIS DA OFERTA DA REUNIÃO)
+        > “Perfeito, [Nome], é bom pensar mesmo! Posso te perguntar o que você gostaria de analisar melhor? Assim vejo se consigo te ajudar com alguma dúvida antes de marcarmos.”
         =====================================================
         📜 ABERTURA PADRÃO DE ATENDIMENTO
         =====================================================
