@@ -16,8 +16,6 @@ from dotenv import load_dotenv
 from pymongo import MongoClient
 from pymongo.server_api import ServerApi
 from pymongo.errors import ConnectionFailure, OperationFailure
-from sendgrid import SendGridAPIClient
-from sendgrid.helpers.mail import Mail
 from apscheduler.schedulers.background import BackgroundScheduler
 from typing import Any, Dict, List, Optional
 
@@ -732,6 +730,7 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
     if known_customer_name:
         prompt_name_instruction = f"O nome do usuário com quem você está falando é: {known_customer_name}. Trate-o por este nome."
     else:
+        # --- INÍCIO DA SUBSTITUIÇÃO ---
         prompt_name_instruction = f"""
         REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
           Seu nome é {{Lyra}} e você é atendente da {{Neuro'Up Soluções em Tecnologia}}.
@@ -750,12 +749,11 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
 
           DEPOIS QUE VOCÊ PEDIR O NOME (em qualquer um dos casos):
           - O cliente vai responder com o nome (ex: "Meu nome é Marcos", "lucas").
-          - **Sua Próxima Ação:**
-              1.  Use o tempo para cumprimentar usando o {horario_atual}. Se for após as 5:00, diga "bom dia". Se for após as 12:00, diga "boa tarde". Se for após as 18:00, diga "boa noite!"        
-              2.  Quando o cliente responder com o nome (ex: "Meu nome é Marcos"):
-                 - Você DEVE OBRIGATORIAMENTE chamar a função `fn_capturar_nome` com o nome extraído (ex: "Marcos", "lucas").
-                 - RESPONDA IMEDIATAMENTE à pergunta original que ele fez (ou pergunte como ajudar, se for o CASO 1).
-                 - **Use o nome extraído UMA SÓ VEZ.** (Ex: "Que ótimo, Marcos! Sobre os preços...")
+          - **Sua Próxima Ação (REGRA INQUEBRÁVEL):**
+              1. Quando o cliente responder apenas com o nome (ex: "Meu nome é Marcos"):
+              2. Sua **ÚNICA** ação deve ser chamar a função `fn_capturar_nome` com o nome extraído (ex: "Marcos", "lucas").
+              3. **NÃO RESPONDA NADA EM TEXTO.** Não diga "ok", "anotado", ou "prazer em conhecê-lo". Apenas chame a função.
+              4. O sistema irá processar a função. No **próximo turno** (depois que a função rodar), você DEVE saudar o cliente pelo nome (ex: "Que ótimo, Marcos!") e SÓ ENTÃO responder à pergunta original que ele tinha (ou perguntar como ajudar, se for o CASO 1).
         """
     prompt_final = f"""
         A data e hora atuais são: {horario_atual}.
@@ -894,13 +892,9 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         
         ### 💬 1. QUANDO O CLIENTE PERGUNTA O PREÇO (REGRA NOVA - PRIORIDADE)
         - **NÃO INFORME VALORES.** Não use as técnicas de valor (ex: "pensa assim...", "se fechar um cliente...").
-        - Siga este script para focar no cliente e vender a reunião:
-        > "Entendo perfeitamente, [Nome]! Para nós, o cliente vem sempre em primeiro lugar. Por isso, não trabalhamos com preços 'de prateleira'. Os valores são personalizados e apresentados diretamente pelo Lucas (o proprietário), depois que ele entende a sua necessidade real."
-        - **Em seguida, ofereça as duas opções (intervenção ou agendamento):**
-        > "Queremos te oferecer a melhor solução, e não apenas um 'pacote'. Temos duas opções para você:
-        > 1. Se tiver urgência, posso chamar o Lucas para falar com você *aqui no WhatsApp agora mesmo*.
-        > 2. Ou podemos agendar uma reunião rápida (cerca de 30 no maximo) para ele te apresentar tudo com calma.
-        > O que você prefere, [Nome]?"
+        Entenda o conceito e responda usando ele faça a pessoa enteder tambem:
+        - Nossos serviços são personalizados para cada cliente, então o valor pode variar, para isso precisamos saber mais sobre o seu nogocio.
+        - Pergute se a pessoa tem pressa, pois voce pode chamar o propritario agora mesmo ou agendar uma reunião no melhor horario que ela desejar.
         
         - **SE O CLIENTE ESCOLHER A OPÇÃO 1 (Urgência):**
         - Você DEVE chamar a função `fn_solicitar_intervencao` com o motivo (ex: "Cliente pediu para falar com Lucas sobre preços").
@@ -912,7 +906,7 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         =====================================================
         📜 ABERTURA PADRÃO DE ATENDIMENTO
         =====================================================
-        *Use apenas quando não tiver histórico de conversa e for a primeira vez que entra em contato com o usuário.
+        *Use apenas quando não tiver histórico de conversa e for a primeira mensagem da converssa com o usuário.
         👋 Olá! (Use o {horario_atual} para saudação) Tudo bem? 
         Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. 
         Como posso te ajudar? 😊
@@ -1331,13 +1325,10 @@ def send_whatsapp_message(number, text_message):
 # ==========================================================
 # LÓGICA DE RELATÓRIOS (Copiada do Bot Neuro)
 # ==========================================================
-def gerar_e_enviar_relatorio_diario(): # <-- NOME MUDOU
-    # ...
-    SENDGRID_API_KEY = os.environ.get('SENDGRID_API_KEY')
-    EMAIL_RELATORIOS = os.environ.get('EMAIL_RELATORIOS')
-
-    if not all([SENDGRID_API_KEY, EMAIL_RELATORIOS]) or conversation_collection is None:
-        print("⚠️ Variáveis de Relatório não configuradas ou DB de Conversas indisponível.")
+def gerar_e_enviar_relatorio_diario():
+    # Verifica o essencial: o DB e o NÚMERO do responsável
+    if conversation_collection is None or not RESPONSIBLE_NUMBER:
+        print("⚠️ Relatório diário desabilitado. (DB de Conversas ou RESPONSIBLE_NUMBER indisponível).")
         return
 
     hoje = datetime.now()
@@ -1356,38 +1347,37 @@ def gerar_e_enviar_relatorio_diario(): # <-- NOME MUDOU
                 total_geral_tokens += usuario.get('total_tokens_consumed', 0)
             media_por_contato = total_geral_tokens / numero_de_contatos
         
-        corpo_email_texto = f"""
-        Relatório de Consumo Acumulado do Cliente: '{CLIENT_NAME}'
-        Data do Relatório: {hoje.strftime('%d/%m/%Y')}
-        --- RESUMO GERAL DE USO ---
-        👤 Número de Contatos Únicos: {numero_de_contatos}
-        🔥 Consumo Total de Tokens (Acumulado): {total_geral_tokens}
-        📊 Média de Tokens por Contato: {media_por_contato:.0f}
-        ---------------------------
-        Atenciosamente,
-        Seu Sistema de Monitoramento.
+        # Formatar a mensagem para WhatsApp
+        corpo_whatsapp_texto = f"""
+            📊 *Relatório Diário de Tokens* 📊
+            -----------------------------------
+            *Cliente:* {CLIENT_NAME}
+            *Data:* {hoje.strftime('%d/%m/%Y')}
+            -----------------------------------
+            👤 *Total de Conversas (Clientes):* {numero_de_contatos}
+            🔥 *Total de Tokens Gastos:* {total_geral_tokens}
+            📈 *Média de Tokens por Cliente:* {media_por_contato:.0f}
         """
+        
+        # Limpa a formatação (remove espaços extras da esquerda)
+        corpo_whatsapp_texto = "\n".join([line.strip() for line in corpo_whatsapp_texto.split('\n')])
 
-        message = Mail(
-            from_email=EMAIL_RELATORIOS,
-            to_emails=EMAIL_RELATORIOS,
-            # ALTERE O ASSUNTO AQUI:
-            subject=f"Relatório Diário de Tokens - {CLIENT_NAME} - {hoje.strftime('%d/%m')}",
-            plain_text_content=corpo_email_texto
-        )
+        # Construir o número JID completo para a função de envio
+        responsible_jid = f"{RESPONSIBLE_NUMBER}@s.whatsapp.net"
         
-        sendgrid_client = SendGridAPIClient(SENDGRID_API_KEY)
-        response = sendgrid_client.send(message)
+        # Enviar a mensagem
+        send_whatsapp_message(responsible_jid, corpo_whatsapp_texto)
         
-        if response.status_code == 202:
-             # NOME MUDOU AQUI:
-            print(f"✅ Relatório diário para '{CLIENT_NAME}' enviado com sucesso via SendGrid!")
-        else:
-            print(f"❌ Erro ao enviar e-mail via SendGrid. Status: {response.status_code}. Body: {response.body}")
+        print(f"✅ Relatório diário para '{CLIENT_NAME}' enviado com sucesso para o WhatsApp ({RESPONSIBLE_NUMBER})!")
 
     except Exception as e:
-        print(f"❌ Erro ao gerar ou enviar relatório para '{CLIENT_NAME}': {e}")
-
+        print(f"❌ Erro ao gerar ou enviar relatório por WhatsApp para '{CLIENT_NAME}': {e}")
+        # Tenta notificar o erro
+        try:
+            responsible_jid = f"{RESPONSIBLE_NUMBER}@s.whatsapp.net"
+            send_whatsapp_message(responsible_jid, f"❌ Falha ao gerar o relatório diário do bot {CLIENT_NAME}. Erro: {e}")
+        except:
+            pass # Se falhar em notificar, apenas loga no console
 # ==========================================================
 # LÓGICA DE SERVIDOR E WEBHOOK (Copiada do Bot Neuro)
 # ==========================================================
