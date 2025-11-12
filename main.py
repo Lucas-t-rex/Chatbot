@@ -34,8 +34,10 @@ MONGO_DB_URI = os.environ.get("MONGO_DB_URI") # DB de Conversas
 # --- CHAVES DE API (NOVO - AGENDA) ---
 # Você PRECISA definir estas no seu .env
 MONGO_AGENDA_URI = os.environ.get("MONGO_AGENDA_URI")
-MONGO_AGENDA_DB = os.environ.get("MONGO_AGENDA_DB", "neuro_agenda_db")
 MONGO_AGENDA_COLLECTION = os.environ.get("MONGO_AGENDA_COLLECTION", "agendamentos")
+
+clean_client_name_global = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
+DB_NAME = "neuroup_solucoes_db"
 
 # --- LÓGICA DE NEGÓCIO DA AGENDA (ADAPTADA PARA NEURO) ---
 INTERVALO_SLOTS_MINUTOS = 30 # Reuniões de 30 em 30 min (08:00, 08:30...)
@@ -81,14 +83,12 @@ def log_info(msg):
 # ==========================================================
 try:
     client_conversas = MongoClient(MONGO_DB_URI)
-    
-    clean_client_name = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
-    db_name = re.sub(r'[^a-z0-9_]+', '', clean_client_name) 
-    
-    db_conversas = client_conversas[db_name] 
+   
+    # Agora usa o nome global
+    db_conversas = client_conversas[DB_NAME] 
     conversation_collection = db_conversas.conversations
-    
-    print(f"✅ [DB Conversas] Conectado ao MongoDB: '{db_name}'")
+   
+    print(f"✅ [DB Conversas] Conectado ao MongoDB: '{DB_NAME}'")
 except Exception as e:
     print(f"❌ ERRO: [DB Conversas] Não foi possível conectar ao MongoDB. Erro: {e}")
     conversation_collection = None # Trava de segurança
@@ -489,9 +489,10 @@ class Agenda:
 agenda_instance = None
 if MONGO_AGENDA_URI and GEMINI_API_KEY:
     try:
+        print(f"ℹ️ [DB Agenda] Tentando conectar no banco: '{DB_NAME}'")
         agenda_instance = Agenda(
-            uri=MONGO_AGENDA_URI, 
-            db_name=MONGO_AGENDA_DB, 
+            uri=MONGO_AGENDA_URI, # <-- DICA: No seu .env, use o MESMO valor do MONGO_DB_URI aqui
+            db_name=DB_NAME,      # <--- MUDANÇA PRINCIPAL
             collection_name=MONGO_AGENDA_COLLECTION
         )
     except Exception as e:
@@ -723,11 +724,18 @@ def get_last_messages_summary(history, max_messages=4):
 # ==========================================================
 # O NOVO "CÉREBRO" (PROMPT DE SISTEMA UNIFICADO)
 # ==========================================================
-def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, sender_name: str) -> str:
+def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, sender_name: str) -> str:
     
     # Lógica de Nome Dinâmico
     prompt_name_instruction = ""
     if known_customer_name:
+    # Remove espaços duplicados e capitaliza corretamente
+        palavras = known_customer_name.strip().split()
+        # Remove duplicações tipo "Lucas Lucas" ou "Dani Dani"
+        if len(palavras) >= 2 and palavras[0].lower() == palavras[1].lower():
+            known_customer_name = palavras[0].capitalize()
+        else:
+            known_customer_name = " ".join([p.capitalize() for p in palavras])
         prompt_name_instruction = f"O nome do usuário com quem você está falando é: {known_customer_name}. Trate-o por este nome."
     else:
         # --- INÍCIO DA SUBSTITUIÇÃO ---
@@ -739,13 +747,13 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
           Não aparente ser uma inteligência artificial; seja natural e fluida.
           CASO 1: A primeira mensagem do cliente é SÓ um cumprimento (ex: "Oi", "Bom dia", "Tudo bem?").
           1.  **Sua Resposta:** Use a "ABERTURA PADRÃO" completa, pois você ainda não sabe o que ele quer.
-              > "Olá! (Use {horario_atual}) Tudo bem? Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Como posso te ajudar? 😊"
+              > "Olá! (Use {saudacao}) Tudo bem? Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Como posso te ajudar? 😊"
           CASO 2: A primeira mensagem do cliente JÁ CONTÉM uma pergunta (ex: "Oi, qual o preço?", "Bom dia, queria agendar").
           1.  **Sua Resposta (Adaptada):**
               - Cumprimente e se apresente.
               - **NÃO PERGUNTE "Como posso te ajudar?"** (pois ele já disse).
               - Vá direto para a solicitação do nome.
-              > Exemplo: "Olá! (Use {horario_atual}) Tudo bem? Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Claro, já vou te passar sobre [o preço/agendamento], mas antes, como posso te chamar?"
+              > Exemplo: "Olá! (Use {saudacao}) Tudo bem? Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Claro, já vou te passar sobre [o preço/agendamento], mas antes, como posso te chamar?"
 
           DEPOIS QUE VOCÊ PEDIR O NOME (em qualquer um dos casos):
           - O cliente vai responder com o nome (ex: "Meu nome é Marcos", "lucas").
@@ -753,7 +761,7 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
               1. Quando o cliente responder apenas com o nome (ex: "Meu nome é Marcos"):
               2. Sua **ÚNICA** ação deve ser chamar a função `fn_capturar_nome` com o nome extraído (ex: "Marcos", "lucas").
               3. **NÃO RESPONDA NADA EM TEXTO.** Não diga "ok", "anotado", ou "prazer em conhecê-lo". Apenas chame a função.
-              4. O sistema irá processar a função. No **próximo turno** (depois que a função rodar), você DEVE saudar o cliente pelo nome (ex: "Que ótimo, Marcos!") e SÓ ENTÃO responder à pergunta original que ele tinha (ou perguntar como ajudar, se for o CASO 1).
+               4. O sistema irá processar a função. No **próximo turno** (depois que a função rodar), você DEVE saudar ocliente pelo nome (ex: "Que ótimo, Marcos!") e SÓ ENTÃO responder à pergunta original que ele tinha (ou perguntar como ajudar, se for o CASO 1).
         """
     prompt_final = f"""
         A data e hora atuais são: {horario_atual}.
@@ -781,13 +789,13 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
 
         3.  **AGENDAMENTO DE REUNIÃO:**
             - Seu novo dever é agendar reuniões com o proprietário (Lucas).
-            - Os serviços de agendamento são: {LISTA_SERVICOS_PROMPT}. O padrão é "reunião" (60 min).
+            - Os serviços de agendamento são: {LISTA_SERVICOS_PROMPT}. O padrão é "reunião" (30 min). 
             - O número de atendentes é {NUM_ATENDENTES}.
             - Horário de atendimento para reuniões: {', '.join([f"das {b['inicio']} às {b['fim']}" for b in BLOCOS_DE_TRABALHO])}.
             - **FLUXO OBRIGATÓRIO DE AGENDAMENTO (AÇÃO IMEDIATA):**
             - a. **NÃO OFEREÇA HORÁRIOS SEM CHECAR:** Você NÃO sabe os horários vagos.
             - b. Se o usuário pedir "tem horário?", "quero agendar":
-            - c. PRIMEIRO, avise que a reunião é um serviço de até 1 hora.
+            - c. PRIMEIRO, avise que a reunião é um serviço de até meia hora.
             - d. SEGUNDO, pergunte a **DATA** (ex: "E para qual data você gostaria de verificar?").
             - e. **QUANDO TIVER A DATA (AÇÃO IMEDIATA):**
             -    1. Assim que o cliente informar a DATA (ex: "amanhã", "dia 15"), você DEVE chamar a `fn_listar_horarios_disponiveis` NA MESMA HORA.
@@ -810,7 +818,7 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
             - i. **FLUXO DE ALTERAÇÃO (AÇÃO IMEDIATA):**
             -    1. Chame `fn_buscar_por_cpf` e mostre o agendamento (ex: "Você tem uma reunião dia 11/11 às 10:00. Para qual nova data e hora gostaria de remarcar?").
             -    2. Quando o cliente disser a nova data/hora (ex: "pras 2 amanhã"), **NÃO PEÇA CONFIRMAÇÃO** (ex: "você quer mesmo?").
-            -    3. Chame a ferramenta `fn_alterar_agendamento` IMEDIATAMENTE.
+            -    3. Se o horario for disponivel chame a ferramenta `fn_alterar_agendamento` IMEDIATAMENTE.
             -    4. Responda ao cliente JÁ com o resultado (sucesso ou erro).
 
             -    **Exemplo CORRETO (Ação Imediata):**
@@ -890,7 +898,7 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         =====================================================
         *Não repita as mesmas técnicas para o mesmo cliente. 
         
-        ### 💬 1. QUANDO O CLIENTE PERGUNTA O PREÇO (REGRA NOVA - PRIORIDADE)
+        ### 💬 1. QUANDO O CLIENTE PERGUNTA O PREÇO 
         - **NÃO INFORME VALORES.** Não use as técnicas de valor (ex: "pensa assim...", "se fechar um cliente...").
         Entenda o conceito e responda usando ele faça a pessoa enteder tambem:
         - Nossos serviços são personalizados para cada cliente, então o valor pode variar, para isso precisamos saber mais sobre o seu nogocio.
@@ -907,7 +915,7 @@ def get_system_prompt_unificado(horario_atual: str, known_customer_name: str, se
         📜 ABERTURA PADRÃO DE ATENDIMENTO
         =====================================================
         *Use apenas quando não tiver histórico de conversa e for a primeira mensagem da converssa com o usuário.
-        👋 Olá! (Use o {horario_atual} para saudação) Tudo bem? 
+        👋 Olá! {saudacao}, Tudo bem? 
         Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. 
         Como posso te ajudar? 😊
         =====================================================
@@ -1041,7 +1049,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
     try:
         # --- Ferramentas da AGENDA ---
         if not agenda_instance and call_name.startswith("fn_"):
-             if call_name in ["fn_listar_horarios_disponiveis", "fn_buscar_por_cpf", "fn_salvar_agendamento", "fn_excluir_agendamento", "fn_alterar_agendamento"]:
+            if call_name in ["fn_listar_horarios_disponiveis", "fn_buscar_por_cpf", "fn_salvar_agendamento", "fn_excluir_agendamento", "fn_alterar_agendamento"]:
                 return json.dumps({"erro": "A função de agendamento está desabilitada (Sem conexão com o DB da Agenda)."}, ensure_ascii=False)
 
         if call_name == "fn_listar_horarios_disponiveis":
@@ -1127,15 +1135,13 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     if conversation_collection is None:
         return "Desculpe, estou com um problema interno (DB de conversas não carregado)."
 
-    # *** INÍCIO DA ALTERAÇÃO (TOKENS) ***
     total_tokens_this_turn = 0
-    # *** FIM DA ALTERAÇÃO ***
 
-    # 1. Carregar histórico (do Bot Neuro'up)
     convo_data = load_conversation_from_db(contact_id)
     old_history_gemini_format = []
     
     if convo_data:
+        # read saved name from DB (se houver)
         known_customer_name = convo_data.get('customer_name', known_customer_name) 
         history_from_db = convo_data.get('history', [])
         
@@ -1153,21 +1159,53 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     'parts': [msg['text']]
                 })
 
-    if known_customer_name:
-        print(f"👤 Cliente já conhecido pelo DB: {known_customer_name}")
+    # --- Normalização e prevenção de duplicação de nome ---
+    def _normalize_name(n: Optional[str]) -> Optional[str]:
+        if not n:
+            return None
+        s = str(n).strip()
+        if not s:
+            return None
+        # Se começar com duplicação do tipo "Lucas Lucas" (mesmas duas primeiras palavras),
+        # reduz para apenas a primeira ocorrência.
+        parts = [p for p in re.split(r'\s+', s) if p]
+        if len(parts) >= 2 and parts[0].lower() == parts[1].lower():
+            return parts[0]
+        return s
+
+    sender_name = _normalize_name(sender_name) or ""
+    known_customer_name = _normalize_name(known_customer_name)
+
+    # Escolhe o nome final a ser passado ao prompt (prefere known_customer_name)
+    final_name_for_prompt = known_customer_name or sender_name or ""
+
+    if final_name_for_prompt:
+        print(f"👤 Cliente já conhecido (nome normalizado): {final_name_for_prompt}")
 
     # 2. Obter Fuso Horário e Prompt de Sistema
     try:
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
         horario_atual = agora_local.strftime("%Y-%m-%d %H:%M:%S")
+        
+        hora_do_dia = agora_local.hour
+        if 5 <= hora_do_dia < 12:
+            saudacao = "Bom dia"
+        elif 12 <= hora_do_dia < 18:
+            saudacao = "Boa tarde"
+        else:
+            saudacao = "Boa noite"
+        
     except Exception as e:
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        saudacao = "Olá" # Saudação padrão em caso de erro
 
+    # Passa o nome final normalizado ao prompt de sistema (evita duplicação)
     system_instruction = get_system_prompt_unificado(
+        saudacao, 
         horario_atual,
-        known_customer_name,
-        "" if not known_customer_name else sender_name
+        final_name_for_prompt,
+        "" if not final_name_for_prompt else sender_name
     )
 
     try:
@@ -1181,7 +1219,9 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         # 4. Inicia o chat SÓ com o histórico
         chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
         
-        print(f"Enviando para a IA: '{user_message}' (De: {sender_name})")
+        # Log mais claro usando o nome final (se houver)
+        log_display = final_name_for_prompt or sender_name or contact_id
+        print(f"Enviando para a IA: '{user_message}' (De: {log_display})")
         
         # 5. Envio inicial para a IA
         resposta_ia = chat_session.send_message(user_message)
