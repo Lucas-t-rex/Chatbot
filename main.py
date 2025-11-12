@@ -742,20 +742,18 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         prompt_name_instruction = f"""
         REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
           Seu nome é {{Lyra}} e você é atendente da {{Neuro'Up Soluções em Tecnologia}}.
-          Seu primeiro objetivo é sempre descobrir o nome real do cliente.
-          **REGRA ANTI-DUPLICAÇÃO (MUITO IMPORTANTE):** O nome de contato do WhatsApp ('{sender_name}') é irrelevante para a saudação. **NÃO USE '{sender_name}' NA SUA RESPOSTA.** Use APENAS o nome que o cliente digitar. Se o cliente digitar "Lucas", sua resposta deve usar "Lucas", e NUNCA "Lucas Lucas".
+          Seu primeiro objetivo é sempre descobrir o nome real do cliente. Pois o nome de contato ('{sender_name}') pode ser um apelido.
           Não aparente ser uma inteligência artificial; seja natural e fluida.
+
           CASO 1: A primeira mensagem do cliente é SÓ um cumprimento (ex: "Oi", "Bom dia", "Tudo bem?").
-          1.  **Sua Resposta:** Use a "ABERTURA PADRÃO" completa, pois você ainda não sabe o que ele quer.
-              > Se a pessoa perguntar se esta bem, responda positivamente.(Responda a pergunta "Tudo bem?")
-              > "Olá! (Use {saudacao}) Tudo bem? Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Como posso te ajudar? 😊"
-          CASO 2: A primeira mensagem do cliente JÁ CONTÉM uma pergunta (ex: "Oi, qual o preço?", "Bom dia, queria agendar").
+          1.  **Sua Resposta:** (Responda a pergunta "Tudo bem?")
+              > "Olá! {saudacao}, tudo bem? Por aqui tudo ótimo! 😊 Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Como posso te ajudar?"
+
+          CASO 2: A primeira mensagem do cliente JÁ CONTÉM uma pergunta (ex: "Oi, qual o preço?", "Bom dia, queria agendar", "como funciona").
           1.  **Sua Resposta (Adaptada):**
-              - Cumprimente e se apresente.
-              - Peça o nome imediatamente antes de dar informações.
               - **NÃO PERGUNTE "Como posso te ajudar?"** (pois ele já disse).
-              - Vá direto para a solicitação do nome de forma curta, direta e educada.
-              > Exemplo: "Olá! (Use {saudacao}) Tudo bem? Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Claro, já vou te passar sobre [o assunto que a pessoa pediu], mas antes, como posso te chamar?"
+              - Vá direto para a solicitação do nome de forma curta e direta.
+              > Exemplo: "Olá! {saudacao}! Claro, já te passo os detalhes sobre [o preço/agendamento/como funciona]. Para que nosso atendimento fique mais próximo, como posso te chamar?"
 
           DEPOIS QUE VOCÊ PEDIR O NOME (em qualquer um dos casos):
           - O cliente vai responder com o nome (ex: "Meu nome é Marcos", "lucas").
@@ -809,7 +807,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             -    **Exemplo CORRETO (Ação Imediata):**
             -    *Cliente:* "queria ver pra amanhã"
             -    *Sua IA (Pensa):* "Ok, 'amanhã' é 11/11. Vou chamar `fn_listar_horarios_disponiveis(data='11/11/2025', servico='reunião')`... (Recebe: [09:00, 09:30, 14:00, 15:00])"
-            -    *Sua IA (Responde):* "Claro, Lucas! Para amanhã (11/11), tenho estes horários para reunião das 09:00 as 11:30 e das 14:00 as 15:00. Qual deles fica melhor para você?"
+            -    *Sua IA (Responde):* "Claro, Lucas! Para amanhã (11/11), tenho estes horários para reunião das 09:00 as 11:30 e das 14:00  15:00. Qual deles fica melhor para você?"
                 
             -    **Exemplo ERRADO (NÃO FAÇA):**
             -    *Cliente:* "queria ver pra amanhã"
@@ -1102,20 +1100,35 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         
         elif call_name == "fn_capturar_nome":
             try:
-                nome = args.get("nome_extraido", "").strip()
-                if not nome:
+                nome_bruto = args.get("nome_extraido", "").strip()
+                if not nome_bruto:
                     return json.dumps({"erro": "Nome estava vazio."}, ensure_ascii=False)
-                
+
+                # --- INÍCIO DA CORREÇÃO DO BUG "Lucas Lucas" ---
+                nome_limpo = nome_bruto
+                try:
+                    palavras = nome_bruto.split()
+                    # Se o nome tem 2 palavras e elas são idênticas (ignorando maiúsculas)
+                    if len(palavras) >= 2 and palavras[0].lower() == palavras[1].lower():
+                        nome_limpo = palavras[0].capitalize() # Salva só a primeira, capitalizada
+                    else:
+                        # Capitaliza o nome (ex: "lucas" vira "Lucas")
+                        nome_limpo = " ".join([p.capitalize() for p in palavras])
+                except Exception:
+                    nome_limpo = nome_bruto # Em caso de erro, salva o que veio
+
+                # --- FIM DA CORREÇÃO ---
+
                 if conversation_collection is not None:
                     conversation_collection.update_one(
                         {'_id': contact_id},
-                        {'$set': {'customer_name': nome}},
+                        {'$set': {'customer_name': nome_limpo}}, # <-- Agora salva o nome limpo
                         upsert=True
                     )
-                return json.dumps({"sucesso": True, "nome_salvo": nome}, ensure_ascii=False)
+                return json.dumps({"sucesso": True, "nome_salvo": nome_limpo}, ensure_ascii=False)
             except Exception as e:
                 return json.dumps({"erro": f"Erro ao salvar nome no DB: {e}"}, ensure_ascii=False)
-        
+
         elif call_name == "fn_solicitar_intervencao":
             motivo = args.get("motivo", "Motivo não especificado pela IA.")
             # Retorna uma 'tag' especial que a lógica principal vai entender
