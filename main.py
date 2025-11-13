@@ -903,10 +903,18 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
             return json.dumps(resp, ensure_ascii=False)
 
         elif call_name == "fn_salvar_agendamento":
+            telefone_arg = args.get("telefone", "")
+            
+            # Se a IA usou o placeholder, troque pelo contact_id (clean_number)
+            if telefone_arg == "CONFIRMADO_NUMERO_ATUAL":
+                telefone_arg = contact_id 
+                print(f"ℹ️ Placeholder 'CONFIRMADO_NUMERO_ATUAL' detectado. Usando o contact_id: {contact_id}")
+            # --- FIM DA MODIFICAÇÃO ---
+
             resp = agenda_instance.salvar(
                 nome=args.get("nome", ""),
                 cpf_raw=args.get("cpf", ""),
-                telefone=args.get("telefone", ""),
+                telefone=telefone_arg, # Use a variável modificada
                 servico=args.get("servico", ""),
                 data_str=args.get("data", ""),
                 hora_str=args.get("hora", "")
