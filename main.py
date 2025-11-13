@@ -1057,7 +1057,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         saudacao, 
         horario_atual,
         known_customer_name, 
-        sender_name          
+        sender_name,  
         contact_id
     )
 
