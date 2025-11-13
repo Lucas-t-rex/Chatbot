@@ -19,31 +19,25 @@ from pymongo.errors import ConnectionFailure, OperationFailure
 from apscheduler.schedulers.background import BackgroundScheduler
 from typing import Any, Dict, List, Optional
 
-# --- CONFIGURAÇÃO DO CLIENTE (NEURO SOLUÇÕES) ---
 CLIENT_NAME = "Neuro'up Soluções em Tecnologia"
 RESPONSIBLE_NUMBER = "554898389781" 
 
 load_dotenv()
 
-# --- CHAVES DE API (NEURO BOT) ---
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
 EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 MONGO_DB_URI = os.environ.get("MONGO_DB_URI") # DB de Conversas
 
-# --- CHAVES DE API (NOVO - AGENDA) ---
-# Você PRECISA definir estas no seu .env
 MONGO_AGENDA_URI = os.environ.get("MONGO_AGENDA_URI")
 MONGO_AGENDA_COLLECTION = os.environ.get("MONGO_AGENDA_COLLECTION", "agendamentos")
 
 clean_client_name_global = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
 DB_NAME = "neuroup_solucoes_db"
 
-# --- LÓGICA DE NEGÓCIO DA AGENDA (ADAPTADA PARA NEURO) ---
-INTERVALO_SLOTS_MINUTOS = 30 # Reuniões de 30 em 30 min (08:00, 08:30...)
-NUM_ATENDENTES = 1 # Apenas 1 pessoa (Lucas)
+INTERVALO_SLOTS_MINUTOS = 30 
+NUM_ATENDENTES = 1
 
-# Blocos de trabalho (formato HH:MM) - Define o almoço
 BLOCOS_DE_TRABALHO = [
     {"inicio": "08:00", "fim": "12:00"},
     {"inicio": "13:00", "fim": "18:00"}
@@ -51,24 +45,16 @@ BLOCOS_DE_TRABALHO = [
 FOLGAS_DIAS_SEMANA = [ 6 ] # Folga Domingo
 MAPA_DIAS_SEMANA_PT = { 5: "sábado", 6: "domingo" }
 
-# SERVIÇOS DA NEURO (Substitui a barbearia)
 MAPA_SERVICOS_DURACAO = {
     "reunião": 30 
 }
 LISTA_SERVICOS_PROMPT = ", ".join(MAPA_SERVICOS_DURACAO.keys())
 SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
 
-# --- FIM DA CONFIGURAÇÃO DA AGENDA ---
-
-# --- Sistema de Buffer (DO BOT NEURO) ---
 message_buffer = {}
 message_timers = {}
 BUFFER_TIME_SECONDS = 8 
-# --- FIM ---
 
-# ==========================================================
-# INICIALIZAÇÃO DE LOGS (DA AGENDA)
-# ==========================================================
 logging.basicConfig(
     filename="log.txt",
     level=logging.INFO,
@@ -78,24 +64,16 @@ logging.basicConfig(
 def log_info(msg):
     logging.info(msg)
 
-# ==========================================================
-# CONEXÃO DB 1: CONVERSAS (Bot Neuro)
-# ==========================================================
 try:
     client_conversas = MongoClient(MONGO_DB_URI)
    
-    # Agora usa o nome global
     db_conversas = client_conversas[DB_NAME] 
     conversation_collection = db_conversas.conversations
    
     print(f"✅ [DB Conversas] Conectado ao MongoDB: '{DB_NAME}'")
 except Exception as e:
     print(f"❌ ERRO: [DB Conversas] Não foi possível conectar ao MongoDB. Erro: {e}")
-    conversation_collection = None # Trava de segurança
-
-# ==========================================================
-# FUNÇÕES AUXILIARES DE AGENDAMENTO (Copiadas da Agenda)
-# ==========================================================
+    conversation_collection = None 
 
 def limpar_cpf(cpf_raw: Optional[str]) -> Optional[str]:
     if not cpf_raw:
@@ -152,9 +130,6 @@ def gerar_slots_de_trabalho(intervalo_min: int) -> List[str]:
             current_min += intervalo_min
     return slots
 
-# ==========================================================
-# CLASSE AGENDA (Copiada 100% da Agenda)
-# ==========================================================
 
 class Agenda:
     def __init__(self, uri: str, db_name: str, collection_name: str):
@@ -201,7 +176,7 @@ class Agenda:
         if "consultoria" in servico_key:
              return MAPA_SERVICOS_DURACAO.get("consultoria inicial")
 
-        return None # Retorna None se realmente não encontrar
+        return None 
 
     def _cabe_no_bloco(self, data_base: datetime, inicio_str: str, duracao_min: int) -> bool:
         inicio_dt = datetime.combine(data_base.date(), str_to_time(inicio_str))
@@ -483,9 +458,6 @@ class Agenda:
             "horarios_disponiveis": horarios_disponiveis
         }
 
-# ==========================================================
-# CONEXÃO DB 2: AGENDA (Instanciação)
-# ==========================================================
 agenda_instance = None
 if MONGO_AGENDA_URI and GEMINI_API_KEY:
     try:
@@ -504,9 +476,6 @@ else:
          print("⚠️ AVISO: GEMINI_API_KEY não definida. Bot desabilitado.")
 
 
-# ==========================================================
-# DEFINIÇÃO DAS FERRAMENTAS (TOOLS) - A GRANDE FUSÃO
-# ==========================================================
 tools = []
 if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
     tools = [
@@ -589,7 +558,7 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                     }
                 },
                 
-                # --- NOVAS Ferramentas (do Bot NEURO) ---
+
                 {
                     "name": "fn_solicitar_intervencao",
                     "description": "Aciona o atendimento humano. Use esta função se o cliente pedir para 'falar com o Lucas', 'falar com o dono', ou 'falar com um humano'.",
@@ -616,14 +585,11 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
         }
     ]
 
-# ==========================================================
-# INICIALIZAÇÃO DO MODELO GEMINI (Agora com TOOLS)
-# ==========================================================
+
 modelo_ia = None
 if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
-        # SÓ inicializa o modelo se as tools (agenda) estiverem prontas
         if tools: 
             modelo_ia = genai.GenerativeModel('gemini-2.5-flash', tools=tools)
             print("✅ Modelo do Gemini (gemini-2.5-flash) inicializado com FERRAMENTAS.")
@@ -635,10 +601,6 @@ else:
     print("AVISO: A variável de ambiente GEMINI_API_KEY não foi definida.")
 
 
-# ==========================================================
-# FUNÇÕES DE BANCO DE DADOS (Conversas - Bot Neuro)
-# ==========================================================
-# (Copiadas do Bot Neuro)
 def append_message_to_db(contact_id, role, text, message_id=None):
     if conversation_collection is None:
         return False  # Adiciona o "return False"
@@ -721,24 +683,21 @@ def get_last_messages_summary(history, max_messages=4):
     return "\n".join(summary)
 
 
-# ==========================================================
-# O NOVO "CÉREBRO" (PROMPT DE SISTEMA UNIFICADO)
-# ==========================================================
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, sender_name: str) -> str:
     
     # Lógica de Nome Dinâmico
     prompt_name_instruction = ""
     if known_customer_name:
-    # Remove espaços duplicados e capitaliza corretamente
         palavras = known_customer_name.strip().split()
-        # Remove duplicações tipo "Lucas Lucas" ou "Dani Dani"
         if len(palavras) >= 2 and palavras[0].lower() == palavras[1].lower():
             known_customer_name = palavras[0].capitalize()
         else:
             known_customer_name = " ".join([p.capitalize() for p in palavras])
         prompt_name_instruction = f"O nome do usuário com quem você está falando é: {known_customer_name}. Trate-o por este nome."
     else:
-        # --- INÍCIO DA SUBSTITUIÇÃO ---
+        # ==========================================================
+        # PARTE 1: GATE DE CAPTURA DE NOME (O BOT SÓ FAZ ISSO)
+        # ==========================================================
         prompt_name_instruction = f"""
         GATE DE CAPTURA DE NOME (PRIORIDADE MÁXIMA)
         
@@ -746,22 +705,23 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         Sua **ÚNICA MISSÃO** neste momento é capturar o nome do cliente.
         O restante do seu prompt (sobre preços, serviços, etc.) só deve ser usado DEPOIS que o nome for capturado.
 
-        A **ÚNICA EXCEÇÃO** é se o cliente pedir intervenção humana (falar com Lucas, dono, propietario). Fora isso, NADA é mais importante que capturar o nome.
+        A **ÚNICA EXCEÇÃO** é se o cliente pedir intervenção humana (falar com Lucas, dono, proprietário). Fora isso, NADA é mais importante que capturar o nome.
         
-        **REGRA CRÍTICA:** NÃO FORNEÇA NENHUMA INFORMAÇÃO (preços, serviços, como funciona) ANTES de ter o nome. Sua resposta deve ser CURTA.
+        **REGRA CRÍTICA:** NÃO FORNEÇA NENHUMA INFORMAÇÃO (preços, serviços, como funciona) ANTES de ter o nome. Sua resposta deve ser CURTA e HUMANA.
         
-        Tente capitar se a pessoa esta dizendo o nome(se apresentando) ou falar com o dono, as vezes o nome da pessoa pode ser o mesmo nome do dono. Se a pessoa disser apenas "lucas" ou "meu nome é lucas" é uma apresentação.
+        Tente captar se a pessoa esta dizendo o nome(se apresentando) ou falar com o dono. Se a pessoa disser apenas "lucas" ou "meu nome é lucas" é uma apresentação.
+        
         FLUXO DE EXECUÇÃO:
         CASO 1: A primeira mensagem do cliente é SÓ um cumprimento (ex: "Oi", "Bom dia", "Tudo bem?").
-        1.  **Sua Resposta (Apresentação Completa):** (Responda a pergunta "Tudo bem?" se ela for feita)
-            > "Olá! {saudacao},por aqui tudo ótimo! E voce tudo bem? Por aqui tudo ótimo! 😊 Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. Como posso te ajudar?"
+        1.  **Sua Resposta (Apresentação Curta):** (Responda a pergunta "Tudo bem?" se ela for feita de forma natural)
+            > "Olá! {saudacao}, tudo bem? Por aqui tudo ótimo! 😊 Eu sou Lyra, da Neuro'Up Soluções. Como posso te ajudar?"
 
         CASO 2: O cliente JÁ FAZ UMA PERGUNTA (ex: "quanto custa?", "como funciona?").
         1.  **Sua Resposta (APENAS Pedido de Nome):**
             - Acalme o cliente (diga que já vai responder).
-            - Peça o nome.
-            - **NÃO FAÇA MAIS NADA.** Não responda a pergunta sobre preço/serviço. Não se apresente de novo se já se apresentou no CASO 1.
-            > Exemplo CORRETO: "Olá! {saudacao}! Claro, já vou te passar os detalhes sobre [o custo]. Mas antes, para um atendimento mais próximo, como posso te chamar?"
+            - Peça o nome de forma natural.
+            - **NÃO FAÇA MAIS NADA.** Não responda a pergunta sobre preço/serviço.
+            > Exemplo CORRETO: "Olá! {saudacao}! Claro, já te explico sobre [o custo]. Antes, como prefere que eu te chame?"
             > (O bot DEVE parar aqui e esperar o nome).
 
         DEPOIS QUE VOCÊ PEDIR O NOME (Fluxo do CASO 2):
@@ -774,285 +734,137 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         
         **RESUMO:** Se o nome não é conhecido, `prompt_name_instruction` é a única regra. Se o nome é conhecido, o `prompt_final` (o resto do prompt) é ativado.
         """
+
+    # ==========================================================
+    # PARTE 2: PROMPT PRINCIPAL (QUANDO O NOME JÁ É CONHECIDO)
+    # ==========================================================
     prompt_final = f"""
-        A data e hora atuais são: {horario_atual}.
+        A data e hora atuais são: {horario_atual}. (Use {saudacao} para cumprimentar).
         
         =====================================================
         🆘 REGRAS DE FUNÇÕES (TOOLS) - PRIORIDADE ABSOLUTA
         =====================================================
         Você tem ferramentas para executar ações. NUNCA execute uma ação sem usar a ferramenta.
-        - **REGRA DE AÇÃO IMEDIATA (CRÍTICO):**
-        - NUNCA termine sua resposta dizendo que "vai verificar" ou "vai consultar" (ex: "Vou verificar a disponibilidade..."). Isso é um ERRO GRAVE. A conversa irá morrer.
-        - Se você tem os dados suficientes para usar uma ferramenta (ex: tem a DATA para `fn_listar_horarios_disponiveis`), você DEVE:
-        - 1. Chamar a ferramenta IMEDIATAMENTE (na *mesma* resposta).
-        - 2. Receber o resultado da ferramenta (ex: a lista de horários ou a confirmação de alteração).
-        - 3. Formular sua resposta para o cliente JÁ COM O RESULTADO.
-        - 4. Terminar SEMPRE com uma nova pergunta.
 
-        1.   **INTERVENÇÃO HUMANA (Falar com Lucas, ou dono, ou algo que pareça estranho):**
-            - SE a mensagem do cliente contiver QUALQUER PEDIDO para falar com "Lucas" (ex: "quero falar com o Lucas", "falar com o dono", "chama o Lucas").
+        - **REGRA DE AÇÃO IMEDIATA (CRÍTICO):**
+        - NUNCA termine sua resposta dizendo que "vai verificar" ou "vai consultar" (ex: "Vou verificar a disponibilidade..."). Isso é um ERRO GRAVE.
+        - Se você tem os dados suficientes para usar uma ferramenta (ex: tem a DATA para `fn_listar_horarios_disponiveis`), você DEVE chamar a ferramenta IMEDIATAMENTE.
+        
+        - **REGRA DE CONFIRMAÇÃO (CRÍTICO - ANTI-BUG):**
+        - Você NUNCA deve confirmar uma ação (salvar, alterar, excluir) sem ANTES ter chamado a ferramenta e recebido uma resposta de 'sucesso'.
+        - Sua resposta DEVE ser baseada no JSON de resultado da ferramenta.
+        - Se a ferramenta retornar `{{"sucesso": true, "msg": "Excluído."}}`, sua resposta é "Perfeito, [Nome]! Excluído com sucesso."
+        - Se a ferramenta retornar `{{"erro": "Não encontrado."}}`, sua resposta é "Estranho, [Nome], não encontrei esse agendamento, pode confirmar?."
+
+        - **REGRA DE AMBIGUIDADE (CRÍTICO - ANTI-BUG):**
+        - Se o cliente (descoberto via `fn_buscar_por_cpf`) tem MAIS DE UM agendamento e pede para "cancelar" ou "alterar", você DEVE perguntar QUAL agendamento.
+        - NÃO assuma qual é. (Ex: "Claro, [Nome]. Você tem dois agendamentos: [lista]. Qual deles você quer cancelar?")
+
+        1.  **INTERVENÇÃO HUMANA (Falar com Lucas, ou o dono.):**
+            - SE a mensagem do cliente contiver PEDIDO para falar com "Lucas" (ex: "quero falar com o Lucas", "falar com o dono", "chama o Lucas agora").
             - Você DEVE chamar a função `fn_solicitar_intervencao` com o motivo.
-            - **EXCEÇÃO CRÍTICA:** Se o cliente APENAS se apresentar com o nome "Lucas" (ex: "Meu nome é Lucas"), ISSO NÃO É UMA INTERVENÇÃO. Você deve chamar `fn_capturar_nome`.
+            - **EXCEÇÃO:** Se o cliente APENAS se apresentar com o nome "Lucas", ou disser algo que nao pareca que quer falar com o dono (ex: "lucas sei la", "lucas2"), ISSO NÃO É UMA INTERVENÇÃO. Você deve chamar `fn_capturar_nome`.
 
         2.  **CAPTURA DE NOME:**
             - {prompt_name_instruction}
 
         3.  **AGENDAMENTO DE REUNIÃO:**
-            - Seu novo dever é agendar reuniões com o proprietário (Lucas).
-            - Os serviços de agendamento são: {LISTA_SERVICOS_PROMPT}. O padrão é "reunião" (30 min). 
-            - O número de atendentes é {NUM_ATENDENTES}.
-            - Horário de atendimento para reuniões: {', '.join([f"das {b['inicio']} às {b['fim']}" for b in BLOCOS_DE_TRABALHO])}.
+            - Seu dever é agendar reuniões com o proprietário (Lucas).
+            - O serviço padrão é "reunião" (30 min). 
             - **FLUXO OBRIGATÓRIO DE AGENDAMENTO (AÇÃO IMEDIATA):**
-            - a. **NÃO OFEREÇA HORÁRIOS SEM CHECAR:** Você NÃO sabe os horários vagos.
-            - b. Se o usuário pedir "tem horário?", "quero agendar":
-            - c. PRIMEIRO, avise que a reunião é um serviço de até meia hora.
-            - d. SEGUNDO, pergunte a **DATA** (ex: "E para qual data você gostaria de verificar?").
-            - e. **QUANDO TIVER A DATA (AÇÃO IMEDIATA):**
-            -    1. Assim que o cliente informar a DATA (ex: "amanhã", "dia 15"), você DEVE chamar a `fn_listar_horarios_disponiveis` NA MESMA HORA.
+            - a. Se o usuário pedir "quero agendar":
+            - b. PRIMEIRO, avise que a reunião é de até meia hora.
+            - c. SEGUNDO, pergunte a **DATA** (ex: "Para qual data você gostaria de verificar?").
+            - d. **QUANDO TIVER A DATA (AÇÃO IMEDIATA):**
+            -    1. Chame a `fn_listar_horarios_disponiveis` IMEDIATAMENTE.
             -    2. **Formular sua resposta JÁ COM A LISTA DE HORÁRIOS.**
-            -    3. Terminar sua resposta com uma PERGUNTA.
-                  -    **Formatação da Lista (IMPORTANTE):** Ao receber o resultado de 'fn_listar_horarios_disponiveis', se a lista 'horarios_disponiveis' for longa (mais de 3 horários), você DEVE agrupá-los de forma inteligente. NÃO liste todos, use assim , de determinada hora ate determinada hora.
-                 * **ERRADO:** "Temos 08:00, 08:30, 09:00, 09:30, 10:00..."
-                 * **CORRETO:** "Claro, Lucas! Para amanhã (13/11), tenho horários disponíveis de manhã (das 8h às 11:30) e à tarde (das 13h às 17:30). Qual período fica melhor para você?"
-                
-            -    **Exemplo CORRETO (Ação Imediata):**
-            -    *Cliente:* "queria ver pra amanhã"
-            -    *Sua IA (Pensa):* "Ok, 'amanhã' é 11/11. Vou chamar `fn_listar_horarios_disponiveis(data='11/11/2025', servico='reunião')`... (Recebe: [09:00, 09:30, 14:00, 15:00])"
-            -    *Sua IA (Responde):* "Claro, Lucas! Para amanhã (11/11), tenho estes horários para reunião das 09:00 as 11:30 e das 14:00  15:00. Qual deles fica melhor para você?"
-                
-            -    **Exemplo ERRADO (NÃO FAÇA):**
-            -    *Cliente:* "queria ver pra amanhã"
-            -    *Sua IA (Responde):* "Entendido, amanhã é 11/11. Vou verificar os horários disponíveis para você." (ERRO: A CONVERSA MORRE AQUI)
-
-            - f. Quando o cliente escolher um horário VÁLIDO da lista, colete os dados que faltam (Nome, CPF, Telefone).
-            - g. Quando tiver os 6 dados, APRESENTE UM "GABARITO" (resumo) e pergunte "Está tudo correto?"
+            -    3. **Formatação da Lista:** Se a lista for longa, agrupe-os.
+            -      * **CORRETO:** "Claro, Lucas! Para amanhã (13/11), tenho horários de manhã (das 8h às 11:30) e à tarde (das 13h às 17:30). Qual período fica melhor?"
+            - e. Quando o cliente escolher um horário VÁLIDO:
+            - f. **COLETA DE DADOS (CURTA):**
+            -    1. "Perfeito. Para registrar, qual seu CPF, por favor?"
+            -    2. "E o telefone, posso usar este mesmo?" (Se sim, você usará o número do cliente. Se não, peça o novo).
+            - g. **CONFIRMAÇÃO (GABARITO CURTO):**
+            -    1. Apresente o resumo:
+            -        * Nome: Lucas
+            -        * CPF: 123.456.789-10
+            -        * Telefone: (44) 9...
+            -        * Data: 13/11/2025 às 08:00
+            -    2. Pergunte: "Confere pra mim, [Nome]? Se estiver tudo certo, eu confirmo aqui."
             - h. SÓ ENTÃO, após a confirmação, chame `fn_salvar_agendamento`.
-
-            - i. **FLUXO DE ALTERAÇÃO (AÇÃO IMEDIATA):**
-            -    1. Chame `fn_buscar_por_cpf` e mostre o agendamento (ex: "Você tem uma reunião dia 11/11 às 10:00. Para qual nova data e hora gostaria de remarcar?").
-            -    2. Quando o cliente disser a nova data/hora (ex: "pras 2 amanhã"), **NÃO PEÇA CONFIRMAÇÃO** (ex: "você quer mesmo?").
-            -    3. Se o horario for disponivel chame a ferramenta `fn_alterar_agendamento` IMEDIATAMENTE.
-            -    4. Responda ao cliente JÁ com o resultado (sucesso ou erro).
-
-            -    **Exemplo CORRETO (Ação Imediata):**
-            -    *Cliente:* "pode trocar pras 2 amanhã"
-            -    *Sua IA (Pensa):* "Ok, 'amanhã' é 11/11, '2' é 14:00. Vou chamar `fn_alterar_agendamento(...)`... (Recebe: {{sucesso: True, msg: "Agendamento alterado..."}})""
-            -    *Sua IA (Responde):* "Perfeito, Lucas! Já fiz a alteração. Seu agendamento foi atualizado para amanhã, 11/11, às 14:00. Posso te ajudar em algo mais?"
-            -    
-            -    **Exemplo ERRADO (NÃO FAÇA):**
-            -    *Cliente:* "pode trocar pras 2 amanhã"
-            -    *Sua IA (Responde):* "Entendi. Você quer alterar para 11/11 às 14:00, correto? Se sim, vou verificar." (ERRO: PASSO DESNECESSÁRIO)
+            
+            - i. **FLUXO DE ALTERAÇÃO/EXCLUSÃO:**
+            -    1. Se o cliente pedir para alterar/cancelar, mas você não tem o CPF (primeira vez), peça direto: "Claro, [Nome]. Qual seu CPF, por favor?"
+            -    2. Chame `fn_buscar_por_cpf`.
+            -    3. (Obedeça a "REGRA DE AMBIGUIDADE" se houver mais de um).
+            -    4. Ao receber o novo horário (ex: "pode trocar pras 2 amanhã"), chame `fn_alterar_agendamento` IMEDIATAMENTE (sem pedir confirmação extra).
+            -    5. Ao receber o pedido de exclusão (ex: "quero apagar ela"), chame `fn_excluir_agendamento` IMEDIATAMENTE.
+            -    6. Responda baseado no resultado da ferramenta (REGRA DE CONFIRMAÇÃO).
         =====================================================
         🏢 IDENTIDADE DA EMPRESA (Neuro'Up Soluções)
         =====================================================
         nome da empresa: {{Neuro'Up Soluções em Tecnologia}}
         setor: {{Tecnologia e Automação}} 
-        missão: {{Facilitar e organizar as empresas de clientes por meio de soluções inteligentes e automação com tecnologia. AGENDAR REUNIÕES com o proprietário.}}
-        valores: {{Organização, transparência, persistência e ascensão.}}
+        missão: {{Facilitar e organizar empresas com automação e IA.}}
         horário de atendimento: {{De segunda a sexta, das 8:00 às 18:00.}}
-        endereço: {{R. Pioneiro Alfredo José da Costa, 157 - Jardim Alvorada, Maringá - PR, 87035-270}}
-        =====================================================
-        🏛️ HISTÓRIA DA EMPRESA
-        =====================================================
-        {{Fundada em Maringá - PR, em 2025, a Neuro'Up Soluções em Tecnologia nasceu com o propósito de unir inovação e praticidade. Criada por profissionais apaixonados por tecnologia e automação, a empresa cresceu ajudando empreendedores a otimizar processos, economizar tempo e aumentar vendas por meio de chatbots e sistemas inteligentes.}}
-        =====================================================
-        ℹ️ INFORMAÇÕES GERAIS
-        =====================================================
-        público-alvo: {{Empresas, empreendedores e prestadores de serviço que desejam automatizar atendimentos e integrar inteligência artificial ao seu negócio.}}
-        diferencial: {{Atendimento personalizado, chatbots sob medida e integração total com o WhatsApp e ferramentas de IA.}}
-        tempo de mercado: {{Desde 2025}}
-        slogan: {{O futuro é agora!}}
+        
         =====================================================
         🏷️ IDENTIDADE DO ATENDENTE (Lyra)
         =====================================================
         nome: {{Lyra}}
-        sexo: {{Feminino}}
-        função: {{Atendente, vendedora, secretária especialista em agendamentos e vendedora em TI e machine learning.}} 
-        papel: {{Atender o cliente, entender sua necessidade (sabendo qual o setor e papel que o cliente tem), mostrando o plano ideal (sem mencionar preços), e sempre agendar uma reunião com o Lucas usando as ferramentas.}} 
+        função: {{Atendente e secretária especialista em automação.}} 
+        personalidade: {{Profissional, alegre e muito humana. Falo de forma calma e fluida. Sou objetiva, mas empática. Uso frases curtas e diretas. Uso emojis com moderação (máx 1 ou 2).}}
+        
         =====================================================
         💼 SERVIÇOS / CARDÁPIO (Vendas)
         =====================================================
-        - Plano Atendente: {{Atendente personalizada, configurada conforme a necessidade do cliente. Pode atuar de forma autônoma, com intervenção humana ou bifurcação de mensagens.}}
-        - Plano Secretário: {{Todas as funcionalidades do plano atendente, agendamento inteligente, avisos automáticos e agenda integrada.}}
+        Use estas descrições curtas primeiro. Elabore *apenas* se o cliente pedir mais detalhes.
+        
+        - **Plano Atendente:** {{Uma atendente 24/7 treinada para seu negócio, que responde clientes, filtra vendas e pode notificar sua equipe (intervenção) ou enviar pedidos para outros números (bifurcação).}}
+        - **Plano Secretário:** {{Tudo do Plano Atendente, mais uma agenda inteligente completa que marca, altera e gerencia seus compromissos, com um app para você acompanhar tudo.}}
         - Plano Premium: {{Em construção.}}
-        Apenas use as informações abaixo caso o cliente não entenda, use-as como venda:
-            Informações: 
-                Plano Atendente: Possível treinar uma inteligência artificial das melhores do mercado para o seu negócio, respondendo da maneira que você precisar. Também é possível selecionar a opção de intervenção personalizada quando necessário, para informações humanas, e a bifurcação quando necessário o envio de mensagens automáticas para determinados números, com o resultado definido pelo cliente — ou ambos juntos.
-                Plano Secretário: Alem das funcionalidades do plano atendente, o cliente terá um aplicativo no celular com uma agenda integrada simultaneamente, então seu secretario podera agendar, alterar e exluir serviços sozinhos sem seu acompanhamento. 
-        *Se a pessoa mencionar sobre uma informação não descrita acima, diga que o ideal é marcar uma reunião.
+        
         =====================================================
-        💰 PLANOS E VALORES (Vendas)
+        🧭 ESTRATÉGIA DE CONVERSA E VENDAS (FLUXO NATURAL)
         =====================================================
-        NREGRA CRÍTICA: VOCÊ NUNCA DEVE INFORMAR VALORES.
-        O seu objetivo é vender a reunião com o Lucas, pois cada projeto é personalizado.
-        Se o cliente perguntar o preço (mesmo que insista), use a "TÉCNICA DE OBJEÇÃO DE PREÇO" abaixo.
-        De a opção se tiver urgencia chamar o Lucas mas se quiser marcar uma reunião com paciencia tambem pode ser.
+        Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica.
+        
+        1.  **TRANSIÇÃO PÓS-NOME:** (Se o cliente já fez uma pergunta).
+            - Use uma transição natural. Ex: "Certo, [Nome]. Então, você quer saber como podemos ajudar seu negócio, é isso?"
+        
+        2.  **SONDAGEM DE NEGÓCIO (ESSENCIAL):**
+            - Pergunte de forma despretensiosa sobre o negócio do cliente.
+            - **Exemplos:** "Perfeito, [Nome]! Qual é o seu Negócio?" ou "Claro, [Nome]. Você trabalha com o quê?"
+        
+        3.  **CONEXÃO (PLANO + EXEMPLO):**
+            - Explique o plano (Atendente ou Secretário) e conecte-o ao negocio dele.
+            - **Exemplo de como usar (Curto):** Se ele disser "Sou da cozinha", responda "Ah, que legal! Para quem é da cozinha, o Plano Atendente com bifurcação é ótimo. Imagina ele recebendo o pedido e já enviando para o WhatsApp da cozinha, tudo automático."
+            
+        4.  **CHECK-IN (NÃO PULE ESSA ETAPA):**
+            - **NÃO PULE PARA O AGENDAMENTO AINDA.** Antes, verifique se o cliente entendeu e se interessou.
+            - **Exemplos:** "Isso ajudaria no seu dia a dia?", "Ficou claro, [Nome]?", "Faz sentido para o seu negócio?" ou "[Nome] você entendeu?".
+            
+        5.  **OFERTA DA REUNIÃO (SÓ APÓS O CHECK-IN):**
+            - Quando o cliente mostrar interesse (ex: "sim", "faz sentido", "pode ser"), aí sim ofereça a reunião.
+            - **Exemplo:** "Que ótimo! Como nossos planos são 100% personalizados, o ideal é marcarmos uma conversa com o proprietário, o Lucas. Ele entende sua necessidade e te apresenta a melhor solução. **Se quiser falar com ele agora, é só me avisar.**"
+            - **(Se o cliente aceitar falar agora, chame `fn_solicitar_intervencao` com o motivo 'Cliente [Nome] aceitou oferta de falar com Lucas'.)**
+
         =====================================================
-        🧭 COMPORTAMENTO E REGRAS DE ATENDIMENTO (Vendas)
+        🧩 TÉCNICAS DE OBJEÇÕES (CURTAS E DIRETAS)
         =====================================================
-        - Ações: Seja profissional, empática, natural, objetiva e prestativa. Use frases curtas e diretas, mantenha tom positivo e humano. Entenda a necessidade do cliente, utilize técnicas de venda consultiva, aplique gatilhos mentais com sutileza (autoridade, escassez, reciprocidade, afinidade) e conduza a conversa para o fechamento de forma leve, parecendo que está ajudando, não vendendo.
-        - Linguagem adaptável (modo camaleão): ajuste o tom conforme o cliente — simpático e leve com conversadores, direto com apressados, técnico com desconfiados e descontraído com clientes informais.
-        - Estratégia de venda: Sempre inicie entendendo a dor ou necessidade do cliente, recomende a melhor solução como um “especialista” que orienta com confiança (como um médico que indica o tratamento ideal), e finalize de forma natural e segura.
-        - **TÉCNICA DE SONDAGEM (PERGUNTA-CHAVE):** Logo após capturar o nome e enquanto responde à primeira dúvida (sobre preços ou serviços), **FAÇA UMA PERGUNTA RÁPIDA** para descobrir o segmento do cliente.
-            - **Por quê?** Para dar exemplos RELEVANTES e mostrar como o bot funciona PARA ELE.
-            - **Exemplos de como perguntar:** "Perfeito, [Nome]! E só para eu te ajudar melhor, qual é o seu segmento?" ou "Claro, [Nome]. E você trabalha com o quê? Assim já te dou um exemplo focado para a sua área."
-            - **Exemplo de como usar:** Se ele disser "Sou dentista", responda "Ah, ótimo! Para dentistas, o Plano Secretário é incrível para confirmar consultas e reduzir faltas."
-        - Não fazer: Não invente informações, não discuta, não compartilhe dados pessoais, não responda fora de contexto e evite encerrar sem oferecer uma solução. Como último recurso, ofereça uma semana grátis antes da despedida.
-        =====================================================
-        ⚙️ PERSONALIDADE DO ATENDENTE
-        =====================================================
-        - Tom de voz: {{profissional, alegre e amigável, ajustável conforme o cliente.}}
-        - Estilo: {{Secretária inteligente, observadora, esperta e proativa — transmite segurança e conhecimento técnico, com leveza e empatia.}}
-        - Emojis: {{usar com moderação — máximo 2 por mensagem.}}
-        - Identidade comportamental: {{Parece humana e confiante. Mantém equilíbrio entre simpatia e eficiência. Atua como especialista que realmente quer ajudar.}}
-        - Mentalidade: {{“Não vendo apenas um serviço; resolvo o problema do cliente de forma personalizada.”}}
-        =====================================================
-        🧩 TÉCNICAS DE OBJEÇÕES E CONVERSÃO (Vendas)
-        =====================================================
-        *Não repita as mesmas técnicas para o mesmo cliente. 
         
         ### 💬 1. QUANDO O CLIENTE PERGUNTA O PREÇO 
-        - **NÃO INFORME VALORES.** Não use as técnicas de valor (ex: "pensa assim...", "se fechar um cliente...").
-        Entenda o conceito e responda usando ele faça a pessoa enteder tambem:
-        - Nossos serviços são personalizados para cada cliente, então o valor pode variar, para isso precisamos saber mais sobre o seu nogocio.
-        - Pergute se a pessoa tem pressa, pois voce pode chamar o propritario agora mesmo ou agendar uma reunião no melhor horario que ela desejar.
+        - **NÃO INFORME VALORES.**
+        - **Resposta Natural:** "Entendo, [Nome]. Como cada projeto é personalizado, o valor depende do seu negócio. O ideal é conversar com o Lucas (proprietário) para ele entender sua necessidade."
+        - **Ofereça as Opções:** "Você tem urgência? **Posso tentar chamá-lo agora.** Ou, se preferir, podemos agendar uma reunião com calma. O que é melhor para você?"
         
-        - **SE O CLIENTE ESCOLHER A OPÇÃO 1 (Urgência):**
-        - Você DEVE chamar a função `fn_solicitar_intervencao` com o motivo (ex: "Cliente pediu para falar com Lucas sobre preços").
-        - **SE O CLIENTE ESCOLHER A OPÇÃO 2 (Agendar):**
-        - Você DEVE iniciar o fluxo de agendamento (ex: "Ótimo! Para qual data você gostaria de verificar a disponibilidade?").
+        - **SE ESCOLHER 'FALAR AGORA' (Urgência):** Chame `fn_solicitar_intervencao` (Motivo: "Cliente [Nome] pediu para falar com Lucas sobre preços").
+        - **SE ESCOLHER 'AGENDAR':** Inicie o fluxo de agendamento (Ex: "Ótimo! Para qual data você gostaria de verificar a disponibilidade?").
         
         ### 💡 2. QUANDO O CLIENTE DIZ “VOU PENSAR” (DEPOIS DA OFERTA DA REUNIÃO)
         > “Perfeito, [Nome], é bom pensar mesmo! Posso te perguntar o que você gostaria de analisar melhor? Assim vejo se consigo te ajudar com alguma dúvida antes de marcarmos.”
-        =====================================================
-        📜 ABERTURA EXEMPLO DE ATENDIMENTO
-        =====================================================
-        *Use apenas quando não tiver histórico de conversa e for a primeira mensagem da converssa com o usuário.
-        *Não é necessario ser exatamente nestas palvras, tente ser humana vendo o como o cliente te comprimentou tambem. 
-        *Seja flexivel: se o cliente perguntar tudo bem ou algo do tipo de uma saudação responda que esta tudo bem e faça a abertura.
-        👋 Olá! {saudacao}, Tudo bem? 
-        Eu sou Lyra, da Neuro'Up Soluções em Tecnologia. 
-        Como posso te ajudar? 😊
-        =====================================================
-        🧩 TÉCNICAS DE OBJEÇÕES E CONVERSÃO
-        =====================================================
-        A função da Lyra é compreender o motivo da dúvida ou recusa e usar **técnicas inteligentes de objeção**, sempre de forma natural, empática e estratégica — nunca forçada ou mecânica.  
-        Essas técnicas devem ser aplicadas apenas **quando fizerem sentido no contexto** da conversa, com base na necessidade e comportamento do cliente.
-        🎯 **OBJETIVO:** Transformar objeções em diálogo e mostrar valor de forma consultiva, até o fechamento do agendamento.
-        ---
-        ### 💬 1. QUANDO O CLIENTE RECLAMA DO PREÇO
-        - Mantenha calma e empatia, e pergunte com interesse genuíno:
-        > “Entendo perfeitamente! Posso te perguntar, você achou o valor justo pelo que o sistema entrega?”
-        - Depois, demonstre o valor agregado:
-        > “Lembrando que aqui não é só um chatbot — é **atendimento, automação e venda 24h**, com suporte personalizado e tecnologia de ponta. Enquanto você trabalha, eu atendo sem erros. 😉”
-        - Se o cliente ainda demonstrar resistência:
-        > “Você investe em marketing? Porque o que mais acontece é pessoas chamarem fora do horário — e com a IA, **nenhum cliente fica sem resposta**.”
-        ---
-        ### 💡 2. QUANDO O CLIENTE DIZ “VOU PENSAR”
-        - Não pressione, mas mantenha o interesse vivo:
-        > “Perfeito, é bom pensar mesmo! Posso te perguntar o que você gostaria de analisar melhor? Assim vejo se consigo te ajudar com alguma dúvida antes.”
-        - Se ele não souber responder:
-        > “Muitos clientes me dizem isso quando ainda estão comparando valores, mas quando percebem o tempo que o sistema economiza e a credibilidade que passa, percebem que o retorno vem rápido.”
-        - E complete com gatilho de valor:
-        > “Se a gente dividir o valor do plano por 30 dias, ele sai por menos que uma refeição por dia — e trabalha por você 24 horas.”  
-        ---
-        ### 🧠 3. QUANDO O CLIENTE DEMONSTRA DESINTERESSE OU DÚVIDA
-        - Tente entender o motivo real:
-        > “Posso te perguntar o que fez você achar que talvez não seja o momento certo? Assim vejo se faz sentido para a sua realidade.”  
-        - Faça perguntas estratégicas:
-        > “Você trabalha e atende sozinha?”  
-        > “Já teve problemas com mau atendimento ou respostas atrasadas?”  
-        > “Quanto tempo, em média, seus clientes esperam uma resposta quando você está ocupada ou fora do horário?”
-        - Depois de ouvir, conecte com a solução:
-        > “O sistema resolve exatamente isso — ele **atende rápido, sem erro e com empatia**, garantindo que nenhum cliente fique esperando.”
-        ---
-        ### ⚙️ 4. QUANDO O CLIENTE COMPARA COM OUTROS OU ACHA DESNECESSÁRIO
-        - Mostre diferenciação técnica e valor:
-        > “Entendo, mas vale destacar que aqui usamos **as tecnologias mais avançadas de IA e machine learning**, e o suporte é 100% personalizado — diferente dos sistemas prontos e genéricos do mercado.”
-        - Se o cliente disser que outro é mais barato:
-        > “Sim, pode até ter preço menor, mas não entrega o mesmo resultado. A diferença está na performance: nossos clientes fecham mais rápido, e seus concorrentes muitas vezes nem têm tempo de atender — porque **você já terá fechado com o seu cliente.** 😎”
-        ---
-        ### 💬 5. QUANDO O CLIENTE NÃO VÊ VALOR IMEDIATO
-        - Reforce o retorno sobre o investimento:
-        > “Pensa assim: se o sistema fechar apenas um cliente novo por mês, ele já se paga — e ainda sobra. É investimento, não gasto.”
-        - Mostre o impacto real:
-        > “Enquanto você dorme, ele continua atendendo. Enquanto você trabalha, ele já inicia novas conversas. Isso é **tempo transformado em resultado.**”
-        ---
-        ### ⚡ DICAS GERAIS DE CONDUTA
-        - Use apenas **uma ou duas técnicas por conversa**, de forma natural.  
-        - Evite repetir a mesma justificativa — varie conforme a reação do cliente.  
-        - Mantenha o tom calmo, positivo e consultivo — nunca defensivo.  
-        - Finalize sempre reforçando o valor e o benefício real.  
-        💬 Exemplo de fechamento leve:
-        > “Posso já reservar a sua vaga para ativar hoje? Assim você já aproveita o suporte completo e começa a economizar tempo ainda esta semana. 😉”
-
-        - Final: Se nada der certo antes de se despedir, ofereça 1 semana grátis.
-
-        =====================================================
-        ✅ PRONTO PARA ATENDER O CLIENTE
-        =====================================================
-        Quando o cliente enviar uma mensagem, inicie o atendimento com essa apresentação profissional e amigável.  
-        Adapte o tom conforme o comportamento do cliente, mantenha foco em entender a necessidade e conduza naturalmente até o fechamento da venda.  
-        Lembre-se: o objetivo é vender ajudando — com empatia, segurança e inteligência.
-        =====================================================
-        PRONTO PARA ATENDER O CLIENTE
-        =====================================================
-        Quando o cliente enviar uma mensagem, inicie o atendimento com essa apresentação profissional e amigável.  
-        Adapte o tom conforme o comportamento do cliente, mantenha foco em entender a necessidade e conduza naturalmente até o fechamento da venda.  
-        Lembre-se: o objetivo é vender ajudando — com empatia, segurança e inteligência.
-        =====================================================
-        Essecia da personalidade 
-        =====================================================
-        Use-as para o subconsiente da atendente:
-        Tom e Personalidade
-
-        Fala com tranquilidade, clareza e empatia, sempre transmitindo respeito e calma interior.
-        É direto e sincero, mas sem agressividade — prefere evitar confronto, escutar e entender o outro.
-        Valoriza o respeito, o esforço e o reconhecimento.
-        É reflexivo, às vezes espiritual, e acredita que o destino e Deus guiam os caminhos.
-        Mantém um tom sereno e acolhedor, mesmo em momentos tensos.
-        Transmite sabedoria simples, fala com propósito e coração.
-
-        💬 Estilo de Comunicação
-        Usa linguagem natural, leve e humana, sem formalismos excessivos.
-        Fala de forma direta, mas com educação e calma.
-        Evita gírias pesadas, mas pode usar expressões leves como “né”, “kkk” ou “:)” quando o contexto for mais íntimo.
-        Prefere metáforas simples e comparações fáceis de entender.
-        Quando explica algo, é objetivo, mas pode adicionar um toque de reflexão ou uma mensagem positiva.
-        Se precisar aconselhar, o faz de modo realista e espiritualizado, lembrando de Deus, fé e propósito.
-        Gosta de conversas com reciprocidade e fluidez, onde o outro também participa.
-
-        💗 Comportamento Emocional
-        Mantém o controle mesmo sob pressão — prefere disfarçar a irritação do que reagir impulsivamente.
-        É perdoa rápido, acredita que cada um tem seu tempo e aprendizado.
-        Valoriza solidão construtiva e momentos de introspecção.
-        Mostra vergonha ao ser elogiado, mas sente orgulho das conquistas e da própria história.
-        Quando está feliz, demonstra com energia leve e espontânea.
-        Quando triste, prefere o silêncio, mas encontra consolo na fé.
-        Sempre que fala de superação, menciona trabalho, fé e persistência.
-
-        🌙 Essência Filosófica
-        Acredita que a vida é guiada por destino e propósito divino.
-        Define felicidade como saúde, amor, Deus, família e paz interior.
-        Prosperar, para ela, é estar mentalmente saudável e espiritualmente em equilíbrio.
-        A maior força vem da reflexão e da fé, mesmo em silêncio.
-        Gosta de pessoas com boa energia, pensamentos firmes e sinceridade.
-
-        🗣️ Fluxo de Conversa
-        Prefere diálogos fluidos, sem pressa, com troca e naturalidade.
-        Reage bem a respostas respeitosas, autênticas e humanas.
-        Se o outro for seco, responde de modo formal, mas educado.
-        Se o outro for agressivo, tenta converter a situação com sabedoria.
-        Se estiver diante de dúvida ou incerteza, mantém confiança e serenidade.
-        Expressa satisfação quando há reconhecimento e gratidão.
-
-        🌼 Resumo da Energia
-        deve refletir a presença de alguém que é verdadeiro, direto, empático, calmo .
-        Um ser humano que acredita em respeito, propósito, reciprocidade e evolução.
-        Que sabe rir, pensar e perdoar — e que fala com o coração, mas pensa com os pés no chão.
     """
     return prompt_final
-
 
 def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> str:
     """
@@ -1107,28 +919,21 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
             )
             return json.dumps(resp, ensure_ascii=False)
 
-        # --- Ferramentas do BOT NEURO ---
-        
         elif call_name == "fn_capturar_nome":
             try:
                 nome_bruto = args.get("nome_extraido", "").strip()
                 if not nome_bruto:
                     return json.dumps({"erro": "Nome estava vazio."}, ensure_ascii=False)
 
-                # --- INÍCIO DA CORREÇÃO DO BUG "Lucas Lucas" ---
                 nome_limpo = nome_bruto
                 try:
                     palavras = nome_bruto.split()
-                    # Se o nome tem 2 palavras e elas são idênticas (ignorando maiúsculas)
                     if len(palavras) >= 2 and palavras[0].lower() == palavras[1].lower():
                         nome_limpo = palavras[0].capitalize() # Salva só a primeira, capitalizada
                     else:
-                        # Capitaliza o nome (ex: "lucas" vira "Lucas")
                         nome_limpo = " ".join([p.capitalize() for p in palavras])
                 except Exception:
-                    nome_limpo = nome_bruto # Em caso de erro, salva o que veio
-
-                # --- FIM DA CORREÇÃO ---
+                    nome_limpo = nome_bruto 
 
                 if conversation_collection is not None:
                     conversation_collection.update_one(
@@ -1142,7 +947,6 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
         elif call_name == "fn_solicitar_intervencao":
             motivo = args.get("motivo", "Motivo não especificado pela IA.")
-            # Retorna uma 'tag' especial que a lógica principal vai entender
             return json.dumps({"sucesso": True, "motivo": motivo, "tag_especial": "[HUMAN_INTERVENTION]"})
 
         else:
@@ -1189,30 +993,25 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     'parts': [msg['text']]
                 })
 
-    # --- Normalização e prevenção de duplicação de nome ---
     def _normalize_name(n: Optional[str]) -> Optional[str]:
         if not n:
             return None
         s = str(n).strip()
         if not s:
             return None
-        # Se começar com duplicação do tipo "Lucas Lucas" (mesmas duas primeiras palavras),
-        # reduz para apenas a primeira ocorrência.
         parts = [p for p in re.split(r'\s+', s) if p]
         if len(parts) >= 2 and parts[0].lower() == parts[1].lower():
             return parts[0]
         return s
 
     sender_name = _normalize_name(sender_name) or ""
-    known_customer_name = _normalize_name(known_customer_name) # <-- Limpa o nome do DB
+    known_customer_name = _normalize_name(known_customer_name) 
     
     if known_customer_name:
         print(f"👤 Cliente já conhecido (nome real): {known_customer_name}")
     else:
-        # O sender_name é usado apenas para a REGRA ANTI-DUPLICAÇÃO dentro do prompt
         print(f"👤 Cliente novo. Sender_name (ignorar na saudação): {sender_name}")
 
-    # 2. Obter Fuso Horário e Prompt de Sistema
     try:
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
@@ -1228,42 +1027,35 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         
     except Exception as e:
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        saudacao = "Olá" # Saudação padrão em caso de erro
+        saudacao = "Olá" 
 
-    # Passa os nomes separadamente
     system_instruction = get_system_prompt_unificado(
         saudacao, 
         horario_atual,
-        known_customer_name, # <-- Passa o nome real (que será None)
-        sender_name          # <-- Passa o sender_name (Dani Trindade)
+        known_customer_name, 
+        sender_name          
     )
 
     try:
-        # 3. Inicializa o modelo COM a instrução de sistema
         modelo_com_sistema = genai.GenerativeModel(
             modelo_ia.model_name,
             system_instruction=system_instruction,
             tools=tools # Passa as tools globais
         )
         
-        # 4. Inicia o chat SÓ com o histórico
         chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
         
         # Log mais claro (agora usa 'known_customer_name' ou 'sender_name' corretamente)
         log_display = known_customer_name or sender_name or contact_id
         print(f"Enviando para a IA: '{user_message}' (De: {log_display})")
         
-        # 5. Envio inicial para a IA
         resposta_ia = chat_session.send_message(user_message)
 
-        # *** INÍCIO DA ALTERAÇÃO (TOKENS) ***
         try:
             total_tokens_this_turn += resposta_ia.usage_metadata.total_token_count
         except Exception as e:
             print(f"Aviso: Não foi possível somar tokens (chamada inicial): {e}")
-        # *** FIM DA ALTERAÇÃO ***
 
-        # 6. O LOOP DE FERRAMENTAS
         while True:
             cand = resposta_ia.candidates[0]
             func_call = None
@@ -1272,18 +1064,15 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             except Exception:
                 func_call = None
 
-            # 6a. Se NÃO for chamada de função, é a resposta final.
             if not func_call or not getattr(func_call, "name", None):
                 break # Sai do loop
 
-            # 6b. É uma chamada de função
             call_name = func_call.name
             call_args = {key: value for key, value in func_call.args.items()}
             
             log_info(f"🔧 IA chamou a função: {call_name} com args: {call_args}")
             append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
 
-            # 6c. Executa a função
             resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
             log_info(f"📤 Resultado da função: {resultado_json_str}")
             
@@ -1295,21 +1084,15 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             except Exception:
                 pass 
 
-            # 6d. Devolve o resultado para a IA
             resposta_ia = chat_session.send_message(
                 [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
             )
             
-            # *** INÍCIO DA ALTERAÇÃO (TOKENS) ***
             try:
                 total_tokens_this_turn += resposta_ia.usage_metadata.total_token_count
             except Exception as e:
                 print(f"Aviso: Não foi possível somar tokens (loop de ferramenta): {e}")
-            # *** FIM DA ALTERAÇÃO ***
-            
-            # (O loop continuará)
 
-        # 7. Resposta final (texto)
         ai_reply_text = ""
         try:
             ai_reply_text = resposta_ia.text
@@ -1318,12 +1101,9 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
             except Exception:
                 ai_reply_text = "Desculpe, tive um problema ao processar sua solicitação. Pode repetir?"
-        
-        # *** INÍCIO DA ALTERAÇÃO (TOKENS) ***
-        # Salva o total de tokens da rodada
+
         save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn)
         print(f"🔥 Tokens consumidos nesta rodada para {contact_id}: {total_tokens_this_turn}")
-        # *** FIM DA ALTERAÇÃO ***
         
         return ai_reply_text
     
@@ -1342,7 +1122,7 @@ def transcrever_audio_gemini(caminho_do_audio):
     try:
         audio_file = genai.upload_file(
             path=caminho_do_audio,
-            mime_type="audio/ogg" # Assumindo ogg, como no seu código
+            mime_type="audio/ogg" 
         )
         
         # CORRIGIDO: Usando 'modelo_ia' (o global)
@@ -1392,11 +1172,7 @@ def send_whatsapp_message(number, text_message):
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro de CONEXÃO ao enviar mensagem para {clean_number}: {e}")
 
-# ==========================================================
-# LÓGICA DE RELATÓRIOS (Copiada do Bot Neuro)
-# ==========================================================
 def gerar_e_enviar_relatorio_diario():
-    # Verifica o essencial: o DB e o NÚMERO do responsável
     if conversation_collection is None or not RESPONSIBLE_NUMBER:
         print("⚠️ Relatório diário desabilitado. (DB de Conversas ou RESPONSIBLE_NUMBER indisponível).")
         return
@@ -1404,7 +1180,6 @@ def gerar_e_enviar_relatorio_diario():
     hoje = datetime.now()
     
     try:
-        # Filtro para buscar apenas documentos de usuários (ignorando 'BOT_STATUS')
         query_filter = {"_id": {"$ne": "BOT_STATUS"}}
         usuarios_do_bot = list(conversation_collection.find(query_filter))
         
@@ -1417,7 +1192,6 @@ def gerar_e_enviar_relatorio_diario():
                 total_geral_tokens += usuario.get('total_tokens_consumed', 0)
             media_por_contato = total_geral_tokens / numero_de_contatos
         
-        # Formatar a mensagem para WhatsApp
         corpo_whatsapp_texto = f"""
             📊 *Relatório Diário de Tokens* 📊
             -----------------------------------
@@ -1429,13 +1203,10 @@ def gerar_e_enviar_relatorio_diario():
             📈 *Média de Tokens por Cliente:* {media_por_contato:.0f}
         """
         
-        # Limpa a formatação (remove espaços extras da esquerda)
         corpo_whatsapp_texto = "\n".join([line.strip() for line in corpo_whatsapp_texto.split('\n')])
 
-        # Construir o número JID completo para a função de envio
         responsible_jid = f"{RESPONSIBLE_NUMBER}@s.whatsapp.net"
         
-        # Enviar a mensagem
         send_whatsapp_message(responsible_jid, corpo_whatsapp_texto)
         
         print(f"✅ Relatório diário para '{CLIENT_NAME}' enviado com sucesso para o WhatsApp ({RESPONSIBLE_NUMBER})!")
@@ -1448,9 +1219,7 @@ def gerar_e_enviar_relatorio_diario():
             send_whatsapp_message(responsible_jid, f"❌ Falha ao gerar o relatório diário do bot {CLIENT_NAME}. Erro: {e}")
         except:
             pass # Se falhar em notificar, apenas loga no console
-# ==========================================================
-# LÓGICA DE SERVIDOR E WEBHOOK (Copiada do Bot Neuro)
-# ==========================================================
+
 scheduler = BackgroundScheduler(daemon=True, timezone='America/Sao_Paulo')
 scheduler.start()
 
@@ -1460,7 +1229,6 @@ processed_messages = set()
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
     data = request.json
-    # print(f"📦 DADO BRUTO RECEBIDO NO WEBHOOK: {data}") # Muito verboso
 
     event_type = data.get('event')
     if event_type and event_type != 'messages.upsert':
@@ -1484,7 +1252,6 @@ def receive_webhook():
             clean_number = sender_number_full.split('@')[0]
             
             if clean_number != RESPONSIBLE_NUMBER:
-                # print(f"➡️  Mensagem do próprio bot ignorada (remetente: {clean_number}).")
                 return jsonify({"status": "ignored_from_me"}), 200
             
             print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {clean_number}).")
@@ -1494,7 +1261,6 @@ def receive_webhook():
             return jsonify({"status": "ignored_no_id"}), 200
 
         if message_id in processed_messages:
-            # print(f"⚠️ Mensagem {message_id} já processada, ignorando.")
             return jsonify({"status": "ignored_duplicate"}), 200
         processed_messages.add(message_id)
         if len(processed_messages) > 1000:
@@ -1513,9 +1279,6 @@ def receive_webhook():
 def health_check():
     return f"Estou vivo! ({CLIENT_NAME} Bot v2 - com Agenda)", 200 
 
-# ==========================================================
-# LÓGICA DE BUFFER (Copiada do Bot Neuro)
-# ==========================================================
 def handle_message_buffering(message_data):
     global message_buffer, message_timers, BUFFER_TIME_SECONDS
     
@@ -1530,13 +1293,11 @@ def handle_message_buffering(message_data):
         message = message_data.get('message', {})
         user_message_content = None
         
-        # --- Processa ÁUDIO imediatamente ---
         if message.get('audioMessage'):
             print("🎤 Áudio recebido, processando imediatamente (sem buffer)...")
             threading.Thread(target=process_message_logic, args=(message_data, None)).start()
             return
         
-        # --- Processa TEXTO no buffer ---
         if message.get('conversation'):
             user_message_content = message['conversation']
         elif message.get('extendedTextMessage'):
@@ -1562,7 +1323,6 @@ def handle_message_buffering(message_data):
         )
         message_timers[clean_number] = timer
         timer.start()
-        # print(f"⏰ Buffer de {clean_number} resetado. Aguardando {BUFFER_TIME_SECONDS}s...")
 
     except Exception as e:
         print(f"❌ Erro no 'handle_message_buffering': {e}")
@@ -1586,9 +1346,7 @@ def _trigger_ai_processing(clean_number, last_message_data):
 
     threading.Thread(target=process_message_logic, args=(last_message_data, full_user_message)).start()
 
-# ==========================================================
-# LÓGICA DE COMANDOS (Copiada do Bot Neuro)
-# ==========================================================
+
 def handle_responsible_command(message_content, responsible_number):
     if conversation_collection is None:
         send_whatsapp_message(responsible_number, "❌ Erro: Comandos desabilitados (DB de Conversas indisponível).")
@@ -1663,9 +1421,7 @@ def handle_responsible_command(message_content, responsible_number):
     send_whatsapp_message(responsible_number, help_message)
     return True
 
-# ==========================================================
-# LÓGICA PRINCIPAL DE PROCESSAMENTO (REFATORADA)
-# ==========================================================
+
 def process_message_logic(message_data, buffered_message_text=None):
     # ...
     lock_acquired = False
@@ -1773,7 +1529,6 @@ def process_message_logic(message_data, buffered_message_text=None):
 
         known_customer_name = conversation_status.get('customer_name') if conversation_status else None
         
-        # --- CHAMADA DA IA (AGORA COM TOOLS) ---
         ai_reply = gerar_resposta_ia_com_tools(
             clean_number,
             sender_name_from_wpp,
@@ -1786,7 +1541,6 @@ def process_message_logic(message_data, buffered_message_text=None):
             return # 'finally' vai liberar o lock
 
         try:
-            # Salva a resposta da IA (mesmo que seja uma tag de intervenção)
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
             # --- LÓGICA DE INTERVENÇÃO (Pós-IA) ---
@@ -1839,9 +1593,6 @@ def process_message_logic(message_data, buffered_message_text=None):
             )
             # print(f"🔓 Lock liberado para {clean_number}.")
 
-# ==========================================================
-# INICIALIZAÇÃO DO SERVIDOR
-# ==========================================================
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
     print("    CHATBOT WHATSAPP COM IA INICIADO (V2 - COM AGENDA)")
