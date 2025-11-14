@@ -63,6 +63,7 @@ logging.basicConfig(
 )
 def log_info(msg):
     logging.info(msg)
+    print(f"[LOG-INFO] {msg}")
 
 try:
     client_conversas = MongoClient(MONGO_DB_URI)
@@ -1018,6 +1019,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         elif call_name == "fn_capturar_nome":
             try:
                 nome_bruto = args.get("nome_extraido", "").strip()
+                print(f"--- [DEBUG RASTREIO 1] IA extraiu: nome_bruto='{nome_bruto}'")
                 if not nome_bruto:
                     return json.dumps({"erro": "Nome estava vazio."}, ensure_ascii=False)
 
@@ -1031,7 +1033,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 except Exception:
                     nome_limpo = nome_bruto 
                 
-                log_info(f"[DEBUG RASTREIO | PONTO 4] Salvar Nome: Bruto='{nome_bruto}', Limpo='{nome_limpo}'")
+                print(f"--- [DEBUG RASTREIO 2] Python limpou: nome_limpo='{nome_limpo}'")
 
                 if conversation_collection is not None:
                     conversation_collection.update_one(
