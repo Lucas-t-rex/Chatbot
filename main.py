@@ -343,6 +343,31 @@ class Agenda:
         except Exception as e:
             log_info(f"Erro em excluir: {e}")
             return {"erro": f"Falha ao excluir do banco de dados: {e}"}
+        
+    def excluir_todos_por_cpf(self, cpf_raw: str) -> Dict[str, Any]:
+        """Exclui TODOS os agendamentos FUTUROS de um CPF."""
+        cpf = limpar_cpf(cpf_raw)
+        if not cpf:
+            return {"erro": "CPF inválido."}
+        
+        try:
+            agora = datetime.now()
+            # A query busca todos os agendamentos futuros do CPF
+            query = {"cpf": cpf, "inicio": {"$gte": agora}}
+            
+            # Usa delete_many para apagar todos que derem match
+            resultado = self.collection.delete_many(query)
+            
+            count = resultado.deleted_count
+            if count == 0:
+                return {"erro": "Nenhum agendamento futuro encontrado para este CPF."}
+            
+            # Retorna a mensagem de sucesso com a contagem
+            return {"sucesso": True, "msg": f"{count} agendamento(s) futuros foram removidos com sucesso."}
+        
+        except Exception as e:
+            log_info(f"Erro em excluir_todos_por_cpf: {e}")
+            return {"erro": f"Falha ao excluir agendamentos do banco de dados: {e}"}
 
     def alterar(self, cpf_raw: str, data_antiga: str, hora_antiga: str, data_nova: str, hora_nova: str) -> Dict[str, Any]:
         cpf = limpar_cpf(cpf_raw)
@@ -543,6 +568,18 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                     }
                 },
                 {
+                    "name": "fn_excluir_TODOS_agendamentos",
+                    "description": "Exclui TODOS os agendamentos futuros de um cliente. Use esta função se o cliente pedir para 'excluir tudo', 'apagar os dois', 'cancelar todos', etc.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "cpf": {"type_": "STRING", "description": "O CPF de 11 dígitos do cliente."}
+                        },
+                        "required": ["cpf"]
+                    }
+                },
+
+                {
                     "name": "fn_alterar_agendamento",
                     "description": "Altera um agendamento antigo para uma nova data/hora.",
                     "parameters": {
@@ -659,29 +696,40 @@ def load_conversation_from_db(contact_id):
     return None
 
 def get_last_messages_summary(history, max_messages=4):
-    summary = []
-    relevant_history = history[-max_messages:]
+    clean_history = []
     
-    for message in relevant_history:
+    # 1. Processa o histórico COMPLETO para limpar o "lixo"
+    for message in history: 
         role = "Cliente" if message.get('role') == 'user' else "Bot"
         text = message.get('text', '').strip()
 
+        # --- FILTROS (Mantém os antigos e adiciona os novos) ---
         if role == "Cliente" and text.startswith("A data e hora atuais são:"):
             continue 
         if role == "Bot" and text.startswith("Entendido. A Regra de Ouro"):
             continue 
-            
-        summary.append(f"*{role}:* {text}")
         
-    if not summary:
+        # --- NOVOS FILTROS (Para limpar a notificação) ---
+        if role == "Bot" and text.startswith("Chamando função:"):
+            continue
+        if role == "Bot" and text.startswith("[HUMAN_INTERVENTION]"):
+            continue
+        # --- FIM DOS NOVOS FILTROS ---
+            
+        clean_history.append(f"*{role}:* {text}")
+    
+    # 2. Pega os últimos 'max_messages' da lista JÁ LIMPA
+    relevant_summary = clean_history[-max_messages:]
+    
+    if not relevant_summary:
+        # Fallback: Se tudo for filtrado, pega a última mensagem real do cliente
         user_messages = [msg.get('text') for msg in history if msg.get('role') == 'user' and not msg.get('text', '').startswith("A data e hora atuais são:")]
         if user_messages:
             return f"*Cliente:* {user_messages[-1]}"
         else:
             return "Nenhum histórico de conversa encontrado."
             
-    return "\n".join(summary)
-
+    return "\n".join(relevant_summary)
 
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, sender_name: str, clean_number: str) -> str:
     
@@ -726,12 +774,16 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - **NÃO FAÇA MAIS NADA.** Pare e espere o nome.
 
         DEPOIS QUE VOCÊ PEDIR O NOME (Fluxo do CASO 2):
-        - O cliente vai responder com o nome (ex: "Meu nome é Marcos", "lucas").
-        - **Sua Próxima Ação (Tool Call + Resposta da Dúvida):**
-            1. Você DEVE chamar a função `fn_capturar_nome` com o nome extraído (ex: "Marcos", "lucas").
-            2. **NA MESMA RESPOSTA**, você DEVE saudar o cliente pelo nome (ex: "Prazer, Marcos!").
-            3. **REGRA ANTI-DUPLICAÇÃO CRÍTICA:** Ao saudar, use **APENAS** o nome que o cliente acabou de digitar (ex: "Que ótimo, Marcos!"). NUNCA use o nome de contato ('{sender_name}') e NUNCA repita o nome (NÃO FAÇA: "Que ótimo, Marcos Marcos!").
-            4. Em seguida (ainda na mesma resposta), **AGORA SIM, VOCÊ DEVE RESPONDER** à pergunta original que ele fez (usando as regras do `prompt_final`.
+        - O cliente vai responder com o nome (ex: "Meu nome é Marcos", "lucas", "dani").
+        - **Sua Próxima Ação (Tool Call OBRIGATÓRIA):**
+            1. Sua **ÚNICA** ação neste momento deve ser chamar a ferramenta `fn_capturar_nome`.
+            2. Você **NÃO DEVE** gerar nenhum texto de saudação (como "Prazer, Marcos!"). Apenas chame a ferramenta.
+            3. **REGRA ANTI-DUPLICAÇÃO:** Ao extrair o nome, NUNCA o combine com o `{sender_name}`. Se o cliente digitou "dani", a ferramenta deve ser chamada com `nome_extraido="dani"`.
+
+        QUANDO A FERRAMENTA `fn_capturar_nome` RETORNAR SUCESSO (ex: `{{"sucesso": true, "nome_salvo": "Dani"}}`):
+        - **Agora sim, sua próxima resposta DEVE:**
+            1. Saudar o cliente pelo nome que a ferramenta salvou (ex: "Prazer, Dani!").
+            2. **RESPONDER IMEDIATAMENTE** à pergunta original que o cliente tinha feito (a pergunta que você guardou na memória antes de pedir o nome).
         
         **RESUMO:** Se o nome não é conhecido, `prompt_name_instruction` é a única regra. Se o nome é conhecido, o `prompt_final` (o resto do prompt) é ativado.
         """
@@ -756,14 +808,26 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         =====================================================
         Você tem ferramentas para executar ações. NUNCA execute uma ação sem usar a ferramenta.
 
+        - **REGRA MESTRA ANTI-ALUCINAÇÃO (O BUG "Danidani" / "CPF Duplicado"):**
+        - Esta é a regra mais importante. O seu bug é "pensar" sobre os dados antes de agir.
+        - Quando você pede um dado (Nome ou CPF) e o cliente responde (ex: "dani" ou "10062080970"), sua **ÚNICA** tarefa é executar a próxima ação do fluxo **IMEDIATAMENTE**.
+        - **NUNCA, JAMAIS, SOB NENHUMA HIPÓTESE,** valide, comente, analise ou repita o dado que o cliente enviou.
+        - **FLUXO CORRETO (Sem Pensar):**
+        -   Você: "...qual seu CPF, por favor?"
+        -   Cliente: "10062080970"
+        -   Você (Próxima Ação IMEDIATA): "Certo. E o telefone, posso usar este mesmo?" (Se for agendamento)
+        -   *OU*
+        -   Você (Próxima Ação IMEDIATA): [Chama a ferramenta `fn_buscar_por_cpf`] (Se for exclusão)
+        - **FLUXO ERRADO (O BUG):**
+        -   Você: "...qual seu CPF, por favor?"
+        -   Cliente: "10062080970"
+        -   Você: "Danidani, o CPF que você me passou..." <-- (ERRADO! VOCÊ PENSOU!)
+
         - **REGRA DE AÇÃO IMEDIATA (CRÍTICO):**
         - NUNCA termine sua resposta dizendo que "vai verificar" (ex: "Vou verificar a disponibilidade..."). Isso é um ERRO GRAVE. A conversa morre.
         - Se você tem os dados suficientes para usar uma ferramenta (ex: o cliente disse "amanhã depois das 3"), você DEVE:
             1. Chamar a ferramenta `fn_listar_horarios_disponiveis` IMEDIATAMENTE.
-            2. **Formular sua resposta para o cliente JÁ COM OS HORÁRIOS VAGOS.** - **REGRA DE CAPTURA DE DADOS (CRÍTICO - ANTI-BUG DE DUPLICAÇÃO):**
-        - Ao pedir um dado (como CPF ou nome), o cliente responderá (ex: "10062080970" ou "nome").
-        - Você NUNCA DEVE analisar, validar, ou responder sobre o dado (NÃO FAÇA: "O CPF 1006208097010062080970 parece duplicado?").
-        - Sua ÚNICA tarefa é pegar o texto EXATO que o cliente digitou e correto (ex: "10062080970") e passar IMEDIATAMENTE para a próxima pergunta (se precisar de mais dados) ou para a ferramenta de backend. A validação é feita pelo código, não por você.
+            2. **Formular sua resposta para o cliente JÁ COM OS HORÁRIOS VAGOS.**
 
         - **REGRA DE CONFIRMAÇÃO (CRÍTICO - ANTI-BUG):**
         - Você NUNCA deve confirmar uma ação (salvar, alterar, excluir) sem ANTES ter chamado a ferramenta e recebido uma resposta de 'sucesso'.
@@ -796,29 +860,31 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - e. **Formatação da Lista (CRÍTICO):** NUNCA liste todos os horários um por um (ex: 13:00, 13:30, 14:00...). Isso é um ERRO. Se houver 3 ou mais horários seguidos, **SEMPRE** agrupe-os. (Ex: "Tenho horários das 13:00 às 17:30." ou "Temos horários de manhã, das 08:00 às 10:30, e à tarde, das 14:00 às 16:00.").
             - f. Quando o cliente escolher um horário VÁLIDO:
             - g. **COLETA DE DADOS (CURTA):**
-            -    1. "Perfeito. Para registrar, qual seu CPF, por favor?" (Lembre-se da REGRA DE CAPTURA DE DADOS: apenas pegue o texto e continue.)
-            -    2. "E o telefone, posso usar este mesmo?"
+            -    1. "Perfeito. Para registrar, qual seu CPF, por favor?"
+            -    2. **(Ação Pós-CPF):** Assim que o cliente responder o CPF, você deve obedecer a "REGRA MESTRA ANTI-ALUCINAÇÃO" e IMEDIATAMENTE fazer a próxima pergunta: "E o telefone, posso usar este mesmo?"
             - h. **REGRA DO TELEFONE (IMPORTANTE):** O número de telefone atual deste cliente (o clean_number) é **{clean_number}**. 
             -    - Se o cliente disser 'sim' (ou 'pode ser', 'este mesmo'), você DEVE usar o placeholder `telefone="CONFIRMADO_NUMERO_ATUAL"` ao chamar a `fn_salvar_agendamento`. (O backend vai salvar o {clean_number} corretamente).
             -    - Se o cliente disser 'não' e passar um NÚMERO NOVO (ex: "449888..."), você deve usar esse número novo (ex: `telefone="449888..."`).
 
             - i. **CONFIRMAÇÃO (GABARITO CURTO):**
-            -    1. Apresente o resumo:
-            -       * Nome: Lucas
-            -       * CPF: 123.456.789-10
+            -    1. Apresente o resumo COMPLETO. (Lembre-se, o serviço padrão que você está agendando é 'reunião', a menos que outro tenha sido especificado pelo cliente).
+            -       * Nome: (Insira o nome que o cliente informou)
+            -       * CPF: (Insira o CPF que o cliente informou)
             -       * Telefone: (Se o cliente disse 'sim' para usar o número atual, mostre o número {clean_number}. Se ele passou um número novo, mostre o número novo que ele digitou.)
             -       * Serviço: (Insira aqui o nome do serviço que você está agendando, ex: Reunião)
-            -       * Data: 13/11/2025 às 08:00
+            -       * Data: (Insira a data e hora escolhidas)
             -    2. Pergunte: "Confere pra mim? Se estiver tudo certo, eu confirmo aqui."
             - j. SÓ ENTÃO, após a confirmação, chame `fn_salvar_agendamento`.
             
             - k. **FLUXO DE ALTERAÇÃO/EXCLUSÃO:**
-            -    1. Se o cliente pedir para alterar/cancelar, mas você não tem o CPF (primeira vez), peça direto: "Claro. Qual seu CPF, por favor?"
-            -    D 2. Chame `fn_buscar_por_cpf`.
-            -    3. (Obedeça a "REGRA DE AMBIGUIDADE" se houver mais de um).
-            -    4. Ao receber o novo horário (ex: "pode trocar pras 2 amanhã"), chame `fn_alterar_agendamento` IMEDIATAMENTE (sem pedir confirmação extra).
-            -    5. Ao receber o pedido de exclusão (ex: "quero apagar ela"), chame `fn_excluir_agendamento` IMEDIATAMENTE.
-            -    6. Responda baseado no resultado da ferramenta (REGRA DE CONFIRMAÇÃO).
+            -    1. Se o cliente pedir para alterar/cancelar (ex: "quero excluir os meus horarios"), peça o CPF: "Claro. Qual seu CPF, por favor?"
+            -    2. **(Ação Pós-CPF):** Assim que o cliente responder o CPF (ex: "10062080970"), você deve obedecer a "REGRA MESTRA ANTI-ALUCINAÇÃO" e IMEDIATAMENTE chamar a ferramenta `fn_buscar_por_cpf`.
+            -    3. (Depois que a ferramenta retornar):
+            -       - Se houver SÓ UM agendamento, pergunte se quer excluí-lo/alterá-lo.
+            -       - Se houver MAIS DE UM (ex: 2), obedeça à "REGRA DE AMBIGUIDADE": Liste os 2 e pergunte se quer excluir "apenas um" ou "todos".
+            -    4. **(SE EXCLUIR TODOS):** Se o cliente disser "todos" ou "os 2", chame `fn_excluir_TODOS_agendamentos` com o CPF.
+            -    5. **(SE EXCLUIR UM):** Se o cliente apontar um (ex: "o das 8h"), chame `fn_excluir_agendamento` com os dados (cpf, data, hora) daquele agendamento.
+            -    6. **(SE ALTERAR):** Se o cliente quiser alterar, peça a nova data/hora e siga o fluxo de alteração (chame `fn_listar_horarios_disponiveis` para a nova data, etc.).
         =====================================================
         🏢 IDENTIDADE DA EMPRESA (Neuro'Up Soluções)
         =====================================================
@@ -848,7 +914,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica.
         
         1.  **TRANSIÇÃO PÓS-NOME:** (Se o cliente já fez uma pergunta).
-            - Use uma transição natural. Ex: mostre que voce entendeu a pergunta, e ja reponda.
+            - Use uma transição natural. Responda imediatamente.
         
         2.  **SONDAGEM DE NEGÓCIO (ESSENCIAL):**
             - Pergunte de forma despretensiosa sobre o negócio do cliente, pra poder usar na converssa.
@@ -859,7 +925,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             
         4.  **CHECK-IN (NÃO PULE ESSA ETAPA):**
             - **NÃO PULE PARA O AGENDAMENTO AINDA.** Antes, verifique se o cliente entendeu e se interessou de maneira com suporte para o cliente ver que voce quer ajudar ele.
-            
+            - Se mantenha nesta etapa ate a pessoa mostrar que realmente entendeu.
+
         5.  **OFERTA DA REUNIÃO (SÓ APÓS O CHECK-IN):**
             - Quando o cliente mostrar interesse (ex: "sim", "faz sentido", "pode ser"), aí sim ofereça a reunião.
             - **Exemplo:** "Que ótimo! Como nossos planos são 100% personalizados, o ideal é marcarmos uma conversa com o proprietário, o Lucas. Ele entende sua necessidade e te apresenta a melhor solução. **Se quiser falar com ele agora, é só me avisar.**"
@@ -931,6 +998,11 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 data_str=args.get("data", ""),
                 hora_str=args.get("hora", "")
             )
+            return json.dumps(resp, ensure_ascii=False)
+        
+        elif call_name == "fn_excluir_TODOS_agendamentos":
+            cpf = args.get("cpf")
+            resp = agenda_instance.excluir_todos_por_cpf(cpf_raw=cpf)
             return json.dumps(resp, ensure_ascii=False)
 
         elif call_name == "fn_alterar_agendamento":
@@ -1125,7 +1197,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             try:
                 ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
             except Exception:
-                ai_reply_text = "Desculpe, tive um problema ao processar sua solicitação. Pode repetir?"
+                ai_reply_text = "Pode ser mais claro?"
 
         save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn)
         print(f"🔥 Tokens consumidos nesta rodada para {contact_id}: {total_tokens_this_turn}")
@@ -1592,9 +1664,11 @@ def process_message_logic(message_data, buffered_message_text=None):
                         f"👤 *Cliente:* {display_name}\n"
                         f"📞 *Número:* `{clean_number}`\n\n"
                         f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
-                        f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
                         f"-----------------------------------\n"
                         f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`"
+                        f"-----------------------------------\n"
+                        f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
+                        
                     )
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
             
