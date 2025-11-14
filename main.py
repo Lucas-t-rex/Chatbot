@@ -1025,13 +1025,34 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
                 nome_limpo = nome_bruto
                 try:
+                    # 1. Tenta dividir por espaço (Ex: "Daniel Daniel")
                     palavras = nome_bruto.split()
                     if len(palavras) >= 2 and palavras[0].lower() == palavras[1].lower():
-                        nome_limpo = palavras[0].capitalize() # Salva só a primeira, capitalizada
+                        nome_limpo = palavras[0].capitalize() # Pega só o primeiro
+                        print(f"--- [DEBUG ANTI-BUG] Corrigido (Espaço): '{nome_bruto}' -> '{nome_limpo}'")
+
+                    # 2. SE NÃO FOR O CASO 1, checa se é uma palavra só duplicada (Ex: "Danieldaniel")
+                    # Esta é a lógica nova e crucial
                     else:
-                        nome_limpo = " ".join([p.capitalize() for p in palavras])
-                except Exception:
-                    nome_limpo = nome_bruto 
+                        l = len(nome_bruto)
+                        if l > 2 and l % 2 == 0: # Se for par e maior que 2
+                            metade1 = nome_bruto[:l//2]
+                            metade2 = nome_bruto[l//2:]
+                            
+                            # Se as metades forem IDÊNTICAS
+                            if metade1.lower() == metade2.lower():
+                                nome_limpo = metade1.capitalize() # Pega só a primeira metade
+                                print(f"--- [DEBUG ANTI-BUG] Corrigido (Sem Espaço): '{nome_bruto}' -> '{nome_limpo}'")
+                            else:
+                                # Se não for duplicado, só capitaliza o que veio
+                                nome_limpo = " ".join([p.capitalize() for p in palavras])
+                        else:
+                            # Se for ímpar ou não duplicado, só capitaliza
+                            nome_limpo = " ".join([p.capitalize() for p in palavras])
+
+                except Exception as e:
+                    print(f"Aviso: Exceção na limpeza de nome: {e}")
+                    nome_limpo = nome_bruto.capitalize() # Fallback 
                 
                 print(f"--- [DEBUG RASTREIO 2] Python limpou: nome_limpo='{nome_limpo}'")
 
