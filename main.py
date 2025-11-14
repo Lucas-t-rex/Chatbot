@@ -1218,12 +1218,25 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
 
         ai_reply_text = ""
         try:
+            # Tentativa 1: Acessar .text (o mais comum)
             ai_reply_text = resposta_ia.text
-        except Exception:
+        except Exception as e1:
+            #
+            # ▼▼▼ DEBUG ADICIONADO ▼▼▼
+            print(f"--- [DEBUG EXCEÇÃO 1] Falha ao ler .text. Erro: {e1}")
+            # ▲▲▲ FIM DO DEBUG ▲▲▲
+            #
             try:
+                # Tentativa 2: Acessar a estrutura interna (parts)
                 ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
-            except Exception:
-                ai_reply_text = "Pode ser mais claro?"
+            except Exception as e2:
+                #
+                # ▼▼▼ DEBUG ADICIONADO ▼▼▼
+                print(f"--- [DEBUG EXCEÇÃO 2] Falha ao ler .parts[0].text. Erro: {e2}")
+                print(f"--- [DEBUG EXCEÇÃO 2] Objeto 'resposta_ia' completo: {resposta_ia}")
+                # ▲▲▲ FIM DO DEBUG ▲▲▲
+                #
+                ai_reply_text = "Pode ser mais claro?" # Fallback final
 
         save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn)
         print(f"🔥 Tokens consumidos nesta rodada para {contact_id}: {total_tokens_this_turn}")
