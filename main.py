@@ -1030,6 +1030,8 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                         nome_limpo = " ".join([p.capitalize() for p in palavras])
                 except Exception:
                     nome_limpo = nome_bruto 
+                
+                log_info(f"[DEBUG RASTREIO | PONTO 4] Salvar Nome: Bruto='{nome_bruto}', Limpo='{nome_limpo}'")
 
                 if conversation_collection is not None:
                     conversation_collection.update_one(
@@ -1438,6 +1440,8 @@ def _trigger_ai_processing(clean_number, last_message_data):
         return
 
     full_user_message = ". ".join(messages_to_process)
+
+    log_info(f"[DEBUG RASTREIO | PONTO 1] Buffer para {clean_number}: '{full_user_message}'")
     
     print(f"⚡️ DISPARANDO IA para {clean_number} com mensagem agrupada: '{full_user_message}'")
 
@@ -1626,6 +1630,8 @@ def process_message_logic(message_data, buffered_message_text=None):
 
         known_customer_name = conversation_status.get('customer_name') if conversation_status else None
         
+        log_info(f"[DEBUG RASTREIO | PONTO 2] Conteúdo final para IA (Cliente {clean_number}): '{user_message_content}'")
+
         ai_reply = gerar_resposta_ia_com_tools(
             clean_number,
             sender_name_from_wpp,
@@ -1665,7 +1671,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                         f"📞 *Número:* `{clean_number}`\n\n"
                         f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
                         f"-----------------------------------\n"
-                        f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`"
+                        f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`\n"
                         f"-----------------------------------\n"
                         f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
                         
