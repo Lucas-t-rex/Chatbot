@@ -8,6 +8,7 @@ import calendar
 import json 
 import logging
 import base64
+import time
 import threading
 from flask import Flask, request, jsonify
 from datetime import datetime, timedelta, timezone, time as dt_time
@@ -912,7 +913,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         nome: {{Lyra}}
         função: {{Atendente e secretária especialista em automação.}} 
         personalidade: {{Profissional, alegre e muito humana. Falo de forma calma e fluida. Sou objetiva, mas empática. Uso frases curtas e diretas. Uso emojis com moderação (máx 1 ou 2).}}
-        **USO DO NOME (CRÍTICO):** O nome do cliente deve ser usado de forma ESPORÁDICA, simulando uma conversa natural. Use o nome: 1) Na primeira saudação pós-captura; 2) Apenas a cada 3 ou 4 turnos de conversa. **Nunca** o use em duas frases seguidas ou em confirmações repetitivas (Ex: "Entendido, Sabrina").
+        USO DO NOME (CRÍTICO): Use o nome do cliente de forma ESPORÁDICA, a cada 3 ou 4 turnos. REGRAS RÍGIDAS DE EVASÃO:
+            NUNCA use o nome em frases de confirmação simples (ex: "Perfeito, Sabrina!", "Maravilha, Sabrina!").
+            NUNCA use o nome se ele já foi usado na mensagem anterior.
         **ESTILO DE CONFIRMAÇÃO:** Mantenha as confirmações curtas, profissionais e amigáveis. Prefira confirmar o recebimento do dado (Ex: "Certo. Qual a data?"), ou use interjeições concisas e amigáveis (Ex: "Maravilha!", "Perfeito!", "Combinado.").
         =====================================================
         💼 SERVIÇOS / CARDÁPIO (Vendas)
@@ -1550,7 +1553,7 @@ def handle_responsible_command(message_content, responsible_number):
 
             if result.modified_count > 0:
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
-                send_whatsapp_message(customer_number_to_reactivate, "Oi sou eu a Lyra novamente, voltei pro seu atendimento. se precisar de algo me diga! 😊")
+                send_whatsapp_message(customer_number_to_reactivate, "Oi, sou eu a Lyra novamente, voltei pro seu atendimento. Se precisar de algo me diga! 😊")
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
             
@@ -1703,7 +1706,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                     {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
                 )
                 
-                send_whatsapp_message(sender_number_full, "Entendido. Já notifiquei um de nossos especialistas para te ajudar pessoalmente. Por favor, aguarde um momento. 👨‍💼")
+                send_whatsapp_message(sender_number_full, "Só mais um instante, o Lucas já vai falar com você 🙏. ")
                 
                 if RESPONSIBLE_NUMBER:
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
@@ -1728,9 +1731,23 @@ def process_message_logic(message_data, buffered_message_text=None):
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
             
             else:
-                # (Envio de resposta normal)
-                print(f"🤖  Resposta da IA para {sender_name_from_wpp}: {ai_reply}")
-                send_whatsapp_message(sender_number_full, ai_reply)
+                # (Envio de resposta normal - AGORA FRACIONADO)
+                print(f"🤖  Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
+                
+                # Quebra a resposta da IA por quebras de linha (parágrafos)
+                paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+
+                if not paragraphs:
+                    print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
+                    return # 'finally' vai liberar o lock
+                
+                for i, para in enumerate(paragraphs):
+                    # Envia o parágrafo atual
+                    send_whatsapp_message(sender_number_full, para)
+                    
+
+                    if i < len(paragraphs) - 1:
+                        time.sleep(2.0) # A pausa de 2 segundos que você pediu
 
         except Exception as e:
             print(f"❌ Erro ao processar envio ou intervenção: {e}")
