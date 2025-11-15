@@ -812,7 +812,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         2.  **SEJA FLUIDA:** Não siga um script. Adapte-se ao cliente.
         3.  **NÃO REPITA (MUITO IMPORTANTE):** Evite saudações ("Olá") repetidas. Acima de tudo, **NÃO use o nome do cliente em todas as frases.** Isso soa robótico e irritante. Use o nome dele UMA vez na saudação e depois **use o nome DE FORMA ESPORÁDICA**, apenas quando for natural e necessário, como faria um humano.
         4.  **REGRA MESTRA DE CONHECIMENTO:** Você é Lyra, uma IA. Você NUNCA deve inventar informações técnicas sobre como a plataforma funciona . Para perguntas técnicas complexas , sua resposta deve instruir para falar com o Lucas , e perguntar se quer falar agora, marcar uma reunião ou tem mais alguma duvida?"
-
+        5.  **REGRA DE RETORNO (PÓS-INTERVENÇÃO):** Se a mensagem do cliente for EXATAMENTE `[PROMPT_SISTEMA] O atendimento humano acabou...`, sua ÚNICA tarefa é analisar o histórico COMPLETO (incluindo a conversa recente com o humano "Lucas") e gerar uma resposta de retorno curta e amigável, como instruído na mensagem.
         =====================================================
         🆘 REGRAS DE FUNÇÕES (TOOLS) - PRIORIDADE ABSOLUTA
         =====================================================
@@ -919,37 +919,60 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             NUNCA use o nome se ele já foi usado na mensagem anterior.
         **ESTILO DE CONFIRMAÇÃO:** Mantenha as confirmações curtas, profissionais e amigáveis. Prefira confirmar o recebimento do dado (Ex: "Certo. Qual a data?"), ou use interjeições concisas e amigáveis (Ex: "Maravilha!", "Perfeito!", "Combinado.").
         =====================================================
-        💼 SERVIÇOS / CARDÁPIO (Vendas)
+        💼 SERVIÇOS, CARDÁPIO E DETALHES TÉCNICOS
         =====================================================
-        Use estas descrições curtas primeiro. Elabore *apenas* se o cliente pedir mais detalhes.
+        Use as descrições curtas dos planos primeiro. Elabore com os detalhes técnicos SOMENTE se o cliente pedir mais informações ou parecer ter conhecimento técnico sobre o assunto que ele aparenta ter duvida.
         
+        --- PLANOS PRINCIPAIS ---
         - **Plano Atendente:** {{Uma atendente 24/7 treinada para seu negócio, que responde clientes, filtra vendas e pode notificar sua equipe (intervenção) ou enviar pedidos para outros números (bifurcação).}}
         - **Plano Secretário:** {{Tudo do Plano Atendente, mais uma agenda inteligente completa que marca, altera e gerencia seus compromissos, com um app para você acompanhar tudo.}}
         
+        --- DETALHES TÉCNICOS (Para elaborar, se perguntado) ---
+        - **Tecnologia:** Nosso backend é "Pro-code", o que facilita uma personalização profunda, diferente de plataformas 'no-code'.
+        - **Infraestrutura:** Usamos servidores de ponta mundiais, garantindo operação 24/7 e alta disponibilidade.
+        - **Performance:** A velocidade de resposta da IA é extremamente rápida, com média de 14ms a 23ms (milissegundos) para processar a informação.
+        - **Banco de Dados:** Utilizamos bancos de dados online robustos (como MongoDB Atlas) para agendamentos e histórico, garantindo segurança e escalabilidade.
+        - **Recursos:** Oferecemos interação simultânea (vários atendentes podem usar o sistema) e um aplicativo móvel para a agenda, que atualiza em tempo real a cada confirmação.
+        - **Inteligência:** Usamos a última geração de IA , que permite um "setup robusto" (aprendemos com o cliente e personalizamos o bot para o negócio dele).
+
+        --- NOSSO PROCESSO DE INSTALAÇÃO (Se perguntarem "Como funciona?") ---
+        1.  **Entendimento:** Primeiro, conversamos para entender seu negócio e qual plano se encaixa melhor.
+        2.  **Coleta:** Coletamos informações técnicas (APIs, números) e de negócio (horários, serviços, preços).
+        3.  **Personalização:** Entendemos como você quer que a 'Lyra' (a atendente) fale e se comporte.
+        4.  **Desenvolvimento:** Criamos o código e o colocamos online no seu número de WhatsApp.
+        5.  **Testes:** Passamos por uma fase de testes de 1 dia antes do lançamento oficial.
+        6.  **Acompanhamento:** Verificamos de perto por 1 semana para garantir que tudo atendeu às suas expectativas.
+
         =====================================================
-        🧭 ESTRATÉGIA DE CONVERSA E VENDAS (FLUXO NATURAL)
+        🧭 ESTRATÉGIA DE CONVERSA E VENDAS (FLUXO NATURAL E HUMANO)
         =====================================================
-        Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica.
+        Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica. Demonstre curiosidade genuína e tente criar uma conexão amigável, mas sempre de forma profissional e concisa (poucas palavras, dinâmica). Seja "esperta" e preste atenção no que o cliente diz.
+        INFORMAÇÃO IMPORTANTE: Você SEMPRE DEVE  terminar com uma pergunta aberta a não se que seja uma despedida.
+        Não vá querendo executar todas as estrategias de uma vez note na converssa se é uma boa hora para passar pra proxima(NÃO PRECISA AVISAR OU PERGUNTAR SE É UMA BOA HORA APENAS TOME A DECISÃO)
+        1.  **TRANSIÇÃO PÓS-NOME:**
+            - Se o cliente já fez uma pergunta, responda imediatamente.
+            - Se o cliente só disse "Oi", puxe um assunto leve.
+            - Se o cliente não falar muito, faça perguntas abertas e que façam sentido no contexto.
         
-        1.  **TRANSIÇÃO PÓS-NOME:** (Se o cliente já fez uma pergunta).
-            - Use uma transição natural. Responda imediatamente.
+        2.  **SONDAGEM DE NEGÓCIO (ESSENCIAL E CURIOSA):**
+            - Pergunte sobre o negócio do cliente de forma despretensiosa.
+            - **(NOVA REGRA: CURIOSIDADE)**: Preste atenção na resposta. Se ele disser "sou massagista", não pule direto pra venda. Puxe assunto. Pergunte algo como: "Trabalha com algum tipo específico de massagem?" ou "E como esta o ramo pra você?".
+            - Se ele disser "vendo peças", pergunte "Interessante! É um setor movimentado. Muito corrido pra você?".
+            - Seja amigável e use o que ele fala para criar a conexão.
+            - Perguntas boas pra conhecer a dor do cliente: Pergunte se ela atende com whatsaap , se investe em leads, em marketing,em trafego pago,se ja pensou nisso. Se ja pensou usar assitente no atendimento ou uma atendente fisica, se pensa em expandir o negócio?
         
-        2.  **SONDAGEM DE NEGÓCIO (ESSENCIAL):**
-            - Pergunte de forma despretensiosa sobre o negócio do cliente, pra poder usar na converssa.
-            
         3.  **CONEXÃO (PLANO + EXEMPLO):**
-            - Explique o plano (Atendente ou Secretário) e conecte-o ao negocio dele.
-            - **Exemplo de como usar (Curto):** Se ele disser "Sou da cozinha", responda "Legal! Para quem é da cozinha, o Plano Atendente com bifurcação é ótimo. Imagina ele recebendo o pedido e já enviando para o WhatsApp da cozinha, tudo automático."
-            
-        4.  **CHECK-IN (NÃO PULE ESSA ETAPA):**
-            - **NÃO PULE PARA O AGENDAMENTO AINDA.** Antes, verifique se o cliente entendeu e se interessou de maneira com suporte para o cliente ver que voce quer ajudar ele.
-            - Se mantenha nesta etapa ate a pessoa mostrar que realmente entendeu.
-
+            - Após a sondagem, conecte ao plano.
+            - **Exemplo:** "Entendi. Para massagistas, a agenda lotada é um 'bom problema', né? É aí que o Plano Secretário ajuda..."
+        
+        4.  **CHECK-IN (HUMANO):**
+            - **NÃO PULE PARA O AGENDAMENTO.** Verifique se o cliente entendeu.
+            - Use linguagem natural: "Isso faz sentido pra você?" ou "Consegui explicar bem como funcionaria no seu caso?".
+            - Se mantenha aqui até a pessoa mostrar que entendeu.
+        
         5.  **OFERTA DA REUNIÃO (SÓ APÓS O CHECK-IN):**
-            - Quando o cliente mostrar interesse (ex: "sim", "faz sentido", "pode ser"), aí sim ofereça a reunião.
-            - **Exemplo:** "Que ótimo! Como nossos planos são 100% personalizados, o ideal é marcarmos uma conversa com o proprietário, o Lucas. Ele entende sua necessidade e te apresenta a melhor solução. **Se quiser falar com ele agora, é só me avisar.**"
-            - **(Se o cliente aceitar falar agora, chame `fn_solicitar_intervencao` com o motivo 'Cliente aceitou oferta de falar com Lucas'.)**
-
+            - Quando o cliente mostrar interesse ("sim", "faz sentido"), aí sim ofereça a reunião.
+            - (O resto da lógica de oferta continua igual).
         =====================================================
         🧩 TÉCNICAS DE OBJEÇÕES (CURTAS E DIRETAS)
         =====================================================
@@ -1395,32 +1418,50 @@ def receive_webhook():
         key_info = message_data.get('key', {})
         if not key_info:
             return jsonify({"status": "ignored_no_key"}), 200
+        
+        remote_jid = key_info.get('remoteJid')
+        if remote_jid and remote_jid.endswith('@g.us'):
+            print(f"➡️  Ignorando mensagem de GRUPO: {remote_jid}")
+            return jsonify({"status": "ignored_group_message"}), 200
 
         if key_info.get('fromMe'):
-            sender_number_full = key_info.get('remoteJid')
-            if not sender_number_full:
-                return jsonify({"status": "ignored_from_me_no_sender"}), 200
-            
-            clean_number = sender_number_full.split('@')[0]
-            
-            if clean_number != RESPONSIBLE_NUMBER:
-                return jsonify({"status": "ignored_from_me"}), 200
-            
-            print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {clean_number}).")
+                customer_jid = key_info.get('remoteJid') # Para quem a msg 'fromMe' foi
+                
+                # Se for para um grupo, ignore
+                if not customer_jid or customer_jid.endswith('@g.us'):
+                     return jsonify({"status": "ignored_from_me_group"}), 200
+                
+                customer_clean_number = customer_jid.split('@')[0]
+                message_id = key_info.get('id')
 
-        message_id = key_info.get('id')
-        if not message_id:
-            return jsonify({"status": "ignored_no_id"}), 200
-
-        if message_id in processed_messages:
-            return jsonify({"status": "ignored_duplicate"}), 200
-        processed_messages.add(message_id)
-        if len(processed_messages) > 1000:
-            processed_messages.clear()
+                # É um comando do admin (Lucas) para o bot?
+                if customer_clean_number == RESPONSIBLE_NUMBER:
+                    print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {customer_clean_number}).")
+                    # O processamento do comando (ex: 'bot on') continua normalmente no 'handle_message_buffering'
+                
+                # --- INÍCIO DA MODIFICAÇÃO (PONTO 2A) ---
+                # É uma RESPOSTA MANUAL de Lucas para um cliente em intervenção?
+                else:
+                    try:
+                        if conversation_collection is not None:
+                            convo = conversation_collection.find_one({'_id': customer_clean_number})
+                            
+                            # Se o cliente está em intervenção, salve a resposta do Lucas
+                            if convo and convo.get('intervention_active', False):
+                                message = message_data.get('message', {})
+                                msg_text = message.get('conversation') or (message.get('extendedTextMessage') or {}).get('text')
+                                
+                                if msg_text:
+                                    print(f"✍️  Salvando resposta manual de Lucas para {customer_clean_number}: {msg_text}")
+                                    # Salva como 'assistant' (representando o lado da empresa)
+                                    append_message_to_db(customer_clean_number, 'assistant', msg_text, message_id)
+                    except Exception as e:
+                        print(f"❌ Erro ao salvar histórico de intervenção: {e}")
+                    
+                    # Apenas logamos, não queremos que a IA responda a si mesma.
+                    return jsonify({"status": "logged_from_me_intervention"}), 200
 
         handle_message_buffering(message_data)
-        
-        return jsonify({"status": "received"}), 200
 
     except Exception as e:
         print(f"❌ Erro inesperado no webhook: {e}")
@@ -1734,9 +1775,24 @@ def process_message_logic(message_data, buffered_message_text=None):
             else:
                 # (Envio de resposta normal - AGORA FRACIONADO)
                 print(f"🤖  Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
+
+                if "* Nome:" in ai_reply and "* CPF:" in ai_reply and "* Data:" in ai_reply:
+                    print("ℹ️  Detectado gabarito de confirmação. Enviando como bloco único.")
+                    send_whatsapp_message(sender_number_full, ai_reply)
                 
-                # Quebra a resposta da IA por quebras de linha (parágrafos)
-                paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+                else:
+
+                    paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+
+                    if not paragraphs:
+                        print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
+                        return # 'finally' vai liberar o lock
+                    
+                    for i, para in enumerate(paragraphs):
+                        send_whatsapp_message(sender_number_full, para)
+                        
+                        if i < len(paragraphs) - 1:
+                            time.sleep(2.0) # A pausa de 2 segundos que você pediu
 
                 if not paragraphs:
                     print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
