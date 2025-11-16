@@ -612,17 +612,6 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                         "required": ["motivo"]
                     }
                 },
-                {
-                    "name": "fn_capturar_nome",
-                    "description": "Salva o nome do cliente no banco de dados quando ele se apresenta pela primeira vez.",
-                    "parameters": {
-                        "type_": "OBJECT",
-                        "properties": {
-                            "nome_extraido": {"type_": "STRING", "description": "O nome que o cliente acabou de informar (ex: 'Marcos', 'Ana')."}
-                        },
-                        "required": ["nome_extraido"]
-                    }
-                }
             ]
         }
     ]
@@ -752,58 +741,35 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         # PARTE 1: GATE DE CAPTURA DE NOME (O BOT SÓ FAZ ISSO)
         # ==========================================================
         prompt_name_instruction = f"""
-        GATE DE CAPTURA DE NOME (PRIORIDADE MÁXIMA)
-        Seu nome é {{Lyra}}. O nome do cliente AINDA NÃO É CONHECIDO.
-
-        **REGRA CRÍTICA DE IGNIÇÃO:** Você não sabe o nome do cliente. Seu único objetivo é perguntar e capturar o nome. **NUNCA tente adivinhar o nome** ou usar qualquer nome que não tenha sido dito DIRETAMENTE pelo cliente nesta conversa.
-        Sua **ÚNICA MISSÃO** neste momento é capturar o nome do cliente.
-        O restante do seu prompt (sobre preços, serviços, etc.) só deve ser usado DEPOIS que o nome for capturado.
-        A **ÚNICA EXCEÇÃO** é se o cliente pedir intervenção humana (falar com Lucas, dono, proprietário). Fora isso, NADA é mais importante que capturar o nome.
-        **REGRA CRÍTICA:** NÃO FORNEÇA NENHUMA INFORMAÇÃO (preços, serviços, como funciona) ANTES de ter o nome. Sua resposta deve ser CURTA e HUMANA.
-        
-        Tente captar se a pessoa esta dizendo o nome(se apresentando) ou falar com o dono. Se a pessoa disser apenas "lucas" ou "meu nome é lucas" é uma apresentação.
-        
-        FLUXO DE EXECUÇÃO:
-        CASO 1: A primeira mensagem do cliente é SÓ um cumprimento (ex: "Oi", "Bom dia", "Tudo bem?").
-        1.  **Sua Resposta (Apresentação Natural):**
-            - Cumprimente (use {saudacao} se for adequado).
-            - Responda a perguntas como "Tudo bem?" de forma natural.
-            - Apresente-se ("Eu sou Lyra, da Neuro'Up Soluções") e coloque-se à disposição.
-
-        CASO 2: O cliente JÁ FAZ UMA PERGUNTA (ex: "quanto custa?", "como funciona?", "vi no instagram").
-        1.  **Sua Resposta (Focada SÓ no Nome):**
-            - Conecte-se BREVEMENTE com a pergunta (ex: "Que ótimo que nos viu no Instagram!", "Claro, já te falo sobre...").
-            - **REGRA CRÍTICA DESTE CASO:** NÃO pergunte sobre o "negócio" do cliente. NÃO pergunte "como posso ajudar?". Sua única pergunta DEVE ser pelo nome.
-            - **Exemplo Correto:** "Que legal que nos viu no Instagram! Como é seu nome mesmo?"
-            - **NÃO FAÇA MAIS NADA.** Pare e espere o nome ate ter o nome.
-
-        DEPOIS QUE VOCÊ PEDIR O NOME (Fluxo do CASO 2):
-            - Se o cliente responder com o nome.
-            - Sua tarefa é capturá-lo.
-            - **REGRA DE PALAVRA ÚNICA:**
-            - Se o cliente responder com o que parece ser um nome (ex:"dani", "lucas"), sua **AÇÃO PRIORITÁRIA** é chamar a ferramenta `fn_capturar_nome`.
-            - Se a mensagem do usuário tiver 1 ou 2 palavras e não for uma pergunta, trate como POSSÍVEL NOME.
-            - Caso seja um nome, acione fn_capturar_nome.
-            - **REGRA DE AÇÃO (OBRIGATÓRIO):**
-            - Quando o cliente responder à sua pergunta sobre o nome (ex: "lucas", "meu nome é lucas"):
+            REGRA CRÍTICA - CAPTURA DE NOME INTELIGENTE (PRIORIDADE MÁXIMA):
             
-            - **1. CAMINHO FELIZ (Prioridade):** Se você identificar a resposta como um nome, sua **ÚNICA AÇÃO** deve ser chamar a ferramenta `fn_capturar_nome`.
-                - *Exemplo 1:* Cliente: "lucas" -> Você: [Chama `fn_capturar_nome(nome_extraido="lucas")`]
-                - *Exemplo 2:* Cliente: "meu nome é lucas" -> Você: [Chama `fn_capturar_nome(nome_extraido="lucas")`]
-
-            - **2. CAMINHO DE DÚVIDA:** Se você ficar em dúvida se a palavra é um nome (ex: "Trabalho", "Preço"), você **DEVE** fazer uma pergunta curta de esclarecimento.
-                - *Exemplo:* Cliente: "preço" -> Você: "Desculpe, 'preço' é o seu nome?"
+            Seu nome é {{Lyra}}. O nome do cliente AINDA NÃO É CONHECIDO.
+            Seu primeiro objetivo é sempre descobrir o nome real do cliente.
             
-            - **REGRA CRÍTICA (ANTI-ERRO):** Você está **PROIBIDO** de retornar uma resposta vazia. Você deve OBRIGATORIAMENTE seguir o Caminho 1 (chamar ferramenta) ou o Caminho 2 (fazer pergunta).
-        3. **REGRA ANTI-DUPLICAÇÃO (NOVA):** Ao extrair o nome com `fn_capturar_nome`, você DEVE usar *apenas* o conteúdo da ÚLTIMA MENSAGEM DO USUÁRIO. NUNCA combine o nome com mensagens anteriores do histórico. Se a última mensagem for "abreu", a ferramenta DEVE ser `fn_capturar_nome(nome_extraido="abreu")`. NUNCA `(nome_extraido="abreuabreu")`.
-
-        QUANDO A FERRAMENTA `fn_capturar_nome` RETORNAR SUCESSO (ex: `{{"sucesso": true, "nome_salvo": "Dani"}}`):
-        - **Agora sim, sua próxima resposta DEVE:**
-            1. Saudar o cliente pelo nome que a ferramenta salvou (ex: "Prazer, Nome!").
-            2. **RESPONDER IMEDIATAMENTE** à pergunta original que o cliente tinha feito (a pergunta que você guardou na memória antes de pedir o nome).
-        
-        **RESUMO:** Se o nome não é conhecido, `prompt_name_instruction` é a única regra. Se o nome é conhecido, o `prompt_final` (o resto do prompt) é ativado.
-        """
+            1. Se a primeira mensagem do cliente for um cumprimento (ex: "oi"), peça o nome dele de forma direta e educada.
+            
+            2. Se a primeira mensagem do cliente já contiver uma pergunta (ex: "oi, qual o preço?", "quero saber como funciona"), você deve:
+               - Primeiro, acalmar o cliente dizendo que já vai responder.
+               - Em seguida, peça o nome para personalizar o atendimento.
+               - *IMPORTANTE*: Você deve guardar a pergunta original do cliente na memória.
+            
+            3. Quando o cliente responder com o nome dele (ex: "Meu nome é Nome", ou ele só diz "nome"):
+               - Sua próxima resposta DEVE OBRIGATORIAMENTE começar com a tag: `[NOME_CLIENTE]O nome do cliente é: [Nome Extraído].`
+               - Dizer Prazer "nome"!.
+               - *RESPONDER IMEDIATAMENTE* à pergunta original que ele fez no início da conversa (se houver).
+            
+            EXEMPLO DE FLUXO IDEAL (Cliente faz pergunta):
+            Cliente: "oi, queria saber o preço"
+            Você: "Olá! Claro, já te passo os detalhes. Para que nosso atendimento fique melhor, como posso te chamar?"
+            Cliente: "dani"
+            Sua Resposta: "[NOME_CLIENTE]O nome do cliente é: dani. Prazer, dani! Sobre os preços, como cada projeto é personalizado..."
+            
+            EXEMPLO DE FLUXO IDEAL (Cliente só cumprimenta):
+            Cliente: "oi bom dia"
+            Você: "Bom dia! Eu sou a Lyra. Como é seu nome, por favor?"
+            Cliente: "dani"
+            Sua Resposta: "[NOME_CLIENTE]O nome do cliente é: dani. Prazer, dani! 😊 Como posso te ajudar hoje?"
+            """
 
     prompt_final = f"""
         A data e hora atuais são: {horario_atual}. (Use {saudacao} para cumprimentar no início).
@@ -1065,55 +1031,6 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
             )
             return json.dumps(resp, ensure_ascii=False)
 
-        elif call_name == "fn_capturar_nome":
-            try:
-                nome_bruto = args.get("nome_extraido", "").strip()
-                print(f"--- [DEBUG RASTREIO 1] IA extraiu: nome_bruto='{nome_bruto}'")
-                if not nome_bruto:
-                    return json.dumps({"erro": "Nome estava vazio."}, ensure_ascii=False)
-
-                nome_limpo = nome_bruto
-                try:
-                    # 1. Tenta dividir por espaço (Ex: "Daniel Daniel")
-                    palavras = nome_bruto.split()
-                    if len(palavras) >= 2 and palavras[0].lower() == palavras[1].lower():
-                        nome_limpo = palavras[0].capitalize() # Pega só o primeiro
-                        print(f"--- [DEBUG ANTI-BUG] Corrigido (Espaço): '{nome_bruto}' -> '{nome_limpo}'")
-
-                    # 2. SE NÃO FOR O CASO 1, checa se é uma palavra só duplicada (Ex: "Danieldaniel")
-                    # Esta é a lógica nova e crucial
-                    else:
-                        l = len(nome_bruto)
-                        if l > 2 and l % 2 == 0: # Se for par e maior que 2
-                            metade1 = nome_bruto[:l//2]
-                            metade2 = nome_bruto[l//2:]
-                            
-                            # Se as metades forem IDÊNTICAS
-                            if metade1.lower() == metade2.lower():
-                                nome_limpo = metade1.capitalize() # Pega só a primeira metade
-                                print(f"--- [DEBUG ANTI-BUG] Corrigido (Sem Espaço): '{nome_bruto}' -> '{nome_limpo}'")
-                            else:
-                                # Se não for duplicado, só capitaliza o que veio
-                                nome_limpo = " ".join([p.capitalize() for p in palavras])
-                        else:
-                            # Se for ímpar ou não duplicado, só capitaliza
-                            nome_limpo = " ".join([p.capitalize() for p in palavras])
-
-                except Exception as e:
-                    print(f"Aviso: Exceção na limpeza de nome: {e}")
-                    nome_limpo = nome_bruto.capitalize() # Fallback 
-                
-                print(f"--- [DEBUG RASTREIO 2] Python limpou: nome_limpo='{nome_limpo}'")
-
-                if conversation_collection is not None:
-                    conversation_collection.update_one(
-                        {'_id': contact_id},
-                        {'$set': {'customer_name': nome_limpo}}, # <-- Agora salva o nome limpo
-                        upsert=True
-                    )
-                return json.dumps({"sucesso": True, "nome_salvo": nome_limpo}, ensure_ascii=False)
-            except Exception as e:
-                return json.dumps({"erro": f"Erro ao salvar nome no DB: {e}"}, ensure_ascii=False)
 
         elif call_name == "fn_solicitar_intervencao":
             motivo = args.get("motivo", "Motivo não especificado pela IA.")
@@ -1129,8 +1046,9 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
     """
-    (VERSÃO FINAL - COM TOOLS E CONTAGEM DE TOKENS)
+    (VERSÃO CORRIGIDA - COM TOOLS E CONTAGEM DE TOKENS)
     Esta função agora gerencia o loop de ferramentas.
+    A LÓGICA DE PARSING DA RESPOSTA FOI CORRIGIDA.
     """
     global modelo_ia 
 
@@ -1226,22 +1144,35 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         except Exception as e:
             print(f"Aviso: Não foi possível somar tokens (chamada inicial): {e}")
 
+        # ▼▼▼ INÍCIO DA ALTERAÇÃO 4 (LÓGICA DE PARSING DE NOME) ▼▼▼
+        # Esta variável é usada para o save_conversation_to_db
+        customer_name_to_save = known_customer_name
+        
+        ai_reply_text = ""
+
+        # Loop 'while True' para processar chamadas de função
         while True:
-            cand = resposta_ia.candidates[0]
             func_call = None
             try:
-                func_call = cand.content.parts[0].function_call
+                func_call = resposta_ia.candidates[0].content.parts[0].function_call
             except Exception:
                 func_call = None
 
+            # Se NÃO houver chamada de função, saia do loop
             if not func_call or not getattr(func_call, "name", None):
-                break # Sai do loop
+                break 
 
+            # Se HOUVER uma chamada de função, processe-a
             call_name = func_call.name
             call_args = {key: value for key, value in func_call.args.items()}
             
             log_info(f"🔧 IA chamou a função: {call_name} com args: {call_args}")
             append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
+
+            # NOVO: Se a função for 'fn_capturar_nome', atualize o nome para salvar
+            if call_name == "fn_capturar_nome":
+                # A função 'handle_tool_call' já limpa o nome
+                customer_name_to_save = call_args.get("nome_extraido", "").strip()
 
             resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
             log_info(f"📤 Resultado da função: {resultado_json_str}")
@@ -1263,29 +1194,35 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             except Exception as e:
                 print(f"Aviso: Não foi possível somar tokens (loop de ferramenta): {e}")
 
-        ai_reply_text = ""
+        # Fim do loop 'while'. Agora, processamos a resposta de TEXTO.
         try:
-            # Tentativa 1: Acessar .text (o mais comum)
             ai_reply_text = resposta_ia.text
         except Exception as e1:
-            #
-            # ▼▼▼ DEBUG ADICIONADO ▼▼▼
             print(f"--- [DEBUG EXCEÇÃO 1] Falha ao ler .text. Erro: {e1}")
-            # ▲▲▲ FIM DO DEBUG ▲▲▲
-            #
             try:
-                # Tentativa 2: Acessar a estrutura interna (parts)
                 ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
             except Exception as e2:
-                #
-                # ▼▼▼ DEBUG ADICIONADO ▼▼▼
                 print(f"--- [DEBUG EXCEÇÃO 2] Falha ao ler .parts[0].text. Erro: {e2}")
                 print(f"--- [DEBUG EXCEÇÃO 2] Objeto 'resposta_ia' completo: {resposta_ia}")
-                # ▲▲▲ FIM DO DEBUG ▲▲▲
-                #
-                ai_reply_text = "Pode ser mais claro?" # Fallback final
+                
+                # FALLBACK INTELIGENTE (Solução 3 da análise anterior)
+                is_captura_de_nome_vazia = False
+                try:
+                    finish_reason = str(resposta_ia.candidates[0].finish_reason)
+                    if not known_customer_name and ("STOP" in finish_reason or "1" in finish_reason):
+                        is_captura_de_nome_vazia = True
+                except Exception:
+                    pass
 
-        save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn)
+                if is_captura_de_nome_vazia:
+                    print("--- [DEBUG FALLBACK] IA retornou vazia (provavelmente chamando função). Perguntando o nome.")
+                    ai_reply_text = "Qual seu nome, por favor?"
+                else:
+                    ai_reply_text = "Pode ser mais claro?"
+        
+        # ▲▲▲ FIM DA ALTERAÇÃO 4 ▲▲▲
+
+        save_conversation_to_db(contact_id, sender_name, customer_name_to_save, total_tokens_this_turn)
         print(f"🔥 Tokens consumidos nesta rodada para {contact_id}: {total_tokens_this_turn}")
         
         return ai_reply_text
