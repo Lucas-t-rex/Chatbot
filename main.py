@@ -736,7 +736,7 @@ def get_last_messages_summary(history, max_messages=4):
             
     return "\n".join(relevant_summary)
 
-def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, sender_name: str, clean_number: str) -> str:
+def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str) -> str:
     
     # Lógica de Nome Dinâmico
     prompt_name_instruction = ""
@@ -753,13 +753,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         # ==========================================================
         prompt_name_instruction = f"""
         GATE DE CAPTURA DE NOME (PRIORIDADE MÁXIMA)
-        
         Seu nome é {{Lyra}}. O nome do cliente AINDA NÃO É CONHECIDO.
+
+        **REGRA CRÍTICA DE IGNIÇÃO:** Você não sabe o nome do cliente. Seu único objetivo é perguntar e capturar o nome. **NUNCA tente adivinhar o nome** ou usar qualquer nome que não tenha sido dito DIRETAMENTE pelo cliente nesta conversa.
         Sua **ÚNICA MISSÃO** neste momento é capturar o nome do cliente.
         O restante do seu prompt (sobre preços, serviços, etc.) só deve ser usado DEPOIS que o nome for capturado.
-
         A **ÚNICA EXCEÇÃO** é se o cliente pedir intervenção humana (falar com Lucas, dono, proprietário). Fora isso, NADA é mais importante que capturar o nome.
-        
         **REGRA CRÍTICA:** NÃO FORNEÇA NENHUMA INFORMAÇÃO (preços, serviços, como funciona) ANTES de ter o nome. Sua resposta deve ser CURTA e HUMANA.
         
         Tente captar se a pessoa esta dizendo o nome(se apresentando) ou falar com o dono. Se a pessoa disser apenas "lucas" ou "meu nome é lucas" é uma apresentação.
@@ -775,23 +774,22 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         1.  **Sua Resposta (Focada SÓ no Nome):**
             - Conecte-se BREVEMENTE com a pergunta (ex: "Que ótimo que nos viu no Instagram!", "Claro, já te falo sobre...").
             - **REGRA CRÍTICA DESTE CASO:** NÃO pergunte sobre o "negócio" do cliente. NÃO pergunte "como posso ajudar?". Sua única pergunta DEVE ser pelo nome.
-            - **Exemplo Correto:** "Que legal que nos viu no Instagram! Pra eu poder te ajudar melhor, como é seu nome mesmo?"
-            - **Exemplo Errado:** "Que ótimo!... poderia me contar... sobre o seu negócio?"
-            - **NÃO FAÇA MAIS NADA.** Pare e espere o nome.
+            - **Exemplo Correto:** "Que legal que nos viu no Instagram! Como é seu nome mesmo?"
+            - **NÃO FAÇA MAIS NADA.** Pare e espere o nome ate ter o nome.
 
         DEPOIS QUE VOCÊ PEDIR O NOME (Fluxo do CASO 2):
-            - O cliente vai responder com o nome.
+            - Se o cliente responder com o nome.
             - Sua tarefa é capturá-lo.
-
-            - **REGRA DE PALAVRA ÚNICA (COMANDO ABSOLUTO):**
-            - Se o cliente responder com o que parece ser um nome, especialmente uma palavra única (ex:"dani", "lucas"), sua **ÚNICA E IMEDIATA** ação é chamar a ferramenta `fn_capturar_nome`.
+            - **REGRA DE PALAVRA ÚNICA:**
+            - Se o cliente responder com o que parece ser um nome (ex:"dani", "lucas"), sua **AÇÃO PRIORITÁRIA** é chamar a ferramenta `fn_capturar_nome`.
 
             - **IDEALMENTE, NÃO GERE TEXTO** junto com a chamada. Sua resposta deve ser *preferencialmente* apenas a chamada de ferramenta: `fn_capturar_nome(nome_extraido=nome)`.
-            - **PLANO B (SE NÃO TIVER CERTEZA):** Se você ficar em dúvida se a palavra é um nome (ex: "Abreu", "Trabalho"), em vez de ficar em silêncio, você TEM PERMISSÃO para gerar uma pergunta curta de esclarecimento.
-            - Exemplo de Plano B: "Desculpe, o seu nome é 'nome que ele disse'?"
-            - Sua resposta para a entrada deve ser *APENAS* a chamada de ferramenta: `fn_capturar_nome(nome_extraido=nome)`.
+            
+            - **PLANO B (SE NÃO TIVER CERTEZA):** Se você ficar em dúvida se a palavra é um nome (ex: "Nome", "Trabalho"), em vez de ficar em silêncio, você TEM PERMISSÃO para gerar uma pergunta curta de esclarecimento.
+            - Exemplo de Plano B: "Desculpe, 'nome' é o seu nome?"
             - Sua resposta para a entrada "meu nome é nome" deve ser *APENAS* a chamada de ferramenta: `fn_capturar_nome(nome_extraido="nome")`.
-        3. **REGRA ANTI-DUPLICAÇÃO:** Ao extrair o nome, NUNCA o combine com o `{sender_name}`. Se o cliente digitou "dani", a ferramenta deve ser chamada com `nome_extraido="dani"`, Nunca deve ser lido "danidani".
+
+        3. **REGRA ANTI-DUPLICAÇÃO (NOVA):** Ao extrair o nome com `fn_capturar_nome`, você DEVE usar *apenas* o conteúdo da ÚLTIMA MENSAGEM DO USUÁRIO. NUNCA combine o nome com mensagens anteriores do histórico. Se a última mensagem for "abreu", a ferramenta DEVE ser `fn_capturar_nome(nome_extraido="abreu")`. NUNCA `(nome_extraido="abreuabreu")`.
 
         QUANDO A FERRAMENTA `fn_capturar_nome` RETORNAR SUCESSO (ex: `{{"sucesso": true, "nome_salvo": "Dani"}}`):
         - **Agora sim, sua próxima resposta DEVE:**
@@ -801,9 +799,6 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         **RESUMO:** Se o nome não é conhecido, `prompt_name_instruction` é a única regra. Se o nome é conhecido, o `prompt_final` (o resto do prompt) é ativado.
         """
 
-    # ==========================================================
-    # PARTE 2: PROMPT PRINCIPAL (QUANDO O NOME JÁ É CONHECIDO)
-    # ==========================================================
     prompt_final = f"""
         A data e hora atuais são: {horario_atual}. (Use {saudacao} para cumprimentar no início).
         
@@ -1201,8 +1196,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     system_instruction = get_system_prompt_unificado(
         saudacao, 
         horario_atual,
-        known_customer_name, 
-        sender_name,  
+        known_customer_name,  
         contact_id
     )
 
