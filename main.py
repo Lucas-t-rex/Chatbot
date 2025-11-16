@@ -783,12 +783,17 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - **REGRA DE PALAVRA ÚNICA:**
             - Se o cliente responder com o que parece ser um nome (ex:"dani", "lucas"), sua **AÇÃO PRIORITÁRIA** é chamar a ferramenta `fn_capturar_nome`.
 
-            - **IDEALMENTE, NÃO GERE TEXTO** junto com a chamada. Sua resposta deve ser *preferencialmente* apenas a chamada de ferramenta: `fn_capturar_nome(nome_extraido=nome)`.
+            - **REGRA DE AÇÃO (OBRIGATÓRIO):**
+            - Quando o cliente responder à sua pergunta sobre o nome (ex: "lucas", "meu nome é lucas"):
             
-            - **PLANO B (SE NÃO TIVER CERTEZA):** Se você ficar em dúvida se a palavra é um nome (ex: "Nome", "Trabalho"), em vez de ficar em silêncio, você TEM PERMISSÃO para gerar uma pergunta curta de esclarecimento.
-            - Exemplo de Plano B: "Desculpe, 'nome' é o seu nome?"
-            - Sua resposta para a entrada "meu nome é nome" deve ser *APENAS* a chamada de ferramenta: `fn_capturar_nome(nome_extraido="nome")`.
+            - **1. CAMINHO FELIZ (Prioridade):** Se você identificar a resposta como um nome, sua **ÚNICA AÇÃO** deve ser chamar a ferramenta `fn_capturar_nome`.
+                - *Exemplo 1:* Cliente: "lucas" -> Você: [Chama `fn_capturar_nome(nome_extraido="lucas")`]
+                - *Exemplo 2:* Cliente: "meu nome é lucas" -> Você: [Chama `fn_capturar_nome(nome_extraido="lucas")`]
 
+            - **2. CAMINHO DE DÚVIDA:** Se você ficar em dúvida se a palavra é um nome (ex: "Trabalho", "Preço"), você **DEVE** fazer uma pergunta curta de esclarecimento.
+                - *Exemplo:* Cliente: "preço" -> Você: "Desculpe, 'preço' é o seu nome?"
+            
+            - **REGRA CRÍTICA (ANTI-ERRO):** Você está **PROIBIDO** de retornar uma resposta vazia. Você deve OBRIGATORIAMENTE seguir o Caminho 1 (chamar ferramenta) ou o Caminho 2 (fazer pergunta).
         3. **REGRA ANTI-DUPLICAÇÃO (NOVA):** Ao extrair o nome com `fn_capturar_nome`, você DEVE usar *apenas* o conteúdo da ÚLTIMA MENSAGEM DO USUÁRIO. NUNCA combine o nome com mensagens anteriores do histórico. Se a última mensagem for "abreu", a ferramenta DEVE ser `fn_capturar_nome(nome_extraido="abreu")`. NUNCA `(nome_extraido="abreuabreu")`.
 
         QUANDO A FERRAMENTA `fn_capturar_nome` RETORNAR SUCESSO (ex: `{{"sucesso": true, "nome_salvo": "Dani"}}`):
