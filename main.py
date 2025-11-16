@@ -782,7 +782,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - Sua tarefa é capturá-lo.
             - **REGRA DE PALAVRA ÚNICA:**
             - Se o cliente responder com o que parece ser um nome (ex:"dani", "lucas"), sua **AÇÃO PRIORITÁRIA** é chamar a ferramenta `fn_capturar_nome`.
-
+            - Se a mensagem do usuário tiver 1 ou 2 palavras e não for uma pergunta, trate como POSSÍVEL NOME.
+            - Caso seja um nome, acione fn_capturar_nome.
             - **REGRA DE AÇÃO (OBRIGATÓRIO):**
             - Quando o cliente responder à sua pergunta sobre o nome (ex: "lucas", "meu nome é lucas"):
             
