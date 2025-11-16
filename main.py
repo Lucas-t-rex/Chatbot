@@ -1418,56 +1418,80 @@ def receive_webhook():
         key_info = message_data.get('key', {})
         if not key_info:
             return jsonify({"status": "ignored_no_key"}), 200
-        
+            
         remote_jid = key_info.get('remoteJid')
         if remote_jid and remote_jid.endswith('@g.us'):
             print(f"➡️  Ignorando mensagem de GRUPO: {remote_jid}")
             return jsonify({"status": "ignored_group_message"}), 200
 
+        # --- INÍCIO DA CORREÇÃO (IDEMPOTÊNCIA) ---
+        message_id = key_info.get('id')
+        if not message_id:
+            return jsonify({"status": "ignored_no_id"}), 200 # Ignora se não tiver ID
+
+        # 1. Checagem rápida em memória
+        if message_id in processed_messages:
+            print(f"⚠️ Ignorando webhook duplicado (in-memory): {message_id}")
+            return jsonify({"status": "ignored_duplicate_in_memory"}), 200
+
+        # 2. Checagem no DB (lenta, mas segura contra reinícios)
+        sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
+        clean_number = None
+        if sender_number_full and not sender_number_full.endswith('@g.us'):
+             clean_number = sender_number_full.split('@')[0]
+             
+        if clean_number and conversation_collection:
+            try:
+                exists = conversation_collection.find_one(
+                    {'_id': clean_number, 'history.msg_id': message_id},
+                    projection={'_id': 1}
+                )
+                if exists:
+                    print(f"⚠️ Ignorando webhook duplicado (no DB): {message_id} de {clean_number}")
+                    processed_messages.add(message_id) # Adiciona na memória para ser mais rápido
+                    return jsonify({"status": "ignored_duplicate_db"}), 200
+            except Exception as e:
+                print(f"Aviso: falha ao checar duplicado no DB: {e}")
+        # --- FIM DA CORREÇÃO (IDEMPOTÊNCIA) ---
+
         if key_info.get('fromMe'):
                 customer_jid = key_info.get('remoteJid') # Para quem a msg 'fromMe' foi
                 
-                # Se for para um grupo, ignore
                 if not customer_jid or customer_jid.endswith('@g.us'):
                      return jsonify({"status": "ignored_from_me_group"}), 200
                 
                 customer_clean_number = customer_jid.split('@')[0]
-                message_id = key_info.get('id')
+                # message_id já foi pego acima
 
-                # É um comando do admin (Lucas) para o bot?
                 if customer_clean_number == RESPONSIBLE_NUMBER:
                     print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {customer_clean_number}).")
-                    # O processamento do comando (ex: 'bot on') continua normalmente no 'handle_message_buffering'
                 
-                # --- INÍCIO DA MODIFICAÇÃO (PONTO 2A) ---
-                # É uma RESPOSTA MANUAL de Lucas para um cliente em intervenção?
                 else:
                     try:
                         if conversation_collection is not None:
                             convo = conversation_collection.find_one({'_id': customer_clean_number})
                             
-                            # Se o cliente está em intervenção, salve a resposta do Lucas
                             if convo and convo.get('intervention_active', False):
                                 message = message_data.get('message', {})
                                 msg_text = message.get('conversation') or (message.get('extendedTextMessage') or {}).get('text')
                                 
                                 if msg_text:
                                     print(f"✍️  Salvando resposta manual de Lucas para {customer_clean_number}: {msg_text}")
-                                    # Salva como 'assistant' (representando o lado da empresa)
                                     append_message_to_db(customer_clean_number, 'assistant', msg_text, message_id)
                     except Exception as e:
                         print(f"❌ Erro ao salvar histórico de intervenção: {e}")
                     
-                    # Apenas logamos, não queremos que a IA responda a si mesma.
                     return jsonify({"status": "logged_from_me_intervention"}), 200
 
         handle_message_buffering(message_data)
+        
+        return jsonify({"status": "received"}), 200 # Adicionado o OK final
 
     except Exception as e:
         print(f"❌ Erro inesperado no webhook: {e}")
         print("DADO QUE CAUSOU ERRO:", data)
         return jsonify({"status": "error"}), 500
-
+    
 @app.route('/', methods=['GET'])
 def health_check():
     return f"Estou vivo! ({CLIENT_NAME} Bot v2 - com Agenda)", 200 
@@ -1485,10 +1509,14 @@ def handle_message_buffering(message_data):
         
         message = message_data.get('message', {})
         user_message_content = None
+        message_id = key_info.get('id') # Pega o ID
         
         if message.get('audioMessage'):
             print("🎤 Áudio recebido, processando imediatamente (sem buffer)...")
-            threading.Thread(target=process_message_logic, args=(message_data, None)).start()
+            # Adiciona o ID ao set de processados IMEDIATAMENTE
+            if message_id:
+                processed_messages.add(message_id) 
+            threading.Thread(target=process_message_logic, args=(message_data, None, None)).start() # Passa None para as listas
             return
         
         if message.get('conversation'):
@@ -1500,11 +1528,21 @@ def handle_message_buffering(message_data):
             print("➡️  Mensagem sem conteúdo de texto ignorada pelo buffer.")
             return
 
+        # --- INÍCIO DA CORREÇÃO (ARMAZENA DICIONÁRIO) ---
         if clean_number not in message_buffer:
             message_buffer[clean_number] = []
-        message_buffer[clean_number].append(user_message_content)
+
+        # Se msg_id existe, verifica duplicidade DENTRO do buffer
+        if message_id:
+            already_in_buffer = any(item.get('msg_id') == message_id for item in message_buffer[clean_number])
+            if already_in_buffer:
+                print(f"⚠️ Ignorando duplicate no buffer para {clean_number}: {message_id}")
+                return
         
-        print(f"📥 Mensagem adicionada ao buffer de {clean_number}: '{user_message_content}'")
+        # Armazena dicionário com id+texto
+        message_buffer[clean_number].append({'msg_id': message_id, 'text': user_message_content})
+        print(f"📥 Mensagem adicionada ao buffer de {clean_number}: '{user_message_content}' (id={message_id})")
+        # --- FIM DA CORREÇÃO ---
 
         if clean_number in message_timers:
             message_timers[clean_number].cancel()
@@ -1526,21 +1564,24 @@ def _trigger_ai_processing(clean_number, last_message_data):
     if clean_number not in message_buffer:
         return 
 
-    messages_to_process = message_buffer.pop(clean_number, [])
+    messages_batch = message_buffer.pop(clean_number, []) # É uma lista de dicts
     if clean_number in message_timers:
         del message_timers[clean_number]
         
-    if not messages_to_process:
+    if not messages_batch:
         return
 
-    full_user_message = ". ".join(messages_to_process)
-
-    log_info(f"[DEBUG RASTREIO | PONTO 1] Buffer para {clean_number}: '{full_user_message}'")
+    messages_texts_list = [item.get('text') for item in messages_batch if item.get('text')]
+    messages_ids_list = [item.get('msg_id') for item in messages_batch] # Mantém a ordem
     
-    print(f"⚡️ DISPARANDO IA para {clean_number} com mensagem agrupada: '{full_user_message}'")
+    if not messages_texts_list:
+        print("ℹ️ Buffer disparado, mas sem textos para processar.")
+        return
 
-    threading.Thread(target=process_message_logic, args=(last_message_data, full_user_message)).start()
+    log_info(f"[DEBUG RASTREIO | PONTO 1] Buffer para {clean_number}: {messages_texts_list}")
+    print(f"⚡️ DISPARANDO IA para {clean_number} com {len(messages_texts_list)} mensagens agrupadas.")
 
+    threading.Thread(target=process_message_logic, args=(last_message_data, messages_texts_list, messages_ids_list)).start()
 
 def handle_responsible_command(message_content, responsible_number):
     if conversation_collection is None:
@@ -1641,8 +1682,8 @@ def handle_responsible_command(message_content, responsible_number):
     send_whatsapp_message(responsible_number, help_message)
     return True
 
-def process_message_logic(message_data, buffered_message_text=None):
-    # ...
+def process_message_logic(message_data, raw_messages_list=None, raw_messages_ids=None):
+    # --- ASSINATURA MUDOU ---
     lock_acquired = False
     clean_number = None
     
@@ -1669,33 +1710,63 @@ def process_message_logic(message_data, buffered_message_text=None):
             upsert=True 
         )
 
+        # --- INÍCIO DA CORREÇÃO (LOOP ETERNO) ---
         if res.matched_count == 0 and res.upserted_id is None:
             print(f"⏳ {clean_number} já está sendo processado (lock). Reagendando...")
-            if buffered_message_text:
-                if clean_number not in message_buffer: message_buffer[clean_number] = []
-                message_buffer[clean_number].insert(0, buffered_message_text)
             
+            # Devolve as mensagens ao buffer
+            if raw_messages_list:
+                current_buffer = message_buffer.get(clean_number, [])
+                
+                # Recria os dicts para devolver ao buffer
+                batch_to_requeue = []
+                for idx, text in enumerate(raw_messages_list):
+                    msg_id = raw_messages_ids[idx] if raw_messages_ids and idx < len(raw_messages_ids) else None
+                    batch_to_requeue.append({'msg_id': msg_id, 'text': text})
+                
+                message_buffer[clean_number] = batch_to_requeue + current_buffer
+                print(f"ℹ️  Re-enfileirado {len(batch_to_requeue)} mensagens para {clean_number}.")
+            
+            # Re-agenda o timer para tentar de novo
+            if clean_number in message_timers:
+                 message_timers[clean_number].cancel()
+                 
             timer = threading.Timer(10.0, _trigger_ai_processing, args=[clean_number, message_data])
             message_timers[clean_number] = timer
             timer.start()
             return 
+        # --- FIM DA CORREÇÃO (LOOP ETERNO) ---
         
         lock_acquired = True
         # --- Fim do Lock ---
         
         user_message_content = None
         
-        if buffered_message_text:
-            user_message_content = buffered_message_text
-            messages_to_save = user_message_content.split(". ")
-            for msg_text in messages_to_save:
-                if msg_text and msg_text.strip():
-                    append_message_to_db(clean_number, 'user', msg_text)
-        else:
-            # --- INÍCIO DA CORREÇÃO DE INDENTAÇÃO ---
+        # --- INÍCIO DA CORREÇÃO (Processa a Lista com IDs) ---
+        if raw_messages_list: # Se viemos do buffer
+            user_message_content = ". ".join(raw_messages_list)
+            
+            # Salva as mensagens no DB com os IDs
+            for idx, msg_text in enumerate(raw_messages_list):
+                if not msg_text or not msg_text.strip():
+                    continue
+                msg_id = None
+                try:
+                    if raw_messages_ids and idx < len(raw_messages_ids):
+                        msg_id = raw_messages_ids[idx]
+                except Exception:
+                    msg_id = None
+
+                append_message_to_db(clean_number, 'user', msg_text, message_id=msg_id)
+                # IMPORTANTE: Marca como processado AQUI
+                if msg_id:
+                    processed_messages.add(msg_id)
+        
+        else: # Se for áudio (veio sem buffer)
             message = message_data.get('message', {})
+            message_id = key_info.get('id') # Pega o ID do áudio
+
             if message.get('audioMessage') and message.get('base64'):
-                message_id = key_info.get('id')
                 print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
                 audio_base64 = message['base64']
                 audio_data = base64.b64decode(audio_base64)
@@ -1714,12 +1785,13 @@ def process_message_logic(message_data, buffered_message_text=None):
                     send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
                     user_message_content = "[Usuário enviou um áudio incompreensível]"
             
-            # Estas duas linhas foram movidas PARA DENTRO do 'else'
             if not user_message_content:
                 user_message_content = "[Usuário enviou uma mensagem não suportada]"
-                
-            append_message_to_db(clean_number, 'user', user_message_content)
-            # --- FIM DA CORREÇÃO DE INDENTAÇÃO ---
+            
+            # Salva o áudio/fallback com o ID
+            append_message_to_db(clean_number, 'user', user_message_content, message_id=message_id)
+            # (o ID já foi marcado em handle_message_buffering)
+        # --- FIM DA CORREÇÃO (Processa a Lista com IDs) ---
 
         print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
         
@@ -1762,9 +1834,8 @@ def process_message_logic(message_data, buffered_message_text=None):
             return # 'finally' vai liberar o lock
 
         try:
-            append_message_to_db(clean_number, 'assistant', ai_reply)
+            append_message_to_db(clean_number, 'assistant', ai_reply) # Salva a resposta da IA
             
-            # --- LÓGICA DE INTERVENÇÃO (Pós-IA) ---
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
                 
@@ -1800,7 +1871,6 @@ def process_message_logic(message_data, buffered_message_text=None):
                 # (Envio de resposta normal - AGORA FRACIONADO)
                 print(f"🤖  Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
 
-                # --- INÍCIO DO BLOCO CORRIGIDO ---
                 # Verifica se é o gabarito. Se for, envia em bloco único.
                 if "* Nome:" in ai_reply and "* CPF:" in ai_reply and "* Data:" in ai_reply:
                     print("ℹ️  Detectado gabarito de confirmação. Enviando como bloco único.")
@@ -1817,11 +1887,9 @@ def process_message_logic(message_data, buffered_message_text=None):
                     for i, para in enumerate(paragraphs):
                         send_whatsapp_message(sender_number_full, para)
                         
-                        # Pausa entre os parágrafos, exceto no último
                         if i < len(paragraphs) - 1:
-                            time.sleep(2.0) # A pausa de 2 segundos que você pediu
-                # --- FIM DO BLOCO CORRIGIDO (O bloco duplicado foi removido) ---
-
+                            time.sleep(2.0)
+                
         except Exception as e:
             print(f"❌ Erro ao processar envio ou intervenção: {e}")
             send_whatsapp_message(sender_number_full, "Desculpe, tive um problema ao processar sua resposta. (Erro interno: SEND_LOGIC)")
