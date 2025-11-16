@@ -180,9 +180,6 @@ class Agenda:
         
         if "reunião" in servico_key or "lucas" in servico_key:
              return MAPA_SERVICOS_DURACAO.get("reunião") # Retorna o padrão
-        
-        if "consultoria" in servico_key:
-             return MAPA_SERVICOS_DURACAO.get("consultoria inicial")
 
         return None 
 
@@ -783,16 +780,20 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - **NÃO FAÇA MAIS NADA.** Pare e espere o nome.
 
         DEPOIS QUE VOCÊ PEDIR O NOME (Fluxo do CASO 2):
-        - O cliente vai responder com o nome (ex: "Meu nome é Marcos", "lucas", "dani").
-        - **REGRA DE PALAVRA ÚNICA (CRÍTICO):** Se o cliente responder com uma única palavra e for um nome ou algo que pareça uma apresentação (ex: "sabrina", "daniel"), você DEVE assumir que essa é a resposta para sua pergunta ("como posso te chamar?").
-        - **Sua Próxima Ação (Tool Call OBRIGATÓRIA):**
-            1. Sua **ÚNICA** ação neste momento deve ser chamar a ferramenta `fn_capturar_nome`.
-            2. Você **NÃO DEVE** gerar nenhum texto de saudação (como "Prazer, Marcos!"). Apenas chame a ferramenta.
-            3. **REGRA ANTI-DUPLICAÇÃO:** Ao extrair o nome, NUNCA o combine com o `{sender_name}`. Se o cliente digitou "dani", a ferramenta deve ser chamada com `nome_extraido="dani"`.
+            - O cliente vai responder com o nome.
+            - Sua tarefa é capturá-lo.
+
+            - **REGRA DE PALAVRA ÚNICA (COMANDO ABSOLUTO):**
+            - Se o cliente responder com o que parece ser um nome, especialmente uma palavra única (ex:"dani", "lucas"), sua **ÚNICA E IMEDIATA** ação é chamar a ferramenta `fn_capturar_nome`.
+
+            - **NÃO GERE TEXTO. NÃO GERE SAUDAÇÃO. NÃO DIGA "PRAZER".**
+            - Sua resposta para a entrada deve ser *APENAS* a chamada de ferramenta: `fn_capturar_nome(nome_extraido=nome)`.
+            - Sua resposta para a entrada "meu nome é nome" deve ser *APENAS* a chamada de ferramenta: `fn_capturar_nome(nome_extraido="nome")`.
+        3. **REGRA ANTI-DUPLICAÇÃO:** Ao extrair o nome, NUNCA o combine com o `{sender_name}`. Se o cliente digitou "dani", a ferramenta deve ser chamada com `nome_extraido="dani"`.
 
         QUANDO A FERRAMENTA `fn_capturar_nome` RETORNAR SUCESSO (ex: `{{"sucesso": true, "nome_salvo": "Dani"}}`):
         - **Agora sim, sua próxima resposta DEVE:**
-            1. Saudar o cliente pelo nome que a ferramenta salvou (ex: "Prazer, Dani!").
+            1. Saudar o cliente pelo nome que a ferramenta salvou (ex: "Prazer, Nome!").
             2. **RESPONDER IMEDIATAMENTE** à pergunta original que o cliente tinha feito (a pergunta que você guardou na memória antes de pedir o nome).
         
         **RESUMO:** Se o nome não é conhecido, `prompt_name_instruction` é a única regra. Se o nome é conhecido, o `prompt_final` (o resto do prompt) é ativado.
