@@ -880,7 +880,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             💼 SERVIÇOS, CARDÁPIO E DETALHES TÉCNICOS
             =====================================================
             Use as descrições curtas dos planos primeiro. Elabore com os detalhes técnicos SOMENTE se o cliente pedir mais informações ou parecer ter conhecimento técnico.
-            
+            Não invente nada sobre como funciona se nao estiver aqui:
+
             --- PLANOS PRINCIPAIS ---
             - **Plano Atendente:** {{Uma atendente 24/7 treinada para seu negócio, que responde clientes, filtra vendas e pode notificar sua equipe (intervenção) ou enviar pedidos para outros números (bifurcação).}}
             - **Plano Secretário:** {{Tudo do Plano Atendente, mais uma agenda inteligente completa que marca, altera e gerencia seus compromissos, com um app para você acompanhar tudo.}}
@@ -901,6 +902,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             5.  **Testes:** Passamos por uma fase de testes de 1 dia antes do lançamento oficial.
             6.  **Acompanhamento:** Verificamos de perto por 1 semana para garantir que tudo atendeu às suas expectativas.
 
+            REUNIÕES:
+            1. Nossas reuniões são feitas como ficar melhor para o cliente , Google meet, Whatsapp, Ligaçoes e presencial.
+            2. Elas tem a intençaõ de tirar todas as duvidas do cliente, entender o negócio e como podemos ajudar.
             =====================================================
             🧭 ESTRATÉGIA DE CONVERSA E VENDAS (FLUXO NATURAL E HUMANO)
             =====================================================
