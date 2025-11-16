@@ -812,7 +812,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         2.  **SEJA FLUIDA:** Não siga um script. Adapte-se ao cliente.
         3.  **NÃO REPITA (MUITO IMPORTANTE):** Evite saudações ("Olá") repetidas. Acima de tudo, **NÃO use o nome do cliente em todas as frases.** Isso soa robótico e irritante. Use o nome dele UMA vez na saudação e depois **use o nome DE FORMA ESPORÁDICA**, apenas quando for natural e necessário, como faria um humano.
         4.  **REGRA MESTRA DE CONHECIMENTO:** Você é Lyra, uma IA. Você NUNCA deve inventar informações técnicas sobre como a plataforma funciona . Para perguntas técnicas complexas , sua resposta deve instruir para falar com o Lucas , e perguntar se quer falar agora, marcar uma reunião ou tem mais alguma duvida?"
-        5.  **REGRA DE RETORNO (PÓS-INTERVENÇÃO):** Se a mensagem do cliente for EXATAMENTE `[PROMPT_SISTEMA] O atendimento humano acabou...`, sua ÚNICA tarefa é analisar o histórico COMPLETO (incluindo a conversa recente com o humano "Lucas") e gerar uma resposta de retorno curta e amigável, como instruído na mensagem.
+
         =====================================================
         🆘 REGRAS DE FUNÇÕES (TOOLS) - PRIORIDADE ABSOLUTA
         =====================================================
@@ -919,60 +919,37 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             NUNCA use o nome se ele já foi usado na mensagem anterior.
         **ESTILO DE CONFIRMAÇÃO:** Mantenha as confirmações curtas, profissionais e amigáveis. Prefira confirmar o recebimento do dado (Ex: "Certo. Qual a data?"), ou use interjeições concisas e amigáveis (Ex: "Maravilha!", "Perfeito!", "Combinado.").
         =====================================================
-        💼 SERVIÇOS, CARDÁPIO E DETALHES TÉCNICOS
+        💼 SERVIÇOS / CARDÁPIO (Vendas)
         =====================================================
-        Use as descrições curtas dos planos primeiro. Elabore com os detalhes técnicos SOMENTE se o cliente pedir mais informações ou parecer ter conhecimento técnico sobre o assunto que ele aparenta ter duvida.
+        Use estas descrições curtas primeiro. Elabore *apenas* se o cliente pedir mais detalhes.
         
-        --- PLANOS PRINCIPAIS ---
         - **Plano Atendente:** {{Uma atendente 24/7 treinada para seu negócio, que responde clientes, filtra vendas e pode notificar sua equipe (intervenção) ou enviar pedidos para outros números (bifurcação).}}
         - **Plano Secretário:** {{Tudo do Plano Atendente, mais uma agenda inteligente completa que marca, altera e gerencia seus compromissos, com um app para você acompanhar tudo.}}
         
-        --- DETALHES TÉCNICOS (Para elaborar, se perguntado) ---
-        - **Tecnologia:** Nosso backend é "Pro-code", o que facilita uma personalização profunda, diferente de plataformas 'no-code'.
-        - **Infraestrutura:** Usamos servidores de ponta mundiais, garantindo operação 24/7 e alta disponibilidade.
-        - **Performance:** A velocidade de resposta da IA é extremamente rápida, com média de 14ms a 23ms (milissegundos) para processar a informação.
-        - **Banco de Dados:** Utilizamos bancos de dados online robustos (como MongoDB Atlas) para agendamentos e histórico, garantindo segurança e escalabilidade.
-        - **Recursos:** Oferecemos interação simultânea (vários atendentes podem usar o sistema) e um aplicativo móvel para a agenda, que atualiza em tempo real a cada confirmação.
-        - **Inteligência:** Usamos a última geração de IA , que permite um "setup robusto" (aprendemos com o cliente e personalizamos o bot para o negócio dele).
-
-        --- NOSSO PROCESSO DE INSTALAÇÃO (Se perguntarem "Como funciona?") ---
-        1.  **Entendimento:** Primeiro, conversamos para entender seu negócio e qual plano se encaixa melhor.
-        2.  **Coleta:** Coletamos informações técnicas (APIs, números) e de negócio (horários, serviços, preços).
-        3.  **Personalização:** Entendemos como você quer que a 'Lyra' (a atendente) fale e se comporte.
-        4.  **Desenvolvimento:** Criamos o código e o colocamos online no seu número de WhatsApp.
-        5.  **Testes:** Passamos por uma fase de testes de 1 dia antes do lançamento oficial.
-        6.  **Acompanhamento:** Verificamos de perto por 1 semana para garantir que tudo atendeu às suas expectativas.
-
         =====================================================
-        🧭 ESTRATÉGIA DE CONVERSA E VENDAS (FLUXO NATURAL E HUMANO)
+        🧭 ESTRATÉGIA DE CONVERSA E VENDAS (FLUXO NATURAL)
         =====================================================
-        Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica. Demonstre curiosidade genuína e tente criar uma conexão amigável, mas sempre de forma profissional e concisa (poucas palavras, dinâmica). Seja "esperta" e preste atenção no que o cliente diz.
-        INFORMAÇÃO IMPORTANTE: Você SEMPRE DEVE  terminar com uma pergunta aberta a não se que seja uma despedida.
-        Não vá querendo executar todas as estrategias de uma vez note na converssa se é uma boa hora para passar pra proxima(NÃO PRECISA AVISAR OU PERGUNTAR SE É UMA BOA HORA APENAS TOME A DECISÃO)
-        1.  **TRANSIÇÃO PÓS-NOME:**
-            - Se o cliente já fez uma pergunta, responda imediatamente.
-            - Se o cliente só disse "Oi", puxe um assunto leve.
-            - Se o cliente não falar muito, faça perguntas abertas e que façam sentido no contexto.
+        Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica.
         
-        2.  **SONDAGEM DE NEGÓCIO (ESSENCIAL E CURIOSA):**
-            - Pergunte sobre o negócio do cliente de forma despretensiosa.
-            - **(NOVA REGRA: CURIOSIDADE)**: Preste atenção na resposta. Se ele disser "sou massagista", não pule direto pra venda. Puxe assunto. Pergunte algo como: "Trabalha com algum tipo específico de massagem?" ou "E como esta o ramo pra você?".
-            - Se ele disser "vendo peças", pergunte "Interessante! É um setor movimentado. Muito corrido pra você?".
-            - Seja amigável e use o que ele fala para criar a conexão.
-            - Perguntas boas pra conhecer a dor do cliente: Pergunte se ela atende com whatsaap , se investe em leads, em marketing,em trafego pago,se ja pensou nisso. Se ja pensou usar assitente no atendimento ou uma atendente fisica, se pensa em expandir o negócio?
+        1.  **TRANSIÇÃO PÓS-NOME:** (Se o cliente já fez uma pergunta).
+            - Use uma transição natural. Responda imediatamente.
         
+        2.  **SONDAGEM DE NEGÓCIO (ESSENCIAL):**
+            - Pergunte de forma despretensiosa sobre o negócio do cliente, pra poder usar na converssa.
+            
         3.  **CONEXÃO (PLANO + EXEMPLO):**
-            - Após a sondagem, conecte ao plano.
-            - **Exemplo:** "Entendi. Para massagistas, a agenda lotada é um 'bom problema', né? É aí que o Plano Secretário ajuda..."
-        
-        4.  **CHECK-IN (HUMANO):**
-            - **NÃO PULE PARA O AGENDAMENTO.** Verifique se o cliente entendeu.
-            - Use linguagem natural: "Isso faz sentido pra você?" ou "Consegui explicar bem como funcionaria no seu caso?".
-            - Se mantenha aqui até a pessoa mostrar que entendeu.
-        
+            - Explique o plano (Atendente ou Secretário) e conecte-o ao negocio dele.
+            - **Exemplo de como usar (Curto):** Se ele disser "Sou da cozinha", responda "Legal! Para quem é da cozinha, o Plano Atendente com bifurcação é ótimo. Imagina ele recebendo o pedido e já enviando para o WhatsApp da cozinha, tudo automático."
+            
+        4.  **CHECK-IN (NÃO PULE ESSA ETAPA):**
+            - **NÃO PULE PARA O AGENDAMENTO AINDA.** Antes, verifique se o cliente entendeu e se interessou de maneira com suporte para o cliente ver que voce quer ajudar ele.
+            - Se mantenha nesta etapa ate a pessoa mostrar que realmente entendeu.
+
         5.  **OFERTA DA REUNIÃO (SÓ APÓS O CHECK-IN):**
-            - Quando o cliente mostrar interesse ("sim", "faz sentido"), aí sim ofereça a reunião.
-            - (O resto da lógica de oferta continua igual).
+            - Quando o cliente mostrar interesse (ex: "sim", "faz sentido", "pode ser"), aí sim ofereça a reunião.
+            - **Exemplo:** "Que ótimo! Como nossos planos são 100% personalizados, o ideal é marcarmos uma conversa com o proprietário, o Lucas. Ele entende sua necessidade e te apresenta a melhor solução. **Se quiser falar com ele agora, é só me avisar.**"
+            - **(Se o cliente aceitar falar agora, chame `fn_solicitar_intervencao` com o motivo 'Cliente aceitou oferta de falar com Lucas'.)**
+
         =====================================================
         🧩 TÉCNICAS DE OBJEÇÕES (CURTAS E DIRETAS)
         =====================================================
@@ -1418,80 +1395,38 @@ def receive_webhook():
         key_info = message_data.get('key', {})
         if not key_info:
             return jsonify({"status": "ignored_no_key"}), 200
-            
-        remote_jid = key_info.get('remoteJid')
-        if remote_jid and remote_jid.endswith('@g.us'):
-            print(f"➡️  Ignorando mensagem de GRUPO: {remote_jid}")
-            return jsonify({"status": "ignored_group_message"}), 200
-
-        # --- INÍCIO DA CORREÇÃO (IDEMPOTÊNCIA) ---
-        message_id = key_info.get('id')
-        if not message_id:
-            return jsonify({"status": "ignored_no_id"}), 200 # Ignora se não tiver ID
-
-        # 1. Checagem rápida em memória
-        if message_id in processed_messages:
-            print(f"⚠️ Ignorando webhook duplicado (in-memory): {message_id}")
-            return jsonify({"status": "ignored_duplicate_in_memory"}), 200
-
-        # 2. Checagem no DB (lenta, mas segura contra reinícios)
-        sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
-        clean_number = None
-        if sender_number_full and not sender_number_full.endswith('@g.us'):
-             clean_number = sender_number_full.split('@')[0]
-             
-        if clean_number and conversation_collection:
-            try:
-                exists = conversation_collection.find_one(
-                    {'_id': clean_number, 'history.msg_id': message_id},
-                    projection={'_id': 1}
-                )
-                if exists:
-                    print(f"⚠️ Ignorando webhook duplicado (no DB): {message_id} de {clean_number}")
-                    processed_messages.add(message_id) # Adiciona na memória para ser mais rápido
-                    return jsonify({"status": "ignored_duplicate_db"}), 200
-            except Exception as e:
-                print(f"Aviso: falha ao checar duplicado no DB: {e}")
-        # --- FIM DA CORREÇÃO (IDEMPOTÊNCIA) ---
 
         if key_info.get('fromMe'):
-                customer_jid = key_info.get('remoteJid') # Para quem a msg 'fromMe' foi
-                
-                if not customer_jid or customer_jid.endswith('@g.us'):
-                     return jsonify({"status": "ignored_from_me_group"}), 200
-                
-                customer_clean_number = customer_jid.split('@')[0]
-                # message_id já foi pego acima
+            sender_number_full = key_info.get('remoteJid')
+            if not sender_number_full:
+                return jsonify({"status": "ignored_from_me_no_sender"}), 200
+            
+            clean_number = sender_number_full.split('@')[0]
+            
+            if clean_number != RESPONSIBLE_NUMBER:
+                return jsonify({"status": "ignored_from_me"}), 200
+            
+            print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {clean_number}).")
 
-                if customer_clean_number == RESPONSIBLE_NUMBER:
-                    print(f"⚙️  Mensagem do próprio bot PERMITIDA (é um comando do responsável: {customer_clean_number}).")
-                
-                else:
-                    try:
-                        if conversation_collection is not None:
-                            convo = conversation_collection.find_one({'_id': customer_clean_number})
-                            
-                            if convo and convo.get('intervention_active', False):
-                                message = message_data.get('message', {})
-                                msg_text = message.get('conversation') or (message.get('extendedTextMessage') or {}).get('text')
-                                
-                                if msg_text:
-                                    print(f"✍️  Salvando resposta manual de Lucas para {customer_clean_number}: {msg_text}")
-                                    append_message_to_db(customer_clean_number, 'assistant', msg_text, message_id)
-                    except Exception as e:
-                        print(f"❌ Erro ao salvar histórico de intervenção: {e}")
-                    
-                    return jsonify({"status": "logged_from_me_intervention"}), 200
+        message_id = key_info.get('id')
+        if not message_id:
+            return jsonify({"status": "ignored_no_id"}), 200
+
+        if message_id in processed_messages:
+            return jsonify({"status": "ignored_duplicate"}), 200
+        processed_messages.add(message_id)
+        if len(processed_messages) > 1000:
+            processed_messages.clear()
 
         handle_message_buffering(message_data)
         
-        return jsonify({"status": "received"}), 200 # Adicionado o OK final
+        return jsonify({"status": "received"}), 200
 
     except Exception as e:
         print(f"❌ Erro inesperado no webhook: {e}")
         print("DADO QUE CAUSOU ERRO:", data)
         return jsonify({"status": "error"}), 500
-    
+
 @app.route('/', methods=['GET'])
 def health_check():
     return f"Estou vivo! ({CLIENT_NAME} Bot v2 - com Agenda)", 200 
@@ -1509,14 +1444,10 @@ def handle_message_buffering(message_data):
         
         message = message_data.get('message', {})
         user_message_content = None
-        message_id = key_info.get('id') # Pega o ID
         
         if message.get('audioMessage'):
             print("🎤 Áudio recebido, processando imediatamente (sem buffer)...")
-            # Adiciona o ID ao set de processados IMEDIATAMENTE
-            if message_id:
-                processed_messages.add(message_id) 
-            threading.Thread(target=process_message_logic, args=(message_data, None, None)).start() # Passa None para as listas
+            threading.Thread(target=process_message_logic, args=(message_data, None)).start()
             return
         
         if message.get('conversation'):
@@ -1528,21 +1459,11 @@ def handle_message_buffering(message_data):
             print("➡️  Mensagem sem conteúdo de texto ignorada pelo buffer.")
             return
 
-        # --- INÍCIO DA CORREÇÃO (ARMAZENA DICIONÁRIO) ---
         if clean_number not in message_buffer:
             message_buffer[clean_number] = []
-
-        # Se msg_id existe, verifica duplicidade DENTRO do buffer
-        if message_id:
-            already_in_buffer = any(item.get('msg_id') == message_id for item in message_buffer[clean_number])
-            if already_in_buffer:
-                print(f"⚠️ Ignorando duplicate no buffer para {clean_number}: {message_id}")
-                return
+        message_buffer[clean_number].append(user_message_content)
         
-        # Armazena dicionário com id+texto
-        message_buffer[clean_number].append({'msg_id': message_id, 'text': user_message_content})
-        print(f"📥 Mensagem adicionada ao buffer de {clean_number}: '{user_message_content}' (id={message_id})")
-        # --- FIM DA CORREÇÃO ---
+        print(f"📥 Mensagem adicionada ao buffer de {clean_number}: '{user_message_content}'")
 
         if clean_number in message_timers:
             message_timers[clean_number].cancel()
@@ -1564,24 +1485,21 @@ def _trigger_ai_processing(clean_number, last_message_data):
     if clean_number not in message_buffer:
         return 
 
-    messages_batch = message_buffer.pop(clean_number, []) # É uma lista de dicts
+    messages_to_process = message_buffer.pop(clean_number, [])
     if clean_number in message_timers:
         del message_timers[clean_number]
         
-    if not messages_batch:
+    if not messages_to_process:
         return
 
-    messages_texts_list = [item.get('text') for item in messages_batch if item.get('text')]
-    messages_ids_list = [item.get('msg_id') for item in messages_batch] # Mantém a ordem
+    full_user_message = ". ".join(messages_to_process)
+
+    log_info(f"[DEBUG RASTREIO | PONTO 1] Buffer para {clean_number}: '{full_user_message}'")
     
-    if not messages_texts_list:
-        print("ℹ️ Buffer disparado, mas sem textos para processar.")
-        return
+    print(f"⚡️ DISPARANDO IA para {clean_number} com mensagem agrupada: '{full_user_message}'")
 
-    log_info(f"[DEBUG RASTREIO | PONTO 1] Buffer para {clean_number}: {messages_texts_list}")
-    print(f"⚡️ DISPARANDO IA para {clean_number} com {len(messages_texts_list)} mensagens agrupadas.")
+    threading.Thread(target=process_message_logic, args=(last_message_data, full_user_message)).start()
 
-    threading.Thread(target=process_message_logic, args=(last_message_data, messages_texts_list, messages_ids_list)).start()
 
 def handle_responsible_command(message_content, responsible_number):
     if conversation_collection is None:
@@ -1613,13 +1531,12 @@ def handle_responsible_command(message_content, responsible_number):
                 {'$set': {'is_active': True}},
                 upsert=True
             )
-            send_whatsapp_message(responsible_number, "✅ *Bot REATIVADO.* O bot está respondendo aos clientes normal.")
+            send_whatsapp_message(responsible_number, "✅ *Bot REATIVADO.* O bot está respondendo aos clientes.")
             return True
         except Exception as e:
             send_whatsapp_message(responsible_number, f"❌ Erro ao reativar o bot: {e}")
             return True
 
-    # --- ESTA É A PARTE CORRIGIDA (RETORNO CONTEXTUAL) ---
     if len(command_parts) == 2 and command_parts[0] == "ok":
         customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
         
@@ -1637,30 +1554,7 @@ def handle_responsible_command(message_content, responsible_number):
 
             if result.modified_count > 0:
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
-                
-                # Prepara os dados para a IA
-                sender_name = customer.get('sender_name', 'Cliente')
-                customer_name = customer.get('customer_name')
-                
-                # Este prompt especial será pego pelo 'system_instruction' da IA
-                prompt_para_ia = "[PROMPT_SISTEMA] O atendimento humano acabou. Analise o histórico recente (que inclui a conversa com Lucas) e gere uma saudação de retorno CURTA e HUMANA. Se o assunto foi resolvido, apenas se coloque à disposição (ex: 'Vi que você e o Lucas resolveram. Se precisar de mais algo, estou aqui!'). Se agendaram algo, confirme (ex: 'Ótimo! Vi que o Lucas agendou sua reunião. Posso ajudar em mais algo?')."
-
-                # Chama a IA. Ela vai carregar o histórico (agora com a conversa de Lucas)
-                # e este prompt especial fará ela gerar a mensagem de retorno.
-                ai_comeback_message = gerar_resposta_ia_com_tools(
-                    customer_number_to_reactivate,
-                    sender_name,
-                    prompt_para_ia, # Esta é a "mensagem de usuário"
-                    customer_name
-                )
-                
-                # Limpeza final (caso a IA tente chamar uma tool, o que não deve)
-                if "[HUMAN_INTERVENTION]" in ai_comeback_message or "Chamando função:" in ai_comeback_message:
-                     ai_comeback_message = "Oi, sou eu a Lyra novamente, voltei pro seu atendimento. Se precisar de algo me diga! 😊" # Fallback
-                
-                # Envia a resposta contextual da IA para o cliente
-                send_whatsapp_message(customer_number_to_reactivate, ai_comeback_message)
-
+                send_whatsapp_message(customer_number_to_reactivate, "Oi, sou eu a Lyra novamente, voltei pro seu atendimento. Se precisar de algo me diga! 😊")
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
             
@@ -1670,7 +1564,6 @@ def handle_responsible_command(message_content, responsible_number):
             print(f"❌ Erro ao tentar reativar cliente: {e}")
             send_whatsapp_message(responsible_number, f"❌ Ocorreu um erro técnico ao tentar reativar o cliente. Verifique o log do sistema.")
             return True
-        # --- FIM DA PARTE CORRIGIDA ---
             
     help_message = (
         "Comando não reconhecido. 🤖\n\n"
@@ -1682,8 +1575,9 @@ def handle_responsible_command(message_content, responsible_number):
     send_whatsapp_message(responsible_number, help_message)
     return True
 
-def process_message_logic(message_data, raw_messages_list=None, raw_messages_ids=None):
-    # --- ASSINATURA MUDOU ---
+
+def process_message_logic(message_data, buffered_message_text=None):
+    # ...
     lock_acquired = False
     clean_number = None
     
@@ -1710,63 +1604,33 @@ def process_message_logic(message_data, raw_messages_list=None, raw_messages_ids
             upsert=True 
         )
 
-        # --- INÍCIO DA CORREÇÃO (LOOP ETERNO) ---
         if res.matched_count == 0 and res.upserted_id is None:
             print(f"⏳ {clean_number} já está sendo processado (lock). Reagendando...")
+            if buffered_message_text:
+                if clean_number not in message_buffer: message_buffer[clean_number] = []
+                message_buffer[clean_number].insert(0, buffered_message_text)
             
-            # Devolve as mensagens ao buffer
-            if raw_messages_list:
-                current_buffer = message_buffer.get(clean_number, [])
-                
-                # Recria os dicts para devolver ao buffer
-                batch_to_requeue = []
-                for idx, text in enumerate(raw_messages_list):
-                    msg_id = raw_messages_ids[idx] if raw_messages_ids and idx < len(raw_messages_ids) else None
-                    batch_to_requeue.append({'msg_id': msg_id, 'text': text})
-                
-                message_buffer[clean_number] = batch_to_requeue + current_buffer
-                print(f"ℹ️  Re-enfileirado {len(batch_to_requeue)} mensagens para {clean_number}.")
-            
-            # Re-agenda o timer para tentar de novo
-            if clean_number in message_timers:
-                 message_timers[clean_number].cancel()
-                 
             timer = threading.Timer(10.0, _trigger_ai_processing, args=[clean_number, message_data])
             message_timers[clean_number] = timer
             timer.start()
             return 
-        # --- FIM DA CORREÇÃO (LOOP ETERNO) ---
         
         lock_acquired = True
         # --- Fim do Lock ---
         
         user_message_content = None
         
-        # --- INÍCIO DA CORREÇÃO (Processa a Lista com IDs) ---
-        if raw_messages_list: # Se viemos do buffer
-            user_message_content = ". ".join(raw_messages_list)
-            
-            # Salva as mensagens no DB com os IDs
-            for idx, msg_text in enumerate(raw_messages_list):
-                if not msg_text or not msg_text.strip():
-                    continue
-                msg_id = None
-                try:
-                    if raw_messages_ids and idx < len(raw_messages_ids):
-                        msg_id = raw_messages_ids[idx]
-                except Exception:
-                    msg_id = None
-
-                append_message_to_db(clean_number, 'user', msg_text, message_id=msg_id)
-                # IMPORTANTE: Marca como processado AQUI
-                if msg_id:
-                    processed_messages.add(msg_id)
-        
-        else: # Se for áudio (veio sem buffer)
+        if buffered_message_text:
+            user_message_content = buffered_message_text
+            messages_to_save = user_message_content.split(". ")
+            for msg_text in messages_to_save:
+                if msg_text and msg_text.strip():
+                    append_message_to_db(clean_number, 'user', msg_text)
+        else:
+            # --- INÍCIO DA CORREÇÃO DE INDENTAÇÃO ---
             message = message_data.get('message', {})
-            message_id = key_info.get('id') # Pega o ID do áudio
-
             if message.get('audioMessage') and message.get('base64'):
+                message_id = key_info.get('id')
                 print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
                 audio_base64 = message['base64']
                 audio_data = base64.b64decode(audio_base64)
@@ -1785,13 +1649,12 @@ def process_message_logic(message_data, raw_messages_list=None, raw_messages_ids
                     send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
                     user_message_content = "[Usuário enviou um áudio incompreensível]"
             
+            # Estas duas linhas foram movidas PARA DENTRO do 'else'
             if not user_message_content:
                 user_message_content = "[Usuário enviou uma mensagem não suportada]"
-            
-            # Salva o áudio/fallback com o ID
-            append_message_to_db(clean_number, 'user', user_message_content, message_id=message_id)
-            # (o ID já foi marcado em handle_message_buffering)
-        # --- FIM DA CORREÇÃO (Processa a Lista com IDs) ---
+                
+            append_message_to_db(clean_number, 'user', user_message_content)
+            # --- FIM DA CORREÇÃO DE INDENTAÇÃO ---
 
         print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
         
@@ -1834,8 +1697,9 @@ def process_message_logic(message_data, raw_messages_list=None, raw_messages_ids
             return # 'finally' vai liberar o lock
 
         try:
-            append_message_to_db(clean_number, 'assistant', ai_reply) # Salva a resposta da IA
+            append_message_to_db(clean_number, 'assistant', ai_reply)
             
+            # --- LÓGICA DE INTERVENÇÃO (Pós-IA) ---
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
                 
@@ -1870,26 +1734,22 @@ def process_message_logic(message_data, raw_messages_list=None, raw_messages_ids
             else:
                 # (Envio de resposta normal - AGORA FRACIONADO)
                 print(f"🤖  Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
-
-                # Verifica se é o gabarito. Se for, envia em bloco único.
-                if "* Nome:" in ai_reply and "* CPF:" in ai_reply and "* Data:" in ai_reply:
-                    print("ℹ️  Detectado gabarito de confirmação. Enviando como bloco único.")
-                    send_whatsapp_message(sender_number_full, ai_reply)
                 
-                else:
-                    # Se não for gabarito, divide em parágrafos e envia UM POR UM.
-                    paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+                # Quebra a resposta da IA por quebras de linha (parágrafos)
+                paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
 
-                    if not paragraphs:
-                        print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
-                        return # 'finally' vai liberar o lock
+                if not paragraphs:
+                    print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
+                    return # 'finally' vai liberar o lock
+                
+                for i, para in enumerate(paragraphs):
+                    # Envia o parágrafo atual
+                    send_whatsapp_message(sender_number_full, para)
                     
-                    for i, para in enumerate(paragraphs):
-                        send_whatsapp_message(sender_number_full, para)
-                        
-                        if i < len(paragraphs) - 1:
-                            time.sleep(2.0)
-                
+
+                    if i < len(paragraphs) - 1:
+                        time.sleep(2.0) # A pausa de 2 segundos que você pediu
+
         except Exception as e:
             print(f"❌ Erro ao processar envio ou intervenção: {e}")
             send_whatsapp_message(sender_number_full, "Desculpe, tive um problema ao processar sua resposta. (Erro interno: SEND_LOGIC)")
@@ -1904,7 +1764,7 @@ def process_message_logic(message_data, raw_messages_list=None, raw_messages_ids
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
             # print(f"🔓 Lock liberado para {clean_number}.")
-            
+
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
     print("    CHATBOT WHATSAPP COM IA INICIADO (V2 - COM AGENDA)")
