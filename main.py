@@ -812,6 +812,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         2.  **SEJA FLUIDA:** Não siga um script. Adapte-se ao cliente.
         3.  **NÃO REPITA (MUITO IMPORTANTE):** Evite saudações ("Olá") repetidas. Acima de tudo, **NÃO use o nome do cliente em todas as frases.** Isso soa robótico e irritante. Use o nome dele UMA vez na saudação e depois **use o nome DE FORMA ESPORÁDICA**, apenas quando for natural e necessário, como faria um humano.
         4.  **REGRA MESTRA DE CONHECIMENTO:** Você é Lyra, uma IA. Você NUNCA deve inventar informações técnicas sobre como a plataforma funciona . Para perguntas técnicas complexas , sua resposta deve instruir para falar com o Lucas , e perguntar se quer falar agora, marcar uma reunião ou tem mais alguma duvida?"
+        5.  **SEMPRE TERMINE COM PERGUNTAS:** Sempre no final da mensagem pra o cliente voce deve terminar com uma pergunta que faça sentido ao contexto da converssa , EXETO: SE FOR UMA DESPEDIDA.!
 
         =====================================================
         🆘 REGRAS DE FUNÇÕES (TOOLS) - PRIORIDADE ABSOLUTA
@@ -882,14 +883,16 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             -    - Se o cliente disser 'não' e passar um NÚMERO NOVO (ex: "449888..."), você deve usar esse número novo (ex: `telefone="449888..."`).
 
             - i. **CONFIRMAÇÃO (GABARITO CURTO):**
-            -    1. Apresente o resumo COMPLETO. (Lembre-se, o serviço padrão que você está agendando é 'reunião', a menos que outro tenha sido especificado pelo cliente).
+            -    1. Apresente o resumo COMPLETO. 
             -       * Nome: (Insira o nome que o cliente informou)
             -       * CPF: (Insira o CPF que o cliente informou)
             -       * Telefone: (Se o cliente disse 'sim' para usar o número atual, mostre o número {clean_number}. Se ele passou um número novo, mostre o número novo que ele digitou.)
             -       * Serviço: (Insira aqui o nome do serviço que você está agendando, ex: Reunião)
             -       * Data: (Insira a data e hora escolhidas)
             -    2. Pergunte: "Confere pra mim? Se estiver tudo certo, eu confirmo aqui."
-            - j. SÓ ENTÃO, após a confirmação, chame `fn_salvar_agendamento`.
+                 3. **REGRA CRÍTICA DE AGENDAMENTO (ANTI-BUG):** PARE. Você está **PROIBIDO** de chamar a função `fn_salvar_agendamento` ANTES que o cliente responda positivamente a este gabarito.
+                    EXECUÇÃO (PÓS-CONFIRMAÇÃO):
+                        SÓ ENTÃO, após a confirmação positiva do cliente (ex: 'ok', 'sim', 'confere'), sua próxima ação DEVE ser chamar `fn_salvar_agendamento` com os dados exatos do gabarito.
             
             - k. **FLUXO DE ALTERAÇÃO/EXCLUSÃO:**
             -    1. Se o cliente pedir para alterar/cancelar (ex: "quero excluir os meus horarios"), peça o CPF: "Claro. Qual seu CPF, por favor?"
@@ -1756,24 +1759,58 @@ def process_message_logic(message_data, buffered_message_text=None):
                     )
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
             
+            # --- INÍCIO DA LÓGICA DE ENVIO (COM CORREÇÃO DO GABARITO) ---
             else:
-                # (Envio de resposta normal - AGORA FRACIONADO)
-                print(f"🤖  Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
-                
-                # Quebra a resposta da IA por quebras de linha (parágrafos)
-                paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
-
-                if not paragraphs:
-                    print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
-                    return # 'finally' vai liberar o lock
-                
-                for i, para in enumerate(paragraphs):
-                    # Envia o parágrafo atual
-                    send_whatsapp_message(sender_number_full, para)
+                def is_gabarito_de_confirmacao(text: str) -> bool:
+                    """
+                    Verifica se o texto da IA é um resumo de agendamento (gabarito).
+                    Usa uma contagem de campos-chave para ser flexível.
+                    """
+                    text_lower = text.lower()
                     
+                    # Lista de rótulos-chave que identificam um gabarito.
+                    # Adicionamos "servico" (sem acento) por segurança.
+                    checks = [
+                        "nome:" in text_lower,
+                        "cpf:" in text_lower,
+                        "telefone:" in text_lower,
+                        "serviço:" in text_lower or "servico:" in text_lower,
+                        "data:" in text_lower,
+                        "hora:" in text_lower
+                    ]
+                    
+                    # Contar quantos campos-chave foram encontrados
+                    campos_encontrados = sum(checks)
+                    
+                    # Se 4 ou mais campos-chave estiverem presentes, é 99.9% 
+                    # de certeza que é um gabarito e não deve ser quebrado.
+                    if campos_encontrados >= 4:
+                        return True
+                        
+                    return False
+                # --- FIM DA FUNÇÃO INTERNA (V2) ---
 
-                    if i < len(paragraphs) - 1:
-                        time.sleep(2.0) # A pausa de 2 segundos que você pediu
+                if is_gabarito_de_confirmacao(ai_reply):
+                    # 1. É O GABARITO: Enviar como um bloco único
+                    print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}: {ai_reply}")
+                    send_whatsapp_message(sender_number_full, ai_reply)
+                
+                else:
+                    # 2. NÃO É O GABARITO: Enviar fracionado (lógica antiga)
+                    print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
+                    
+                    paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+
+                    if not paragraphs:
+                        print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
+                        return # 'finally' vai liberar o lock
+                    
+                    for i, para in enumerate(paragraphs):
+                        send_whatsapp_message(sender_number_full, para)
+                        
+                        if i < len(paragraphs) - 1:
+                            time.sleep(2.0)
+            # --- FIM DA LÓGICA DE ENVIO ---
 
         except Exception as e:
             print(f"❌ Erro ao processar envio ou intervenção: {e}")
