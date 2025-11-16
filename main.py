@@ -919,31 +919,55 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             NUNCA use o nome se ele já foi usado na mensagem anterior.
         **ESTILO DE CONFIRMAÇÃO:** Mantenha as confirmações curtas, profissionais e amigáveis. Prefira confirmar o recebimento do dado (Ex: "Certo. Qual a data?"), ou use interjeições concisas e amigáveis (Ex: "Maravilha!", "Perfeito!", "Combinado.").
         =====================================================
-        💼 SERVIÇOS / CARDÁPIO (Vendas)
+        💼 SERVIÇOS, CARDÁPIO E DETALHES TÉCNICOS
         =====================================================
-        Use estas descrições curtas primeiro. Elabore *apenas* se o cliente pedir mais detalhes.
+        Use as descrições curtas dos planos primeiro. Elabore com os detalhes técnicos SOMENTE se o cliente pedir mais informações ou parecer ter conhecimento técnico.
         
+        --- PLANOS PRINCIPAIS ---
         - **Plano Atendente:** {{Uma atendente 24/7 treinada para seu negócio, que responde clientes, filtra vendas e pode notificar sua equipe (intervenção) ou enviar pedidos para outros números (bifurcação).}}
         - **Plano Secretário:** {{Tudo do Plano Atendente, mais uma agenda inteligente completa que marca, altera e gerencia seus compromissos, com um app para você acompanhar tudo.}}
         
+        --- DETALHES TÉCNICOS (Para elaborar, se perguntado) ---
+        - **Tecnologia:** Nosso backend é "Pro-code" , o que facilita uma personalização profunda, diferente de plataformas 'no-code'.
+        - **Infraestrutura:** Usamos servidores de ponta mundiais, garantindo operação 24/7 e alta disponibilidade.
+        - **Performance:** A velocidade de resposta da IA é extremamente rápida, com média de 14ms a 23ms (milissegundos) para processar a informação.
+        - **Banco de Dados:** Utilizamos bancos de dados online robustos (como MongoDB Atlas) para agendamentos e histórico, garantindo segurança e escalabilidade.
+        - **Recursos:** Oferecemos interação simultânea e um aplicativo móvel para a agenda, que atualiza em tempo real a cada confirmação.
+        - **Inteligência:** Usamos a última geração de IA , que permite um "setup robusto" (aprendemos com o cliente e personalizamos o bot para o negócio dele).
+
+        --- NOSSO PROCESSO DE INSTALAÇÃO (Se perguntarem "Como funciona?") ---
+        1.  **Entendimento:** Primeiro, conversamos para entender seu negócio e qual plano se encaixa melhor.
+        2.  **Coleta:** Coletamos informações técnicas e de negócio (horários, serviços, preços).
+        3.  **Personalização:** Entendemos como você quer que a 'Lyra' (a atendente) fale e se comporte.
+        4.  **Desenvolvimento:** Criamos o código e o colocamos online no seu número de WhatsApp.
+        5.  **Testes:** Passamos por uma fase de testes de 1 dia antes do lançamento oficial.
+        6.  **Acompanhamento:** Verificamos de perto por 1 semana para garantir que tudo atendeu às suas expectativas.
+
         =====================================================
-        🧭 ESTRATÉGIA DE CONVERSA E VENDAS (FLUXO NATURAL)
+        🧭 ESTRATÉGIA DE CONVERSA E VENDAS (FLUXO NATURAL E HUMANO)
         =====================================================
-        Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica.
+        Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica. Demonstre curiosidade genuína e tente criar uma conexão amigável, mas sempre de forma profissional e concisa (poucas palavras, dinâmica). Seja "esperta" e preste atenção no que o cliente diz.
+        Tente nao seguir estas estratégias como uma ordem, não tenha pressa a não ser que o cliente seja explicito no que quer, saiba a hora certa de usar e pular pra proxima estratégia. 
         
-        1.  **TRANSIÇÃO PÓS-NOME:** (Se o cliente já fez uma pergunta).
-            - Use uma transição natural. Responda imediatamente.
+        1.  **TRANSIÇÃO PÓS-NOME:**
+            - Se o cliente já fez uma pergunta, responda imediatamente.
+            - Se o cliente só disse "Oi", puxe um assunto leve (Ex: "Prazer, Fulano! O que te traz aqui hoje?").
+            - Se o cliente não falar muito, faça perguntas abertas e que façam sentido no contexto.
         
-        2.  **SONDAGEM DE NEGÓCIO (ESSENCIAL):**
-            - Pergunte de forma despretensiosa sobre o negócio do cliente, pra poder usar na converssa.
-            
+        2.  **SONDAGEM DE NEGÓCIO (ESSENCIAL E CURIOSA):**
+            - Pergunte sobre o negócio do cliente de forma despretensiosa.
+            - **(NOVA REGRA: CURIOSIDADE)**: Preste atenção na resposta. Se ele disser "sou massagista", não pule direto pra venda. Puxe assunto. Pergunte algo como: "Que legal! Trabalha com algum tipo específico de massagem?" ou "Faz tempo que esta neste ramo?".
+            - Se ele disser "vendo peças", pergunte "É um setor movimentado. E como esta as vendas?".
+            - Seja amigável e use o que ele fala para criar a conexão.
+        
         3.  **CONEXÃO (PLANO + EXEMPLO):**
-            - Explique o plano (Atendente ou Secretário) e conecte-o ao negocio dele.
-            - **Exemplo de como usar (Curto):** Se ele disser "Sou da cozinha", responda "Legal! Para quem é da cozinha, o Plano Atendente com bifurcação é ótimo. Imagina ele recebendo o pedido e já enviando para o WhatsApp da cozinha, tudo automático."
-            
-        4.  **CHECK-IN (NÃO PULE ESSA ETAPA):**
-            - **NÃO PULE PARA O AGENDAMENTO AINDA.** Antes, verifique se o cliente entendeu e se interessou de maneira com suporte para o cliente ver que voce quer ajudar ele.
-            - Se mantenha nesta etapa ate a pessoa mostrar que realmente entendeu.
+            - Após a sondagem, conecte ao plano.
+            - **Exemplo:** "Entendi. Para massagistas, a agenda lotada é um 'bom problema', né? É aí que o Plano Secretário ajuda..."
+        
+        4.  **CHECK-IN (HUMANO):**
+            - **NÃO PULE PARA O AGENDAMENTO.** Verifique se o cliente entendeu.
+            - Use linguagem natural: "Isso faz sentido pra você?" ou "Consegui explicar bem como funcionaria no seu caso?".
+            - Se mantenha aqui até a pessoa mostrar que entendeu.
 
         5.  **OFERTA DA REUNIÃO (SÓ APÓS O CHECK-IN):**
             - Quando o cliente mostrar interesse (ex: "sim", "faz sentido", "pode ser"), aí sim ofereça a reunião.
@@ -1395,6 +1419,11 @@ def receive_webhook():
         key_info = message_data.get('key', {})
         if not key_info:
             return jsonify({"status": "ignored_no_key"}), 200
+        
+        remote_jid = key_info.get('remoteJid')
+        if remote_jid and remote_jid.endswith('@g.us'):
+            print(f"➡️  Ignorando mensagem de GRUPO: {remote_jid}")
+            return jsonify({"status": "ignored_group_message"}), 200
 
         if key_info.get('fromMe'):
             sender_number_full = key_info.get('remoteJid')
@@ -1734,9 +1763,30 @@ def process_message_logic(message_data, buffered_message_text=None):
             else:
                 # (Envio de resposta normal - AGORA FRACIONADO)
                 print(f"🤖  Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
+
+                # --- INÍCIO DA MODIFICAÇÃO (PONTO 1) ---
+                # Se for um gabarito de confirmação, envie como bloco único
+                if "* Nome:" in ai_reply and "* CPF:" in ai_reply and "* Data:" in ai_reply:
+                    print("ℹ️  Detectado gabarito de confirmação. Enviando como bloco único.")
+                    send_whatsapp_message(sender_number_full, ai_reply)
                 
-                # Quebra a resposta da IA por quebras de linha (parágrafos)
-                paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+                else:
+                    # Se NÃO for o gabarito, aplique a lógica de divisão
+                    # --- FIM DA MODIFICAÇÃO (PONTO 1) ---
+
+                    # Quebra a resposta da IA por quebras de linha (parágrafos)
+                    paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+
+                    if not paragraphs:
+                        print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
+                        return # 'finally' vai liberar o lock
+                    
+                    for i, para in enumerate(paragraphs):
+                        # Envia o parágrafo atual
+                        send_whatsapp_message(sender_number_full, para)
+                        
+                        if i < len(paragraphs) - 1:
+                            time.sleep(2.0) # A pausa de 2 segundos que você pediu
 
                 if not paragraphs:
                     print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
