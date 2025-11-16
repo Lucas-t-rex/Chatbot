@@ -1572,12 +1572,13 @@ def handle_responsible_command(message_content, responsible_number):
                 {'$set': {'is_active': True}},
                 upsert=True
             )
-            send_whatsapp_message(responsible_number, "✅ *Bot REATIVADO.* O bot está respondendo aos clientes normally.")
+            send_whatsapp_message(responsible_number, "✅ *Bot REATIVADO.* O bot está respondendo aos clientes normal.")
             return True
         except Exception as e:
             send_whatsapp_message(responsible_number, f"❌ Erro ao reativar o bot: {e}")
             return True
 
+    # --- ESTA É A PARTE CORRIGIDA (RETORNO CONTEXTUAL) ---
     if len(command_parts) == 2 and command_parts[0] == "ok":
         customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
         
@@ -1595,7 +1596,30 @@ def handle_responsible_command(message_content, responsible_number):
 
             if result.modified_count > 0:
                 send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
-                send_whatsapp_message(customer_number_to_reactivate, "Oi, sou eu a Lyra novamente, voltei pro seu atendimento. Se precisar de algo me diga! 😊")
+                
+                # Prepara os dados para a IA
+                sender_name = customer.get('sender_name', 'Cliente')
+                customer_name = customer.get('customer_name')
+                
+                # Este prompt especial será pego pelo 'system_instruction' da IA
+                prompt_para_ia = "[PROMPT_SISTEMA] O atendimento humano acabou. Analise o histórico recente (que inclui a conversa com Lucas) e gere uma saudação de retorno CURTA e HUMANA. Se o assunto foi resolvido, apenas se coloque à disposição (ex: 'Vi que você e o Lucas resolveram. Se precisar de mais algo, estou aqui!'). Se agendaram algo, confirme (ex: 'Ótimo! Vi que o Lucas agendou sua reunião. Posso ajudar em mais algo?')."
+
+                # Chama a IA. Ela vai carregar o histórico (agora com a conversa de Lucas)
+                # e este prompt especial fará ela gerar a mensagem de retorno.
+                ai_comeback_message = gerar_resposta_ia_com_tools(
+                    customer_number_to_reactivate,
+                    sender_name,
+                    prompt_para_ia, # Esta é a "mensagem de usuário"
+                    customer_name
+                )
+                
+                # Limpeza final (caso a IA tente chamar uma tool, o que não deve)
+                if "[HUMAN_INTERVENTION]" in ai_comeback_message or "Chamando função:" in ai_comeback_message:
+                     ai_comeback_message = "Oi, sou eu a Lyra novamente, voltei pro seu atendimento. Se precisar de algo me diga! 😊" # Fallback
+                
+                # Envia a resposta contextual da IA para o cliente
+                send_whatsapp_message(customer_number_to_reactivate, ai_comeback_message)
+
             else:
                 send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
             
@@ -1605,6 +1629,7 @@ def handle_responsible_command(message_content, responsible_number):
             print(f"❌ Erro ao tentar reativar cliente: {e}")
             send_whatsapp_message(responsible_number, f"❌ Ocorreu um erro técnico ao tentar reativar o cliente. Verifique o log do sistema.")
             return True
+        # --- FIM DA PARTE CORRIGIDA ---
             
     help_message = (
         "Comando não reconhecido. 🤖\n\n"
@@ -1615,7 +1640,6 @@ def handle_responsible_command(message_content, responsible_number):
     )
     send_whatsapp_message(responsible_number, help_message)
     return True
-
 
 def process_message_logic(message_data, buffered_message_text=None):
     # ...
@@ -1776,12 +1800,14 @@ def process_message_logic(message_data, buffered_message_text=None):
                 # (Envio de resposta normal - AGORA FRACIONADO)
                 print(f"🤖  Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
 
+                # --- INÍCIO DO BLOCO CORRIGIDO ---
+                # Verifica se é o gabarito. Se for, envia em bloco único.
                 if "* Nome:" in ai_reply and "* CPF:" in ai_reply and "* Data:" in ai_reply:
                     print("ℹ️  Detectado gabarito de confirmação. Enviando como bloco único.")
                     send_whatsapp_message(sender_number_full, ai_reply)
                 
                 else:
-
+                    # Se não for gabarito, divide em parágrafos e envia UM POR UM.
                     paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
 
                     if not paragraphs:
@@ -1791,20 +1817,10 @@ def process_message_logic(message_data, buffered_message_text=None):
                     for i, para in enumerate(paragraphs):
                         send_whatsapp_message(sender_number_full, para)
                         
+                        # Pausa entre os parágrafos, exceto no último
                         if i < len(paragraphs) - 1:
                             time.sleep(2.0) # A pausa de 2 segundos que você pediu
-
-                if not paragraphs:
-                    print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
-                    return # 'finally' vai liberar o lock
-                
-                for i, para in enumerate(paragraphs):
-                    # Envia o parágrafo atual
-                    send_whatsapp_message(sender_number_full, para)
-                    
-
-                    if i < len(paragraphs) - 1:
-                        time.sleep(2.0) # A pausa de 2 segundos que você pediu
+                # --- FIM DO BLOCO CORRIGIDO (O bloco duplicado foi removido) ---
 
         except Exception as e:
             print(f"❌ Erro ao processar envio ou intervenção: {e}")
@@ -1820,7 +1836,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
             # print(f"🔓 Lock liberado para {clean_number}.")
-
+            
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
     print("    CHATBOT WHATSAPP COM IA INICIADO (V2 - COM AGENDA)")
