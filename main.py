@@ -786,10 +786,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - **REGRA DE PALAVRA ÚNICA (COMANDO ABSOLUTO):**
             - Se o cliente responder com o que parece ser um nome, especialmente uma palavra única (ex:"dani", "lucas"), sua **ÚNICA E IMEDIATA** ação é chamar a ferramenta `fn_capturar_nome`.
 
-            - **NÃO GERE TEXTO. NÃO GERE SAUDAÇÃO. NÃO DIGA "PRAZER".**
+            - **IDEALMENTE, NÃO GERE TEXTO** junto com a chamada. Sua resposta deve ser *preferencialmente* apenas a chamada de ferramenta: `fn_capturar_nome(nome_extraido=nome)`.
+            - **PLANO B (SE NÃO TIVER CERTEZA):** Se você ficar em dúvida se a palavra é um nome (ex: "Abreu", "Trabalho"), em vez de ficar em silêncio, você TEM PERMISSÃO para gerar uma pergunta curta de esclarecimento.
+            - Exemplo de Plano B: "Desculpe, o seu nome é 'nome que ele disse'?"
             - Sua resposta para a entrada deve ser *APENAS* a chamada de ferramenta: `fn_capturar_nome(nome_extraido=nome)`.
             - Sua resposta para a entrada "meu nome é nome" deve ser *APENAS* a chamada de ferramenta: `fn_capturar_nome(nome_extraido="nome")`.
-        3. **REGRA ANTI-DUPLICAÇÃO:** Ao extrair o nome, NUNCA o combine com o `{sender_name}`. Se o cliente digitou "dani", a ferramenta deve ser chamada com `nome_extraido="dani"`.
+        3. **REGRA ANTI-DUPLICAÇÃO:** Ao extrair o nome, NUNCA o combine com o `{sender_name}`. Se o cliente digitou "dani", a ferramenta deve ser chamada com `nome_extraido="dani"`, Nunca deve ser lido "danidani".
 
         QUANDO A FERRAMENTA `fn_capturar_nome` RETORNAR SUCESSO (ex: `{{"sucesso": true, "nome_salvo": "Dani"}}`):
         - **Agora sim, sua próxima resposta DEVE:**
