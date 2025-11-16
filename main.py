@@ -989,6 +989,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         ### 💡 2. QUANDO O CLIENTE DIZ “VOU PENSAR” (DEPOIS DA OFERTA DA REUNIÃO)
         > “Perfeito, é bom pensar mesmo! Posso te perguntar o que você gostaria de analisar melhor? Assim vejo se consigo te ajudar com alguma dúvida antes de marcarmos.”
     """
+    
     return prompt_final
 
 def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> str:
@@ -1419,11 +1420,6 @@ def receive_webhook():
         key_info = message_data.get('key', {})
         if not key_info:
             return jsonify({"status": "ignored_no_key"}), 200
-        
-        remote_jid = key_info.get('remoteJid')
-        if remote_jid and remote_jid.endswith('@g.us'):
-            print(f"➡️  Ignorando mensagem de GRUPO: {remote_jid}")
-            return jsonify({"status": "ignored_group_message"}), 200
 
         if key_info.get('fromMe'):
             sender_number_full = key_info.get('remoteJid')
@@ -1763,30 +1759,9 @@ def process_message_logic(message_data, buffered_message_text=None):
             else:
                 # (Envio de resposta normal - AGORA FRACIONADO)
                 print(f"🤖  Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
-
-                # --- INÍCIO DA MODIFICAÇÃO (PONTO 1) ---
-                # Se for um gabarito de confirmação, envie como bloco único
-                if "* Nome:" in ai_reply and "* CPF:" in ai_reply and "* Data:" in ai_reply:
-                    print("ℹ️  Detectado gabarito de confirmação. Enviando como bloco único.")
-                    send_whatsapp_message(sender_number_full, ai_reply)
                 
-                else:
-                    # Se NÃO for o gabarito, aplique a lógica de divisão
-                    # --- FIM DA MODIFICAÇÃO (PONTO 1) ---
-
-                    # Quebra a resposta da IA por quebras de linha (parágrafos)
-                    paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
-
-                    if not paragraphs:
-                        print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
-                        return # 'finally' vai liberar o lock
-                    
-                    for i, para in enumerate(paragraphs):
-                        # Envia o parágrafo atual
-                        send_whatsapp_message(sender_number_full, para)
-                        
-                        if i < len(paragraphs) - 1:
-                            time.sleep(2.0) # A pausa de 2 segundos que você pediu
+                # Quebra a resposta da IA por quebras de linha (parágrafos)
+                paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
 
                 if not paragraphs:
                     print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
