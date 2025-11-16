@@ -1046,9 +1046,9 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
     """
-    (VERSÃO CORRIGIDA - COM TOOLS E CONTAGEM DE TOKENS)
-    Esta função agora gerencia o loop de ferramentas.
-    A LÓGICA DE PARSING DA RESPOSTA FOI CORRIGIDA.
+    (VERSÃO FINAL - COM TOOLS E PARSING DE NOME)
+    Esta função gerencia o loop de ferramentas e agora também
+    processa a tag [NOME_CLIENTE] do prompt.
     """
     global modelo_ia 
 
@@ -1128,12 +1128,11 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         modelo_com_sistema = genai.GenerativeModel(
             modelo_ia.model_name,
             system_instruction=system_instruction,
-            tools=tools # Passa as tools globais
+            tools=tools # Passa as tools globais (agora sem fn_capturar_nome)
         )
         
         chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
         
-        # Log mais claro (agora usa 'known_customer_name' ou 'sender_name' corretamente)
         log_display = known_customer_name or sender_name or contact_id
         print(f"Enviando para a IA: '{user_message}' (De: {log_display})")
         
@@ -1144,13 +1143,12 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         except Exception as e:
             print(f"Aviso: Não foi possível somar tokens (chamada inicial): {e}")
 
-        # ▼▼▼ INÍCIO DA ALTERAÇÃO 4 (LÓGICA DE PARSING DE NOME) ▼▼▼
         # Esta variável é usada para o save_conversation_to_db
         customer_name_to_save = known_customer_name
         
         ai_reply_text = ""
 
-        # Loop 'while True' para processar chamadas de função
+        # Loop 'while True' para processar chamadas de função (ex: fn_solicitar_intervencao)
         while True:
             func_call = None
             try:
@@ -1158,21 +1156,16 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             except Exception:
                 func_call = None
 
-            # Se NÃO houver chamada de função, saia do loop
             if not func_call or not getattr(func_call, "name", None):
                 break 
 
-            # Se HOUVER uma chamada de função, processe-a
             call_name = func_call.name
             call_args = {key: value for key, value in func_call.args.items()}
             
             log_info(f"🔧 IA chamou a função: {call_name} com args: {call_args}")
             append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
 
-            # NOVO: Se a função for 'fn_capturar_nome', atualize o nome para salvar
-            if call_name == "fn_capturar_nome":
-                # A função 'handle_tool_call' já limpa o nome
-                customer_name_to_save = call_args.get("nome_extraido", "").strip()
+            # (A lógica 'fn_capturar_nome' foi removida daqui)
 
             resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
             log_info(f"📤 Resultado da função: {resultado_json_str}")
@@ -1204,21 +1197,48 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             except Exception as e2:
                 print(f"--- [DEBUG EXCEÇÃO 2] Falha ao ler .parts[0].text. Erro: {e2}")
                 print(f"--- [DEBUG EXCEÇÃO 2] Objeto 'resposta_ia' completo: {resposta_ia}")
+                ai_reply_text = "Pode ser mais claro?" # Fallback final
+        
+        # ▼▼▼ INÍCIO DA ALTERAÇÃO 4 (LÓGICA DE PARSING DE NOME) ▼▼▼
+        # Agora verificamos se o TEXTO começa com a nossa TAG
+        
+        if ai_reply_text.strip().startswith("[NOME_CLIENTE]"):
+            print("📝 Tag [NOME_CLIENTE] detectada. Extraindo e salvando nome...")
+            try:
+                # Isola a parte do nome
+                name_part = ai_reply_text.split("[HUMAN_INTERVENTION]")[0] # Segurança
+                full_response_part = name_part.split("O nome do cliente é:")[1].strip()
                 
-                # FALLBACK INTELIGENTE (Solução 3 da análise anterior)
-                is_captura_de_nome_vazia = False
-                try:
-                    finish_reason = str(resposta_ia.candidates[0].finish_reason)
-                    if not known_customer_name and ("STOP" in finish_reason or "1" in finish_reason):
-                        is_captura_de_nome_vazia = True
-                except Exception:
-                    pass
+                # Extrai o nome (isaqueisaque)
+                extracted_name_bruto = full_response_part.split('.')[0].strip()
+                
+                # Limpa o nome (Lógica do seu código antigo para "isaqueisaque" -> "Isaque")
+                extracted_name = _normalize_name(extracted_name_bruto) or extracted_name_bruto.capitalize()
+                
+                # Salva o nome limpo no banco de dados
+                if conversation_collection is not None:
+                    conversation_collection.update_one(
+                        {'_id': contact_id},
+                        {'$set': {'customer_name': extracted_name}},
+                        upsert=True
+                    )
+                customer_name_to_save = extracted_name # Salva o nome limpo
+                print(f"✅ Nome '{extracted_name}' (bruto: '{extracted_name_bruto}') salvo para o cliente {contact_id}.")
 
-                if is_captura_de_nome_vazia:
-                    print("--- [DEBUG FALLBACK] IA retornou vazia (provavelmente chamando função). Perguntando o nome.")
-                    ai_reply_text = "Qual seu nome, por favor?"
+                # Remonta a 'ai_reply_text' APENAS com o que sobrou (o "Prazer, Isaque!...")
+                if "[HUMAN_INTERVENTION]" in ai_reply_text:
+                    ai_reply_text = "[HUMAN_INTERVENTION]" + ai_reply_text.split("[HUMAN_INTERVENTION]")[1]
                 else:
-                    ai_reply_text = "Pode ser mais claro?"
+                    # Extrai o texto de "Prazer em conhecê-lo..."
+                    start_of_message_index = full_response_part.find(extracted_name_bruto) + len(extracted_name_bruto)
+                    ai_reply_text = full_response_part[start_of_message_index:].lstrip('.!?, ').strip()
+                    
+                    if not ai_reply_text: # Se o nome duplicado bagunçou o split
+                         ai_reply_text = "Prazer, " + extracted_name + "! Como posso te ajudar hoje?"
+
+            except Exception as e:
+                print(f"❌ Erro ao extrair o nome da tag: {e}")
+                ai_reply_text = ai_reply_text.replace("[NOME_CLIENTE]", "").strip() # Limpa a tag em caso de erro
         
         # ▲▲▲ FIM DA ALTERAÇÃO 4 ▲▲▲
 
@@ -1230,7 +1250,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     except Exception as e:
         print(f"❌ Erro ao comunicar com a API do Gemini (loop de tools): {e}")
         return "Desculpe, estou com um problema técnico no momento (IA_TOOL_FAIL). Por favor, tente novamente em um instante."
-
+    
 def transcrever_audio_gemini(caminho_do_audio):
     global modelo_ia 
     
