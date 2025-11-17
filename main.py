@@ -997,7 +997,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 - *Exemplo 1:* Cliente: "lucas" -> Você: [Chama `fn_capturar_nome(nome_extraido="lucas")`]
                 - *Exemplo 2:* Cliente: "meu nome é lucas" -> Você: [Chama `fn_capturar_nome(nome_extraido="lucas")`]
 
-            - **2. CAMINHO DE DÚVIDA:** Se você ficar em dúvida se a palavra é um nome (ex: "Trabalho", "Preço"), você **DEVE** fazer uma pergunta curta de esclarecimento.
+            - **2. CAMINHO DE DÚVIDA:** Quando voce explicitamente perguntar (apenas se voce perguntar o nome, caso contrario voce estara converssando normal) como é o nome da pessoa e ela suportamente responder e você ficar em dúvida se a palavra é um nome (ex: "Trabalho", "Preço",), você **DEVE** fazer uma pergunta curta de esclarecimento.
                 - *Exemplo:* Cliente: "preço" -> Você: "Desculpe, 'preço' é o seu nome?"
 
             - **3. FILTRO DE BOM SENSO (Sua regra):** Se a resposta parecer estranha para um nome (um objeto, verbo, ação, gíria, ou frases como "obrigado", "nao sei", "grampo", "o atendimento"), **NÃO chame a ferramenta**. Em vez disso, pergunte: "Desculpe, '[o que ele disse]' é o seu nome?"
