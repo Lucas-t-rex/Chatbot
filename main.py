@@ -1167,6 +1167,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         for msg in history_from_db:
             role = msg.get('role', 'user')
             if role == 'assistant': role = 'model'
+            if role == 'human_agent': role = 'model' # O que o humano falou é contextualizado como 'model' para a IA.
             if 'text' in msg:
                 # Filtra logs técnicos para não confundir a IA
                 if msg['text'].startswith("Chamando função:") or msg['text'].startswith("Resultado da função:"):
@@ -1646,18 +1647,33 @@ def process_message_logic(message_data, buffered_message_text=None):
         lock_acquired = True
         # --- Fim do Lock ---
         
+        conversation_status = conversation_collection.find_one({'_id': clean_number})
+        known_customer_name = conversation_status.get('customer_name') if conversation_status else None
+        
+        # [CORREÇÃO - NOVO] Variáveis para o fluxo de intervenção
+        sender_is_bot_itself = key_info.get('fromMe', False)
+        intervention_active = conversation_status.get('intervention_active', False)
+        
+        # 1. Determina o Role
+        # Regra: Se a mensagem veio do próprio Bot E a intervenção está ativa, é o Lucas.
+        if sender_is_bot_itself and intervention_active:
+            role_to_save = 'human_agent' # [CORREÇÃO - NOVO] Lucas falando pelo Bot
+            log_info(f"🗣️ MENSAGEM DO HUMANO (AGENTE) detectada para {clean_number}.")
+        else:
+            role_to_save = 'user' # Cliente falando ou mensagem do Admin
+            
         user_message_content = None
         
+        # 2. Processamento do Conteúdo (Buffer ou Áudio/Texto)
         if buffered_message_text:
             user_message_content = buffered_message_text
-            messages_to_save = user_message_content.split(". ")
-            for msg_text in messages_to_save:
-                if msg_text and msg_text.strip():
-                    append_message_to_db(clean_number, 'user', msg_text)
+            # O salvamento no DB para mensagens do buffer (role: user) será feito no passo 3.
         else:
-            # --- INÍCIO DA CORREÇÃO DE INDENTAÇÃO ---
+            # Mensagem não bufferizada (Áudio, Agente Humano ou mensagem única de texto)
             message = message_data.get('message', {})
+            
             if message.get('audioMessage') and message.get('base64'):
+                # Lógica de Transcrição de Áudio
                 message_id = key_info.get('id')
                 print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
                 audio_base64 = message['base64']
@@ -1668,29 +1684,51 @@ def process_message_logic(message_data, buffered_message_text=None):
                 
                 user_message_content = transcrever_audio_gemini(temp_audio_path)
                 
-                try:
-                    os.remove(temp_audio_path)
-                except Exception as e:
-                    print(f"Aviso: não foi possível remover áudio temporário. {e}")
-
+                try: os.remove(temp_audio_path)
+                except Exception as e: print(f"Aviso: não foi possível remover áudio temporário. {e}")
+                
                 if not user_message_content:
                     send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
-                    user_message_content = "[Usuário enviou um áudio incompreensível]"
+                    user_message_content = "[Áudio incompreensível]"
+                # [CORREÇÃO - NOVO] Adiciona tag para a IA saber que era um áudio
+                user_message_content = f"[AUDIO] {user_message_content}"
             
-            # Estas duas linhas foram movidas PARA DENTRO do 'else'
+            # MENSAGEM DE TEXTO NÃO BUFFERIZADA
+            elif message.get('conversation'):
+                user_message_content = message['conversation']
+            elif message.get('extendedTextMessage'):
+                user_message_content = message['extendedTextMessage'].get('text')
+            
             if not user_message_content:
-                user_message_content = "[Usuário enviou uma mensagem não suportada]"
-                
-            append_message_to_db(clean_number, 'user', user_message_content)
-            # --- FIM DA CORREÇÃO DE INDENTAÇÃO ---
+                print("➡️ Mensagem sem conteúdo de texto/áudio ignorada.")
+                return
+            
+        # 3. Salvamento de Mensagens no DB
+        if buffered_message_text and role_to_save == 'user':
+            # Se for do cliente (user) e veio do buffer (texto agrupado), salva as partes
+            messages_to_save = user_message_content.split(". ")
+            for msg_text in messages_to_save:
+                if msg_text and msg_text.strip():
+                    append_message_to_db(clean_number, role_to_save, msg_text)
+        else:
+            # Salva mensagens únicas (áudio/texto de user OU mensagem do human_agent)
+            append_message_to_db(clean_number, role_to_save, user_message_content)
 
         print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
         
         # --- LÓGICA DE INTERVENÇÃO (Verifica se é o Admin) ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
+            # Se for o Responsável, processa o comando de controle (bot on/off/ok)
             if handle_responsible_command(user_message_content, clean_number):
                 return # 'finally' vai liberar o lock
 
+        # [CORREÇÃO - NOVO] 4. VERIFICAÇÃO DE INTERVENÇÃO ATIVA (SAIR IMEDIATAMENTE)
+        if intervention_active:
+            # SE intervention_active == True, a mensagem (que já foi salva no histórico)
+            # NÃO deve prosseguir para a IA.
+            print(f"⏸️ Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano. Mensagem *salva* no histórico.")
+            return # 'finally' vai liberar o lock
+            
         # --- LÓGICA DE "BOT LIGADO/DESLIGADO" ---
         try:
             bot_status_doc = conversation_collection.find_one({'_id': 'BOT_STATUS'})
@@ -1703,12 +1741,7 @@ def process_message_logic(message_data, buffered_message_text=None):
         except Exception as e:
             print(f"⚠️ Erro ao verificar o status do bot: {e}. Assumindo que está ligado.")
 
-        conversation_status = conversation_collection.find_one({'_id': clean_number})
-
-        if conversation_status and conversation_status.get('intervention_active', False):
-            print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
-            return # 'finally' vai liberar o lock
-
+        # A partir daqui: Intervenção está FALSE e o Bot está ON. A IA processa!
         known_customer_name = conversation_status.get('customer_name') if conversation_status else None
         
         log_info(f"[DEBUG RASTREIO | PONTO 2] Conteúdo final para IA (Cliente {clean_number}): '{user_message_content}'")
