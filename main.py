@@ -939,6 +939,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 - **(Se o cliente aceitar falar agora, chame `fn_solicitar_intervencao` com o motivo 'Cliente aceitou oferta de falar com Lucas'.)**
                 - Se ficar em duvida da intenção do cliente de falar agora ou agendar a reunião, pegunte novamente e tente ser claro de maneira educada.
 
+            6.  **FORÇANDO UMA VENDA:(CASO CLIENTE NÃO TENHA INTERESSE DE AGENDAR)
+                - Se notar que o cliente não esta satisfeito com o serviço ou não tem interesse ou vai embora sem agendar, tente as tecnicas de objeção abaixo, claro se fizer sentido a converssa, mas se depois de mesmo com objeções nao der certo ofereça 1 semana gratis para teste(se ele aceitar DEVE FALAR COM O LUCAS, via reuniao ou whatsapp)
+
             =====================================================
             🧩 TÉCNICAS DE OBJEÇÕES (CURTAS E DIRETAS)
             =====================================================
@@ -1399,6 +1402,12 @@ def receive_webhook():
         key_info = message_data.get('key', {})
         if not key_info:
             return jsonify({"status": "ignored_no_key"}), 200
+        
+        remote_jid = key_info.get('remoteJid', '')
+        
+        if remote_jid.endswith('@g.us') or remote_jid.endswith('@broadcast'):
+            # Retornamos 200 OK para a API parar de reenviar, mas internamente ignoramos tudo.
+            return jsonify({"status": "ignored_group_context"}), 200
 
         if key_info.get('fromMe'):
             sender_number_full = key_info.get('remoteJid')
