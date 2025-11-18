@@ -235,9 +235,10 @@ class Agenda:
         return conflitos_encontrados
 
     def buscar_por_cpf(self, cpf_raw: str) -> Dict[str, Any]:
+        apenas_numeros = re.sub(r'\D', '', str(cpf_raw)) if cpf_raw else ""
         cpf = limpar_cpf(cpf_raw)
         if not cpf:
-            return {"erro": "CPF inválido (deve ter 11 dígitos)."}
+            return {"erro": f"CPF inválido. Identifiquei {len(apenas_numeros)} números. Digite os 11 números do CPF."}
         
         try:
             agora = datetime.now()
@@ -266,9 +267,10 @@ class Agenda:
             return {"erro": f"Falha ao buscar CPF no banco de dados: {e}"}
 
     def salvar(self, nome: str, cpf_raw: str, telefone: str, servico: str, data_str: str, hora_str: str) -> Dict[str, Any]:
+        apenas_numeros = re.sub(r'\D', '', str(cpf_raw)) if cpf_raw else ""
         cpf = limpar_cpf(cpf_raw)
         if not cpf:
-            return {"erro": "CPF inválido."}
+            return {"erro": f"CPF inválido. Identifiquei {len(apenas_numeros)} números. O CPF precisa ter exatamente 11 dígitos."}
         dt = parse_data(data_str)
         if not dt:
             return {"erro": "Data inválida."}
@@ -1271,33 +1273,50 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     return "Erro crítico de comunicação."
 
 def transcrever_audio_gemini(caminho_do_audio):
-    global modelo_ia 
-    
-    if not modelo_ia:
-        print("❌ Modelo de IA não inicializado. Impossível transcrever.")
-        return None
-    
-    print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição no Gemini...")
-    try:
-        audio_file = genai.upload_file(
-            path=caminho_do_audio,
-            mime_type="audio/ogg" 
-        )
-        
-        # CORRIGIDO: Usando 'modelo_ia' (o global)
-        response = modelo_ia.generate_content(["Por favor, transcreva o áudio a seguir.", audio_file])
-        genai.delete_file(audio_file.name)
-        
-        if response.text:
-            print(f"✅ Transcrição recebida: '{response.text}'")
-            return response.text
-        else:
-            print("⚠️ A IA não retornou texto para o áudio. Pode ser um áudio sem falas.")
-            return None
-    except Exception as e:
-        print(f"❌ Erro ao transcrever áudio com Gemini: {e}")
+    if not GEMINI_API_KEY:
+        print("❌ Erro: API Key não definida para transcrição.")
         return None
 
+    print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição...")
+
+    try:
+        audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
+        
+        modelo_transcritor = genai.GenerativeModel('gemini-2.5-flash') 
+        
+        prompt_transcricao = "Transcreva este áudio exatamente como foi falado. Apenas o texto, sem comentários."
+
+        response = modelo_transcritor.generate_content([prompt_transcricao, audio_file])
+        
+        try:
+            genai.delete_file(audio_file.name)
+        except:
+            pass
+
+        # 5. Extração do texto
+        if response.text:
+            texto_transcrito = response.text.strip()
+            print(f"✅ Transcrição recebida: '{texto_transcrito}'")
+            return texto_transcrito
+        else:
+            print("⚠️ A IA retornou vazio para o áudio.")
+            return "[Áudio sem fala ou inaudível]"
+
+    except Exception as e:
+        print(f"❌ Erro ao transcrever áudio: {e}")
+        # Tenta uma segunda vez (Retry simples) se for erro de conexão
+        try:
+            print("🔄 Tentando transcrição novamente (Retry)...")
+            time.sleep(2)
+            modelo_retry = genai.GenerativeModel('gemini-2.5-flash')
+            audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
+            response_retry = modelo_retry.generate_content(["Transcreva o áudio.", audio_file_retry])
+            genai.delete_file(audio_file_retry.name)
+            return response_retry.text.strip()
+        except Exception as e2:
+             print(f"❌ Falha total na transcrição: {e2}")
+             return "[Erro ao processar áudio]"
+        
 def send_whatsapp_message(number, text_message):
     INSTANCE_NAME = "chatbot" 
     clean_number = number.split('@')[0]
@@ -1452,7 +1471,6 @@ def handle_message_buffering(message_data):
         sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
-
         clean_number = sender_number_full.split('@')[0]
         
         message = message_data.get('message', {})
