@@ -866,7 +866,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             missão: {{Facilitar e organizar empresas com automação e IA.}}
             horário de atendimento: {{De segunda a sexta, das 8:00 às 18:00.}}
             localização: {{R. Pioneiro Alfredo José da Costa, 157 - Jardim Alvorada, Maringá - PR, 87035-270}}
-            
+            Nunca invente nada sobre as informaçoes da empresa, serviços que nao estão na descrição. 
             =====================================================
             🏷️ IDENTIDADE DO ATENDENTE (Lyra)
             =====================================================
@@ -911,7 +911,6 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             =====================================================
             Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica. Demonstre curiosidade genuína e tente criar uma conexão amigável, mas sempre de forma profissional e concisa (poucas palavras, dinâmica). Seja "esperta" e preste atenção no que o cliente diz.
             Tente nao seguir estas estratégias como uma ordem, não tenha pressa a não ser que o cliente seja explicito no que quer, saiba a hora certa de usar e pular pra proxima estratégia. 
-            Nunca invente nada sobre as informaçoes da empresa, serviços que nao estão na descrição. 
             
             1.  **TRANSIÇÃO PÓS-NOME:**
                 - Se o cliente já fez uma pergunta, responda imediatamente.
@@ -1113,8 +1112,9 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
     """
-    (VERSÃO FINAL - COM TOOLS E CONTAGEM DE TOKENS)
-    Esta função agora gerencia o loop de ferramentas.
+    (VERSÃO FINAL - BLINDADA COM RETRY GLOBAL)
+    Gerencia o loop de ferramentas e tenta até 3 vezes se a IA devolver uma resposta vazia ou der erro.
+    Aplica-se a TODAS as interações do bot.
     """
     global modelo_ia 
 
@@ -1123,36 +1123,11 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     if conversation_collection is None:
         return "Desculpe, estou com um problema interno (DB de conversas não carregado)."
 
-    total_tokens_this_turn = 0
-
-    convo_data = load_conversation_from_db(contact_id)
-    old_history_gemini_format = []
-    
-    if convo_data:
-        # read saved name from DB (se houver)
-        known_customer_name = convo_data.get('customer_name', known_customer_name) 
-        history_from_db = convo_data.get('history', [])
-        
-        for msg in history_from_db:
-            role = msg.get('role', 'user')
-            if role == 'assistant':
-                role = 'model'
-            
-            if 'text' in msg:
-                if msg['text'].startswith("Chamando função:") or msg['text'].startswith("Resultado da função:"):
-                    continue
-                
-                old_history_gemini_format.append({
-                    'role': role,
-                    'parts': [msg['text']]
-                })
-
+    # --- 1. PREPARAÇÃO DE DADOS (NOME E SAUDAÇÃO) ---
     def _normalize_name(n: Optional[str]) -> Optional[str]:
-        if not n:
-            return None
+        if not n: return None
         s = str(n).strip()
-        if not s:
-            return None
+        if not s: return None
         parts = [p for p in re.split(r'\s+', s) if p]
         if len(parts) >= 2 and parts[0].lower() == parts[1].lower():
             return parts[0]
@@ -1161,25 +1136,17 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     sender_name = _normalize_name(sender_name) or ""
     known_customer_name = _normalize_name(known_customer_name) 
     
-    if known_customer_name:
-        print(f"👤 Cliente já conhecido (nome real): {known_customer_name}")
-    else:
-        print(f"👤 Cliente novo. Sender_name (ignorar na saudação): {sender_name}")
+    log_display = known_customer_name or sender_name or contact_id
 
     try:
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
         horario_atual = agora_local.strftime("%Y-%m-%d %H:%M:%S")
-        
         hora_do_dia = agora_local.hour
-        if 5 <= hora_do_dia < 12:
-            saudacao = "Bom dia"
-        elif 12 <= hora_do_dia < 18:
-            saudacao = "Boa tarde"
-        else:
-            saudacao = "Boa noite"
-        
-    except Exception as e:
+        if 5 <= hora_do_dia < 12: saudacao = "Bom dia"
+        elif 12 <= hora_do_dia < 18: saudacao = "Boa tarde"
+        else: saudacao = "Boa noite"
+    except:
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         saudacao = "Olá" 
 
@@ -1190,93 +1157,115 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         contact_id
     )
 
-    try:
-        modelo_com_sistema = genai.GenerativeModel(
-            modelo_ia.model_name,
-            system_instruction=system_instruction,
-            tools=tools # Passa as tools globais
-        )
-        
-        chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
-        
-        # Log mais claro (agora usa 'known_customer_name' ou 'sender_name' corretamente)
-        log_display = known_customer_name or sender_name or contact_id
-        print(f"Enviando para a IA: '{user_message}' (De: {log_display})")
-        
-        resposta_ia = chat_session.send_message(user_message)
+    # --- 2. CARREGA HISTÓRICO ---
+    convo_data = load_conversation_from_db(contact_id)
+    old_history_gemini_format = []
+    if convo_data:
+        history_from_db = convo_data.get('history', [])
+        for msg in history_from_db:
+            role = msg.get('role', 'user')
+            if role == 'assistant': role = 'model'
+            if 'text' in msg:
+                # Filtra logs técnicos para não confundir a IA
+                if msg['text'].startswith("Chamando função:") or msg['text'].startswith("Resultado da função:"):
+                    continue
+                old_history_gemini_format.append({'role': role, 'parts': [msg['text']]})
 
+    # =================================================================================
+    # 🛡️ LÓGICA DE RETRY (TENTATIVA DE RECUPERAÇÃO DE ERRO)
+    # =================================================================================
+    max_retries = 3 
+    for attempt in range(max_retries):
         try:
-            total_tokens_this_turn += resposta_ia.usage_metadata.total_token_count
-        except Exception as e:
-            print(f"Aviso: Não foi possível somar tokens (chamada inicial): {e}")
-
-        while True:
-            cand = resposta_ia.candidates[0]
-            func_call = None
-            try:
-                func_call = cand.content.parts[0].function_call
-            except Exception:
-                func_call = None
-
-            if not func_call or not getattr(func_call, "name", None):
-                break # Sai do loop
-
-            call_name = func_call.name
-            call_args = {key: value for key, value in func_call.args.items()}
-            
-            log_info(f"🔧 IA chamou a função: {call_name} com args: {call_args}")
-            append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
-
-            resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
-            log_info(f"📤 Resultado da função: {resultado_json_str}")
-            
-            try:
-                resultado_data = json.loads(resultado_json_str)
-                if resultado_data.get("tag_especial") == "[HUMAN_INTERVENTION]":
-                    print("‼️ Intervenção detectada pela Tool. Encerrando o loop.")
-                    return f"[HUMAN_INTERVENTION] Motivo: {resultado_data.get('motivo', 'Solicitado pelo cliente.')}"
-            except Exception:
-                pass 
-
-            resposta_ia = chat_session.send_message(
-                [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
+            # Reinicia o objeto de chat a cada tentativa para limpar estados quebrados
+            modelo_com_sistema = genai.GenerativeModel(
+                modelo_ia.model_name,
+                system_instruction=system_instruction,
+                tools=tools
             )
             
+            chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
+            
+            # Log apenas para monitoramento (o usuário não vê isso)
+            if attempt > 0:
+                print(f"🔁 Tentativa {attempt+1} de gerar resposta para {log_display}...")
+            else:
+                print(f"Enviando para a IA: '{user_message}' (De: {log_display})")
+            
+            resposta_ia = chat_session.send_message(user_message)
+            
+            total_tokens_this_turn = 0
             try:
                 total_tokens_this_turn += resposta_ia.usage_metadata.total_token_count
-            except Exception as e:
-                print(f"Aviso: Não foi possível somar tokens (loop de ferramenta): {e}")
+            except: pass
 
-        ai_reply_text = ""
-        try:
-            # Tentativa 1: Acessar .text (o mais comum)
-            ai_reply_text = resposta_ia.text
-        except Exception as e1:
-            #
-            # ▼▼▼ DEBUG ADICIONADO ▼▼▼
-            print(f"--- [DEBUG EXCEÇÃO 1] Falha ao ler .text. Erro: {e1}")
-            # ▲▲▲ FIM DO DEBUG ▲▲▲
-            #
+            # --- LOOP DE FERRAMENTAS (TOOLS) ---
+            while True:
+                cand = resposta_ia.candidates[0]
+                func_call = None
+                try:
+                    func_call = cand.content.parts[0].function_call
+                except Exception:
+                    func_call = None
+
+                if not func_call or not getattr(func_call, "name", None):
+                    break # Sai do loop se não houver chamada de função
+
+                call_name = func_call.name
+                call_args = {key: value for key, value in func_call.args.items()}
+                
+                log_info(f"🔧 IA chamou a função: {call_name} com args: {call_args}")
+                append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
+
+                resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
+                log_info(f"📤 Resultado da função: {resultado_json_str}")
+                
+                # Check de intervenção humana vinda da ferramenta
+                try:
+                    res_data = json.loads(resultado_json_str)
+                    if res_data.get("tag_especial") == "[HUMAN_INTERVENTION]":
+                        return f"[HUMAN_INTERVENTION] Motivo: {res_data.get('motivo', 'Solicitado.')}"
+                except: pass
+
+                # Envia o resultado da função de volta para a IA
+                resposta_ia = chat_session.send_message(
+                    [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
+                )
+                try:
+                    total_tokens_this_turn += resposta_ia.usage_metadata.total_token_count
+                except: pass
+
+            # --- EXTRAÇÃO SEGURA DA RESPOSTA FINAL ---
+            ai_reply_text = ""
             try:
-                # Tentativa 2: Acessar a estrutura interna (parts)
-                ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
-            except Exception as e2:
-                #
-                # ▼▼▼ DEBUG ADICIONADO ▼▼▼
-                print(f"--- [DEBUG EXCEÇÃO 2] Falha ao ler .parts[0].text. Erro: {e2}")
-                print(f"--- [DEBUG EXCEÇÃO 2] Objeto 'resposta_ia' completo: {resposta_ia}")
-                # ▲▲▲ FIM DO DEBUG ▲▲▲
-                #
-                ai_reply_text = "Pode ser mais claro?" # Fallback final
+                # Tenta pegar o texto normal
+                ai_reply_text = resposta_ia.text
+            except:
+                try:
+                    # Tenta pegar de parts[0] (estrutura alternativa)
+                    ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
+                except:
+                    # SE CHEGAR AQUI, A RESPOSTA VEIO VAZIA (O ERRO DO SEU LOG)
+                    print(f"⚠️ AVISO: Resposta vazia da IA na tentativa {attempt+1}. Forçando nova tentativa...")
+                    if attempt < max_retries - 1:
+                        time.sleep(1.5) # Espera 1.5 seg e tenta de novo
+                        continue # Pula para a próxima rodada do loop 'for'
+                    else:
+                        raise Exception("Todas as tentativas falharam e retornaram vazio.")
 
-        save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn)
-        print(f"🔥 Tokens consumidos nesta rodada para {contact_id}: {total_tokens_this_turn}")
-        
-        return ai_reply_text
+            # Se o código chegou aqui, temos texto válido! Salva e retorna.
+            save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn)
+            return ai_reply_text
+
+        except Exception as e:
+            print(f"❌ Erro na tentativa {attempt+1}: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(1) # Espera um pouco antes de tentar de novo
+            else:
+                # Se falhar 3 vezes seguidas, aí sim mandamos uma mensagem amigável
+                return "A mensagem que você enviou deu erro aqui no whatsapp. 😵‍💫 Pode enviar novamente, por favor?"
     
-    except Exception as e:
-        print(f"❌ Erro ao comunicar com a API do Gemini (loop de tools): {e}")
-        return "Desculpe, estou com um problema técnico no momento (IA_TOOL_FAIL). Por favor, tente novamente em um instante."
+    return "Erro crítico de comunicação."
 
 def transcrever_audio_gemini(caminho_do_audio):
     global modelo_ia 
