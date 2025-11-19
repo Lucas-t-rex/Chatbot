@@ -1357,36 +1357,40 @@ def send_whatsapp_message(number, text_message):
 
 def enviar_simulacao_digitacao(number):
     """
-    Envia o status de 'digitando...' (composing) para o WhatsApp do cliente.
+    Envia o status de 'digitando...' com a correção do objeto 'options'.
     """
     INSTANCE_NAME = "chatbot" 
     clean_number = number.split('@')[0]
     
-    api_path = f"/chat/sendPresence/{INSTANCE_NAME}"
-    
     payload = {
         "number": clean_number,
-        "presence": "composing",
-        "delay": 12000 # Opcional: tempo em ms que o status dura (2s)
+        "options": {
+            "presence": "composing",
+            "delay": 12000 # 12 segundos enquanto a IA pensa
+        }
     }
     
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
     
     base_url = EVOLUTION_API_URL
-    final_url = ""
-    
-    if base_url.endswith(api_path):
-        final_url = base_url
-    elif base_url.endswith('/'):
-        final_url = base_url[:-1] + api_path
-    else:
-        final_url = base_url + api_path
+    if base_url.endswith('/'):
+        base_url = base_url[:-1]
 
+    # Tenta direto na V2 (que sabemos que existe, deu erro 400 antes)
+    url_v2 = f"{base_url}/chat/sendPresence/{INSTANCE_NAME}"
+    
     try:
-        # Dispara a requisição sem esperar/bloquear muito, apenas notifica
-        requests.post(final_url, json=payload, headers=headers, timeout=2)
+        # print(f"⏳ Enviando 'Digitando' (Payload Corrigido): {url_v2}")
+        response = requests.post(url_v2, json=payload, headers=headers, timeout=3)
+        
+        if response.status_code in [200, 201]:
+            print(f"💬 SUCESSO! 'Digitando...' ativado para {clean_number}")
+        else:
+            # Se der erro, vamos ver o que ele diz agora
+            print(f"⚠️ Falha ao enviar 'Digitando'. Código: {response.status_code}. Resposta: {response.text}")
+
     except Exception as e:
-        print(f"⚠️ Falha leve ao enviar status 'digitando': {e}")
+        print(f"⚠️ Erro de conexão no 'Digitando': {e}")
 
 def gerar_e_enviar_relatorio_diario():
     if conversation_collection is None or not RESPONSIBLE_NUMBER:
