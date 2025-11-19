@@ -1491,21 +1491,6 @@ def receive_webhook():
         if len(processed_messages) > 1000:
             processed_messages.clear()
 
-        # ==================================================================
-        # 🟢 LINHAS PARA ADICIONAR AQUI (Mágica do "Digitando...")
-        # ==================================================================
-        try:
-            # Pega o número para mandar o "digitando..."
-            sender_full = key_info.get('remoteJid') or key_info.get('participant')
-            if sender_full and not sender_full.endswith('@g.us'):
-                clean_num = sender_full.split('@')[0]
-                # Usamos Thread para não travar o recebimento da mensagem
-                threading.Thread(target=enviar_simulacao_digitacao, args=(clean_num,)).start()
-                print(f"💬 Status 'digitando...' ativado para {clean_num}")
-        except Exception as e:
-            print(f"Erro ao tentar ativar digitando: {e}")
-        # ==================================================================
-
         handle_message_buffering(message_data)
         
         return jsonify({"status": "received"}), 200
@@ -1789,6 +1774,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                     {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
                 )
                 
+                # Intervenção urgente: 2 segundos
                 send_whatsapp_message(sender_number_full, "Só mais um instante, o Lucas já vai falar com você 🙏.", delay_ms=2000)
                 
                 if RESPONSIBLE_NUMBER:
@@ -1813,7 +1799,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                     )
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg, delay_ms=1000)
             
-            # --- INÍCIO DA LÓGICA DE ENVIO (COM CORREÇÃO DO GABARITO) ---
+            # --- INÍCIO DA LÓGICA DE ENVIO (COM A NOVA REGRA DE TEMPO) ---
             else:
                 def is_gabarito_de_confirmacao(text: str) -> bool:
                     text_lower = text.lower()
@@ -1829,12 +1815,12 @@ def process_message_logic(message_data, buffered_message_text=None):
                     return False
 
                 if is_gabarito_de_confirmacao(ai_reply):
-                    # 1. É O GABARITO: Enviar como bloco único com 6 segundos
+                    # GABARITO: É uma mensagem única importante. Vamos dar 5 segundos.
                     print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}: {ai_reply}")
-                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=6000)
+                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=5000)
                 
                 else:
-                    # 2. NÃO É O GABARITO: Enviar fracionado (Lógica Humanizada)
+                    # CONVERSA NORMAL: Aplica a regra 5s (primeira) / 7s (demais)
                     print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
                     
                     paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
@@ -1844,15 +1830,11 @@ def process_message_logic(message_data, buffered_message_text=None):
                         return 
                     
                     for i, para in enumerate(paragraphs):
-                        # === AQUI ESTÁ A MÁGICA DO TEMPO ===
-                        # Se for o primeiro parágrafo (i==0), delay de 10 segundos (10000ms)
-                        # Se forem os próximos, delay de 6 segundos (6000ms)
-                        current_delay_ms = 10000 if i == 0 else 6000
+                        current_delay_ms = 5000 if i == 0 else 7000
                         
                         send_whatsapp_message(sender_number_full, para, delay_ms=current_delay_ms)
                         
                         # O Python espera o tempo da animação terminar antes de mandar o próximo
-                        # convertemos ms para segundos dividindo por 1000
                         time_to_wait = current_delay_ms / 1000
                         time.sleep(time_to_wait)
             # --- FIM DA LÓGICA DE ENVIO ---
