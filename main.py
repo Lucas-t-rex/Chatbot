@@ -1320,7 +1320,12 @@ def transcrever_audio_gemini(caminho_do_audio):
 def send_whatsapp_message(number, text_message):
     INSTANCE_NAME = "chatbot" 
     clean_number = number.split('@')[0]
-    payload = {"number": clean_number, "textMessage": {"text": text_message}}
+    payload = {
+        "number": clean_number, 
+        "textMessage": {"text": text_message},
+        "delay": 1200 
+    }
+    
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
 
     base_url = EVOLUTION_API_URL
@@ -1362,7 +1367,7 @@ def enviar_simulacao_digitacao(number):
     payload = {
         "number": clean_number,
         "presence": "composing",
-        "delay": 2000 # Opcional: tempo em ms que o status dura (2s)
+        "delay": 12000 # Opcional: tempo em ms que o status dura (2s)
     }
     
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
