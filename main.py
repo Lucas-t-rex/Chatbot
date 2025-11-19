@@ -1317,13 +1317,20 @@ def transcrever_audio_gemini(caminho_do_audio):
              print(f"❌ Falha total na transcrição: {e2}")
              return "[Erro ao processar áudio]"
         
-def send_whatsapp_message(number, text_message):
+def send_whatsapp_message(number, text_message, delay_ms=1200): # <--- NOVO PARÂMETRO AQUI
     INSTANCE_NAME = "chatbot" 
     clean_number = number.split('@')[0]
+    
     payload = {
         "number": clean_number, 
-        "textMessage": {"text": text_message},
-        "delay": 1200 
+        "textMessage": {
+            "text": text_message
+        },
+        "options": {
+            "delay": delay_ms,     # <--- USA A VARIÁVEL DINÂMICA
+            "presence": "composing", 
+            "linkPreview": True
+        }
     }
     
     headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
@@ -1344,7 +1351,7 @@ def send_whatsapp_message(number, text_message):
         final_url = base_url + api_path
 
     try:
-        print(f"✅ Enviando resposta para a URL: {final_url} (Destino: {clean_number})")
+        print(f"✅ Enviando resposta para a URL: {final_url} (Destino: {clean_number}) [Delay: {delay_ms}ms]")
         response = requests.post(final_url, json=payload, headers=headers)
         
         if response.status_code < 400:
@@ -1354,7 +1361,7 @@ def send_whatsapp_message(number, text_message):
             
     except requests.exceptions.RequestException as e:
         print(f"❌ Erro de CONEXÃO ao enviar mensagem para {clean_number}: {e}")
-
+        
 def enviar_simulacao_digitacao(number):
     """
     Envia o status de 'digitando...' com a correção do objeto 'options'.
@@ -1366,7 +1373,7 @@ def enviar_simulacao_digitacao(number):
         "number": clean_number,
         "options": {
             "presence": "composing",
-            "delay": 12000 # 12 segundos enquanto a IA pensa
+            "delay": 12000 # 12 segundos enquanto a IA pensa (não afeta o envio final)
         }
     }
     
@@ -1376,17 +1383,15 @@ def enviar_simulacao_digitacao(number):
     if base_url.endswith('/'):
         base_url = base_url[:-1]
 
-    # Tenta direto na V2 (que sabemos que existe, deu erro 400 antes)
     url_v2 = f"{base_url}/chat/sendPresence/{INSTANCE_NAME}"
     
     try:
-        # print(f"⏳ Enviando 'Digitando' (Payload Corrigido): {url_v2}")
-        response = requests.post(url_v2, json=payload, headers=headers, timeout=3)
+        # AUMENTADO PARA 20 SEGUNDOS PARA EVITAR ERRO NO LOG
+        response = requests.post(url_v2, json=payload, headers=headers, timeout=20)
         
         if response.status_code in [200, 201]:
             print(f"💬 SUCESSO! 'Digitando...' ativado para {clean_number}")
         else:
-            # Se der erro, vamos ver o que ele diz agora
             print(f"⚠️ Falha ao enviar 'Digitando'. Código: {response.status_code}. Resposta: {response.text}")
 
     except Exception as e:
@@ -1658,7 +1663,6 @@ def handle_responsible_command(message_content, responsible_number):
 
 
 def process_message_logic(message_data, buffered_message_text=None):
-    # ...
     lock_acquired = False
     clean_number = None
     
@@ -1708,7 +1712,6 @@ def process_message_logic(message_data, buffered_message_text=None):
                 if msg_text and msg_text.strip():
                     append_message_to_db(clean_number, 'user', msg_text)
         else:
-            # --- INÍCIO DA CORREÇÃO DE INDENTAÇÃO ---
             message = message_data.get('message', {})
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
@@ -1727,22 +1730,20 @@ def process_message_logic(message_data, buffered_message_text=None):
                     print(f"Aviso: não foi possível remover áudio temporário. {e}")
 
                 if not user_message_content:
-                    send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧")
+                    send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧", delay_ms=2000)
                     user_message_content = "[Usuário enviou um áudio incompreensível]"
             
-            # Estas duas linhas foram movidas PARA DENTRO do 'else'
             if not user_message_content:
                 user_message_content = "[Usuário enviou uma mensagem não suportada]"
                 
             append_message_to_db(clean_number, 'user', user_message_content)
-            # --- FIM DA CORREÇÃO DE INDENTAÇÃO ---
 
         print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
         
         # --- LÓGICA DE INTERVENÇÃO (Verifica se é o Admin) ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
             if handle_responsible_command(user_message_content, clean_number):
-                return # 'finally' vai liberar o lock
+                return 
 
         # --- LÓGICA DE "BOT LIGADO/DESLIGADO" ---
         try:
@@ -1751,7 +1752,7 @@ def process_message_logic(message_data, buffered_message_text=None):
             
             if not is_active:
                 print(f"🤖 Bot está em standby (desligado). Ignorando mensagem de {sender_name_from_wpp} ({clean_number}).")
-                return # 'finally' vai liberar o lock
+                return 
                 
         except Exception as e:
             print(f"⚠️ Erro ao verificar o status do bot: {e}. Assumindo que está ligado.")
@@ -1760,7 +1761,7 @@ def process_message_logic(message_data, buffered_message_text=None):
 
         if conversation_status and conversation_status.get('intervention_active', False):
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
-            return # 'finally' vai liberar o lock
+            return 
 
         known_customer_name = conversation_status.get('customer_name') if conversation_status else None
         
@@ -1775,7 +1776,7 @@ def process_message_logic(message_data, buffered_message_text=None):
         
         if not ai_reply:
             print("⚠️ A IA não gerou resposta.")
-            return # 'finally' vai liberar o lock
+            return 
 
         try:
             append_message_to_db(clean_number, 'assistant', ai_reply)
@@ -1788,7 +1789,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                     {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
                 )
                 
-                send_whatsapp_message(sender_number_full, "Só mais um instante, o Lucas já vai falar com você 🙏. ")
+                send_whatsapp_message(sender_number_full, "Só mais um instante, o Lucas já vai falar com você 🙏.", delay_ms=2000)
                 
                 if RESPONSIBLE_NUMBER:
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
@@ -1810,19 +1811,12 @@ def process_message_logic(message_data, buffered_message_text=None):
                         f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
                         
                     )
-                    send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg)
+                    send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg, delay_ms=1000)
             
             # --- INÍCIO DA LÓGICA DE ENVIO (COM CORREÇÃO DO GABARITO) ---
             else:
                 def is_gabarito_de_confirmacao(text: str) -> bool:
-                    """
-                    Verifica se o texto da IA é um resumo de agendamento (gabarito).
-                    Usa uma contagem de campos-chave para ser flexível.
-                    """
                     text_lower = text.lower()
-                    
-                    # Lista de rótulos-chave que identificam um gabarito.
-                    # Adicionamos "servico" (sem acento) por segurança.
                     checks = [
                         "nome:" in text_lower,
                         "cpf:" in text_lower,
@@ -1831,43 +1825,41 @@ def process_message_logic(message_data, buffered_message_text=None):
                         "data:" in text_lower,
                         "hora:" in text_lower
                     ]
-                    
-                    # Contar quantos campos-chave foram encontrados
-                    campos_encontrados = sum(checks)
-                    
-                    # Se 4 ou mais campos-chave estiverem presentes, é 99.9% 
-                    # de certeza que é um gabarito e não deve ser quebrado.
-                    if campos_encontrados >= 4:
-                        return True
-                        
+                    if sum(checks) >= 4: return True
                     return False
-                # --- FIM DA FUNÇÃO INTERNA (V2) ---
 
                 if is_gabarito_de_confirmacao(ai_reply):
-                    # 1. É O GABARITO: Enviar como um bloco único
+                    # 1. É O GABARITO: Enviar como bloco único com 6 segundos
                     print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}: {ai_reply}")
-                    send_whatsapp_message(sender_number_full, ai_reply)
+                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=6000)
                 
                 else:
-                    # 2. NÃO É O GABARITO: Enviar fracionado (lógica antiga)
+                    # 2. NÃO É O GABARITO: Enviar fracionado (Lógica Humanizada)
                     print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
                     
                     paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
 
                     if not paragraphs:
                         print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
-                        return # 'finally' vai liberar o lock
+                        return 
                     
                     for i, para in enumerate(paragraphs):
-                        send_whatsapp_message(sender_number_full, para)
+                        # === AQUI ESTÁ A MÁGICA DO TEMPO ===
+                        # Se for o primeiro parágrafo (i==0), delay de 10 segundos (10000ms)
+                        # Se forem os próximos, delay de 6 segundos (6000ms)
+                        current_delay_ms = 10000 if i == 0 else 6000
                         
-                        if i < len(paragraphs) - 1:
-                            time.sleep(2.0)
+                        send_whatsapp_message(sender_number_full, para, delay_ms=current_delay_ms)
+                        
+                        # O Python espera o tempo da animação terminar antes de mandar o próximo
+                        # convertemos ms para segundos dividindo por 1000
+                        time_to_wait = current_delay_ms / 1000
+                        time.sleep(time_to_wait)
             # --- FIM DA LÓGICA DE ENVIO ---
 
         except Exception as e:
             print(f"❌ Erro ao processar envio ou intervenção: {e}")
-            send_whatsapp_message(sender_number_full, "Desculpe, tive um problema ao processar sua resposta. (Erro interno: SEND_LOGIC)")
+            send_whatsapp_message(sender_number_full, "Desculpe, tive um problema ao processar sua resposta. (Erro interno: SEND_LOGIC)", delay_ms=1000)
 
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
@@ -1878,7 +1870,6 @@ def process_message_logic(message_data, buffered_message_text=None):
                 {'_id': clean_number},
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
-            # print(f"🔓 Lock liberado para {clean_number}.")
 
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
