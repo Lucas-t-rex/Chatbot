@@ -705,8 +705,10 @@ def analisar_status_da_conversa(history):
 
             REGRAS DE CLASSIFICAÇÃO:
 
-            1. STATUS: SUCESSO
-               - Ocorre se o cliente confirmou um agendamento OU solicitou falar com o humano/dono na converssa.
+            1. STATUS: SUCESSO (Só marque se FINALIZOU):
+               - O Agendamento foi EFETIVAMENTE CONFIRMADO pelo Bot (Ex: "Agendamento salvo", "Confirmado com sucesso", "Tudo certo, te aguardamos").
+               - OU houve pedido de Intervenção Humana (Falar com Lucas).
+               - IMPORTANTE: Se o cliente apenas escolheu o horário, passando cpf , ainda nao chegou a confirmar efetivamente explicitamente ate o final do gabartio, ISSO NÃO É SUCESSO AINDA.
 
             2. STATUS: ANDAMENTO (Prioridade Alta)
                - Use este status se o Bot ainda está tentando argumentar, oferecendo "teste grátis", perguntando o motivo da recusa ou tentando reverter o "não". Resumindo a converssa ainda esta viva.
