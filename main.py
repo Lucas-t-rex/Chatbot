@@ -771,7 +771,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             2. CONSULTE as regrar e maneiras abaixo.
             3. Responda EXATAMENTE a dúvida que está no histórico.
             4. Se as respostas que você precisa nao estiverem a baixo diga que não tem a informação mas se o cliente precisar com urgencia voce ira chamar o responsavel.
-
+            5. Se voce usou fez uma saudação no dia recentemente não fique repetindo. 
             =====================================================
             🧠 FILOSOFIA DE ATENDIMENTO (O MAIS IMPORTANTE)
             =====================================================
