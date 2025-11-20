@@ -1253,6 +1253,29 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
 
                 resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
                 log_info(f"📤 Resultado da função: {resultado_json_str}")
+
+                # Se a função foi capturar nome, a gente DERRUBA essa sessão do Gate
+                # e começa uma nova sessão com o Prompt Final IMEDIATAMENTE.
+                if call_name == "fn_capturar_nome":
+                    try:
+                        res_data = json.loads(resultado_json_str)
+                        nome_salvo = res_data.get("nome_salvo") or res_data.get("nome_extraido") # garante pegar o nome
+                        
+                        if nome_salvo:
+                            print(f"🔄 Troca de Contexto: Nome '{nome_salvo}' salvo! Reiniciando com Prompt de Vendas...")
+                            
+                            # AQUI ACONTECE A MÁGICA QUE VOCÊ PEDIU:
+                            # O Python chama a IA de novo, mas agora passando o nome.
+                            # Isso força o Python a carregar o 'prompt_final' (que sabe o endereço).
+                            return gerar_resposta_ia_com_tools(
+                                contact_id, 
+                                sender_name, 
+                                user_message, 
+                                known_customer_name=nome_salvo # <--- O Segredo está aqui
+                            )
+                    except Exception as e:
+                        print(f"⚠️ Erro ao tentar reiniciar fluxo (hot-swap): {e}")
+                # ===============================================================
                 
                 # Check de intervenção humana vinda da ferramenta
                 try:
