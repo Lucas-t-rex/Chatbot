@@ -667,66 +667,78 @@ def append_message_to_db(contact_id, role, text, message_id=None):
 
 def analisar_status_da_conversa(history):
     """
-    Lógica Senior:
-    1. Verifica FATOS (Tools) para determinar SUCESSO (100% preciso).
-    2. Se não for sucesso, usa IA para ler o CONTEXTO da última mensagem:
-       - Se a IA disser que o bot encerrou/despediu -> FRACASSO.
-       - Se a IA disser que o bot perguntou/aguarda -> NO_VACUO.
+    Lógica Senior Simplificada (Funil de Vendas):
+    
+    1. SUCESSO (Prioridade Máxima):
+       - Verifica se houve chamada de função de agendamento ou intervenção humana recente.
+       - Se sim, retorna "sucesso" imediatamente.
+       
+    2. ANDAMENTO vs FRACASSO (Via IA):
+       - Se não foi sucesso, analisamos a ÚLTIMA mensagem do Bot.
+       - Se a IA identificar que é uma despedida/fim de papo -> "fracasso" (pois acabou e não converteu).
+       - Se a IA identificar que é uma pergunta/abertura -> "andamento".
+       
+    3. STAND_BY:
+       - Previsto na arquitetura, mas a lógica automática não o atribui no momento.
     """
     if not history:
-        return "novo"
+        return "andamento"
 
-    # --- PASSO 1: ANÁLISE DETERMINÍSTICA DE SUCESSO (Prioridade Máxima) ---
-    # Se houve agendamento ou intervenção nas últimas interações, é SUCESSO.
-    # Não precisamos gastar IA para isso, os "fatos" do sistema bastam.
-    for msg in reversed(history[-8:]): # Olha as últimas 8 mensagens
+    # --- PASSO 1: DETECÇÃO DE SUCESSO (Fatos do Sistema) ---
+    # Varre as últimas 10 mensagens. Se converteu, é sucesso e ponto final.
+    for msg in reversed(history[-10:]):
         texto = msg.get('text', '').lower()
+        # Se salvou agendamento OU pediu intervenção, o objetivo foi cumprido.
         if "chamando função: fn_salvar_agendamento" in texto:
             return "sucesso"
         if "[human_intervention]" in texto:
             return "sucesso"
 
-    # --- PASSO 2: ANÁLISE SEMÂNTICA DE CONTEXTO (IA) ---
-    # Se chegou aqui, NÃO foi sucesso. Agora precisamos saber se a conversa
-    # "morreu" (Fracasso) ou se está "viva" (No Vácuo).
-    
+    # --- PASSO 2: QUEM FALOU POR ÚLTIMO? ---
     last_msg = history[-1]
     role = last_msg.get('role')
     last_text = last_msg.get('text', '')
 
-    # Se a última mensagem for do CLIENTE, o bot tecnicamente não está no vácuo,
-    # está processando. Mas para o status do banco, consideramos "em_andamento".
+    # Se a última mensagem é do Cliente, a bola está com o Bot.
+    # A conversa está viva.
     if role == 'user':
-        return "em_andamento"
+        return "andamento"
 
-    # Se a última mensagem é do BOT, perguntamos ao Gemini o contexto.
+    # --- PASSO 3: ANÁLISE DE INTENÇÃO DE ENCERRAMENTO (Via IA) ---
+    # O bot falou por último. Precisamos saber se ele "fechou a porta" (Fracasso)
+    # ou se "deixou a porta aberta" (Andamento).
     if modelo_ia and last_text:
         try:
             prompt_analise = f"""
-            Analise a última mensagem que um BOT enviou para um cliente.
-            Mensagem do Bot: "{last_text}"
+            Analise a última mensagem enviada por um BOT de vendas.
+            Mensagem: "{last_text}"
 
-            Responda com APENAS UMA das palavras abaixo (sem explicações):
-            - ENCERRADO (Se a mensagem for uma despedida, um agradecimento final, ou deixar claro que a conversa acabou).
-            - AGUARDANDO (Se a mensagem for uma pergunta, oferecer opções, ou deixar o assunto em aberto esperando retorno).
+            Classifique o estado da conversa em APENAS UMA das opções:
+            - FECHADO (Se a mensagem for uma despedida final, do tipo 'Tchau', 'Até logo', 'Encerrando', 'Obrigado pelo contato').
+            - ABERTO (Se a mensagem for uma pergunta, uma oferta, ou aguarda resposta do cliente).
+
+            Responda apenas: FECHADO ou ABERTO.
             """
             
-            # Usa um modelo "flash" ou o mesmo modelo já instanciado para ser rápido
             resposta_classificacao = modelo_ia.generate_content(prompt_analise)
-            classificacao = resposta_classificacao.text.upper().strip()(resposta_classificacao.text).upper().strip() # response_cleaner é opcional, pode usar .text direto se não tiver
+            
+            # Tratamento simples da string de resposta
+            resultado = resposta_classificacao.text.strip().upper()
 
-            if "ENCERRADO" in classificacao:
-                # Se encerrou e não caiu no check de sucesso lá em cima -> Fracasso
+            if "FECHADO" in resultado:
+                # Se o bot encerrou a conversa e não caiu no "if" de sucesso lá em cima,
+                # significa que a conversa acabou sem conversão.
                 return "fracasso"
             else:
-                # Se está aguardando -> No Vácuo
-                return "no_vacuo"
+                # Se está ABERTO, o bot está esperando o cliente responder.
+                return "andamento"
 
         except Exception as e:
-            print(f"⚠️ Erro na análise de sentimento por IA: {e}")
-            return "no_vacuo" # Fallback seguro
+            print(f"⚠️ Erro leve na análise de status (fallback para andamento): {e}")
+            return "andamento"
 
-    return "em_andamento"
+    # Fallback padrão
+    return "andamento"
 
 def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used):
     if conversation_collection is None: return
