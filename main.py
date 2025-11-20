@@ -20,8 +20,8 @@ from pymongo.errors import ConnectionFailure, OperationFailure
 from apscheduler.schedulers.background import BackgroundScheduler
 from typing import Any, Dict, List, Optional
 
-CLIENT_NAME = "Neuro'up Soluções em Tecnologia"
-RESPONSIBLE_NUMBER = "554898389781" 
+CLIENT_NAME="Neuro'up Soluções em Tecnologia"
+RESPONSIBLE_NUMBER="554898389781" 
 
 load_dotenv()
 
@@ -36,8 +36,8 @@ MONGO_AGENDA_COLLECTION = os.environ.get("MONGO_AGENDA_COLLECTION", "agendamento
 clean_client_name_global = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
 DB_NAME = "neuroup_solucoes_db"
 
-INTERVALO_SLOTS_MINUTOS = 30 
-NUM_ATENDENTES = 1
+INTERVALO_SLOTS_MINUTOS=30 
+NUM_ATENDENTES=1
 
 BLOCOS_DE_TRABALHO = [
     {"inicio": "08:00", "fim": "12:00"},
@@ -54,7 +54,7 @@ SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
 
 message_buffer = {}
 message_timers = {}
-BUFFER_TIME_SECONDS = 8 
+BUFFER_TIME_SECONDS=8 
 
 logging.basicConfig(
     filename="log.txt",
@@ -635,8 +635,8 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         if tools: 
-            modelo_ia = genai.GenerativeModel('gemini-2.5-flash', tools=tools)
-            print("✅ Modelo do Gemini (gemini-2.5-flash) inicializado com FERRAMENTAS.")
+            modelo_ia = genai.GenerativeModel('gemini-2.5-flash-lite', tools=tools)
+            print("✅ Modelo do Gemini (gemini-2.5-flash-lite) inicializado com FERRAMENTAS.")
         else:
              print("AVISO: Modelo do Gemini não inicializado pois a conexão com a Agenda falhou (tools vazias).")
     except Exception as e:
@@ -1455,7 +1455,7 @@ def transcrever_audio_gemini(caminho_do_audio):
     try:
         audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
         
-        modelo_transcritor = genai.GenerativeModel('gemini-2.5-flash') 
+        modelo_transcritor = genai.GenerativeModel('gemini-2.5-flash-lite') 
         
         prompt_transcricao = "Transcreva este áudio exatamente como foi falado. Apenas o texto, sem comentários."
 
@@ -1481,7 +1481,7 @@ def transcrever_audio_gemini(caminho_do_audio):
         try:
             print("🔄 Tentando transcrição novamente (Retry)...")
             time.sleep(2)
-            modelo_retry = genai.GenerativeModel('gemini-2.5-flash')
+            modelo_retry = genai.GenerativeModel('gemini-2.5-flash-lite')
             audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
             response_retry = modelo_retry.generate_content(["Transcreva o áudio.", audio_file_retry])
             genai.delete_file(audio_file_retry.name)
