@@ -704,9 +704,18 @@ def analisar_status_da_conversa(history):
             {historico_texto}
 
             REGRAS DE CLASSIFICAÇÃO:
-            1. SUCESSO: O cliente agendou um horário OU pediu para falar com humano/dono.
-            2. FRACASSO: O cliente disse "não", "não quero", "obrigado", recusou a oferta/teste grátis E a conversa foi finalizada/encerrada pelo Bot.
-            3. ANDAMENTO: A conversa ainda está acontecendo, o cliente está tirando dúvidas, ou o bot fez uma pergunta e aguarda resposta. (Mesmo que o cliente tenha dito "não" para uma data, se o bot ofereceu outra coisa depois, ainda é andamento).
+
+            1. STATUS: SUCESSO
+               - Ocorre se o cliente confirmou um agendamento OU solicitou falar com o humano/dono na converssa.
+
+            2. STATUS: ANDAMENTO (Prioridade Alta)
+               - Use este status se o Bot ainda está tentando argumentar, oferecendo "teste grátis", perguntando o motivo da recusa ou tentando reverter o "não". Resumindo a converssa ainda esta viva.
+               - ATENÇÃO: Se o cliente disse "não", mas o Bot respondeu com uma pergunta ou contra-oferta, o status É ANDAMENTO. A venda ainda não morreu.
+
+            3. STATUS: FRACASSO
+               - Ocorre APENAS se o Bot aceitou a negativa E enviou uma mensagem FINAL de despedida.
+               - Exemplos de fim: "Tenha uma ótima tarde", "Ficamos à disposição", "Até logo".
+               - Se o Bot não se despediu explicitamente, NÃO marque fracasso.
 
             Responda APENAS uma palavra: SUCESSO, FRACASSO ou ANDAMENTO.
             """
