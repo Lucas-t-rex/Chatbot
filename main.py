@@ -734,11 +734,14 @@ def analisar_status_da_conversa(history):
 
     return "andamento"
 
-def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used):
+def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used, ultima_msg_gerada=None):
     if conversation_collection is None: return
     try:
         doc_atual = conversation_collection.find_one({'_id': contact_id})
         historico_atual = doc_atual.get('history', []) if doc_atual else []
+
+        if ultima_msg_gerada:
+            historico_atual.append({'role': 'assistant', 'text': ultima_msg_gerada})
 
         status_calculado = analisar_status_da_conversa(historico_atual)
         
@@ -1385,7 +1388,18 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 try:
                     res_data = json.loads(resultado_json_str)
                     if res_data.get("tag_especial") == "[HUMAN_INTERVENTION]":
-                        return f"[HUMAN_INTERVENTION] Motivo: {res_data.get('motivo', 'Solicitado.')}"
+                        # --- CORREÇÃO: Salva o status SUCESSO antes de retornar ---
+                        msg_intervencao = f"[HUMAN_INTERVENTION] Motivo: {res_data.get('motivo', 'Solicitado.')}"
+                        
+                        save_conversation_to_db(
+                            contact_id, 
+                            sender_name, 
+                            known_customer_name, 
+                            total_tokens_this_turn, 
+                            ultima_msg_gerada=msg_intervencao
+                        )
+
+                        return msg_intervencao
                 except: pass
 
                 # Envia o resultado da função de volta para a IA
@@ -1415,7 +1429,8 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                         raise Exception("Todas as tentativas falharam e retornaram vazio.")
 
             # Se o código chegou aqui, temos texto válido! Salva e retorna.
-            save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn)
+            save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn, ai_reply_text)
+
             return ai_reply_text
 
         except Exception as e:
