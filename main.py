@@ -738,7 +738,7 @@ def get_last_messages_summary(history, max_messages=4):
             
     return "\n".join(relevant_summary)
 
-def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str) -> str:
+def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "") -> str:
     
     # Esta é a verificação que você pediu:
     if known_customer_name:
@@ -761,15 +761,16 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             
             {prompt_name_instruction}
             =====================================================
-            🔄 TRANSIÇÃO DE CONTEXTO (LEIA COM ATENÇÃO)
+            📜 HISTÓRICO DE CONVERSA (CONTEXTO REAL)
             =====================================================
-            Sempre leia a converssa e entenda o contexto, se você acabou de receber o nome do cliente. Verifique no histórico se ele fez alguma pergunta logo antes.
-            
-            Se houver uma pergunta pendente:
-            1. **NÃO** invente a resposta.
-            2. **CONSULTE** as informações  a baixo para dar a devida resposta.
-            3. Responda a dúvida usando as informações oficiais da empresa.
-            4. Se a informação não estiver abaixo, diga apenas: "Para essa informação específica, você pode falar diretamente com o Lucas/Responsável."
+            {historico_str}
+            =====================================================
+            Leia a conversa acima ({historico_str}) por completo, entenda o contexto e responda sempre que existir um duvida ou informação pendente acordo com o que o cliente pediu.
+            Se houver uma pergunta pendente no histórico acima (ex: "Onde fica?"):
+            1. IGNORE qualquer impulso de inventar.
+            2. CONSULTE as regrar e maneiras abaixo.
+            3. Responda EXATAMENTE a dúvida que está no histórico.
+            4. Se as respostas que você precisa nao estiverem a baixo diga que não tem a informação mas se o cliente precisar com urgencia voce ira chamar o responsavel.
 
             =====================================================
             🧠 FILOSOFIA DE ATENDIMENTO (O MAIS IMPORTANTE)
@@ -1171,27 +1172,34 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         saudacao = "Olá" 
 
+    # --- 2. CARREGA HISTÓRICO ---
+    convo_data = load_conversation_from_db(contact_id)
+    historico_texto_para_prompt = ""
+    old_history_gemini_format = []
+    if convo_data:
+        history_from_db = convo_data.get('history', [])
+        msgs_recentes = history_from_db[-10:] # Pega as últimas 10 para não estourar tokens
+        for m in msgs_recentes:
+            role_name = "Cliente" if m.get('role') == 'user' else "Você (Lyra)"
+            txt = m.get('text', '').replace('\n', ' ')
+            if not txt.startswith("Chamando função"): # Filtra logs técnicos
+                historico_texto_para_prompt += f"- {role_name}: {txt}\n"
+
+        for msg in history_from_db:
+            role = msg.get('role', 'user')
+            if role == 'assistant': role = 'model'
+            if 'text' in msg and not msg['text'].startswith("Chamando função"):
+                old_history_gemini_format.append({'role': role, 'parts': [msg['text']]})
+
+
     system_instruction = get_system_prompt_unificado(
         saudacao, 
         horario_atual,
         known_customer_name,  
-        contact_id
+        contact_id,
+        historico_str=historico_texto_para_prompt
     )
-
-    # --- 2. CARREGA HISTÓRICO ---
-    convo_data = load_conversation_from_db(contact_id)
-    old_history_gemini_format = []
-    if convo_data:
-        history_from_db = convo_data.get('history', [])
-        for msg in history_from_db:
-            role = msg.get('role', 'user')
-            if role == 'assistant': role = 'model'
-            if 'text' in msg:
-                # Filtra logs técnicos para não confundir a IA
-                if msg['text'].startswith("Chamando função:") or msg['text'].startswith("Resultado da função:"):
-                    continue
-                old_history_gemini_format.append({'role': role, 'parts': [msg['text']]})
-
+    
     # =================================================================================
     # 🛡️ LÓGICA DE RETRY (TENTATIVA DE RECUPERAÇÃO DE ERRO)
     # =================================================================================
