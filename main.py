@@ -667,77 +667,62 @@ def append_message_to_db(contact_id, role, text, message_id=None):
 
 def analisar_status_da_conversa(history):
     """
-    Lógica Senior Simplificada (Funil de Vendas):
-    
-    1. SUCESSO (Prioridade Máxima):
-       - Verifica se houve chamada de função de agendamento ou intervenção humana recente.
-       - Se sim, retorna "sucesso" imediatamente.
-       
-    2. ANDAMENTO vs FRACASSO (Via IA):
-       - Se não foi sucesso, analisamos a ÚLTIMA mensagem do Bot.
-       - Se a IA identificar que é uma despedida/fim de papo -> "fracasso" (pois acabou e não converteu).
-       - Se a IA identificar que é uma pergunta/abertura -> "andamento".
-       
-    3. STAND_BY:
-       - Previsto na arquitetura, mas a lógica automática não o atribui no momento.
+    Definições para a IA:
+    - SUCESSO: Se houve agendamento confirmado ou pedido de intervenção humana (falar com Lucas).
+    - FRACASSO: Se o cliente recusou as ofertas/tentativas e a conversa foi encerrada (despedida).
+    - ANDAMENTO: Se a conversa ainda está viva, com perguntas pendentes ou negociação em aberto.
     """
     if not history:
         return "andamento"
+    # 1. Formata o histórico recente como um texto legível para a IA
+    # Pegamos as últimas 15 interações para ter contexto suficiente (negativas anteriores)
+    msgs_para_analise = history[-15:] 
+    historico_texto = ""
+    
+    # Verifica "fatos consumados" (Funções) no código para garantir precisão máxima no Sucesso
+    # (Ainda mantemos isso pois é à prova de falhas, mas deixamos a IA julgar o resto)
+    for msg in msgs_para_analise:
+        role = "Bot" if msg.get('role') in ['assistant', 'model'] else "Cliente"
+        text = msg.get('text', '')
+        
+        # Se tiver log de função, limpamos para não confundir a IA, 
+        # mas usamos para flag de sucesso imediato se for agendamento/intervenção
+        if "Chamando função:" in text:
+            if "fn_salvar_agendamento" in text or "fn_solicitar_intervencao" in text:
+                return "sucesso"
+            continue # Pula linhas técnicas de log na leitura da IA
+            
+        historico_texto += f"- {role}: {text}\n"
 
-    # --- PASSO 1: DETECÇÃO DE SUCESSO (Fatos do Sistema) ---
-    # Varre as últimas 10 mensagens. Se converteu, é sucesso e ponto final.
-    for msg in reversed(history[-10:]):
-        texto = msg.get('text', '').lower()
-        # Se salvou agendamento OU pediu intervenção, o objetivo foi cumprido.
-        if "chamando função: fn_salvar_agendamento" in texto:
-            return "sucesso"
-        if "[human_intervention]" in texto:
-            return "sucesso"
-
-    # --- PASSO 2: QUEM FALOU POR ÚLTIMO? ---
-    last_msg = history[-1]
-    role = last_msg.get('role')
-    last_text = last_msg.get('text', '')
-
-    # Se a última mensagem é do Cliente, a bola está com o Bot.
-    # A conversa está viva.
-    if role == 'user':
-        return "andamento"
-
-    # --- PASSO 3: ANÁLISE DE INTENÇÃO DE ENCERRAMENTO (Via IA) ---
-    # O bot falou por último. Precisamos saber se ele "fechou a porta" (Fracasso)
-    # ou se "deixou a porta aberta" (Andamento).
-    if modelo_ia and last_text:
+    # 2. Se não achou sucesso técnico, manda o texto para o Gemini Auditar
+    if modelo_ia:
         try:
-            prompt_analise = f"""
-            Analise a última mensagem enviada por um BOT de vendas.
-            Mensagem: "{last_text}"
+            prompt_auditoria = f"""
+            Aja como um Auditor de Qualidade de Chatbot. Leia a conversa abaixo e defina o STATUS ATUAL.
 
-            Classifique o estado da conversa em APENAS UMA das opções:
-            - FECHADO (Se a mensagem for uma despedida final, do tipo 'Tchau', 'Até logo', 'Encerrando', 'Obrigado pelo contato').
-            - ABERTO (Se a mensagem for uma pergunta, uma oferta, ou aguarda resposta do cliente).
+            CONVERSA:
+            {historico_texto}
 
-            Responda apenas: FECHADO ou ABERTO.
+            REGRAS DE CLASSIFICAÇÃO:
+            1. SUCESSO: O cliente agendou um horário OU pediu para falar com humano/dono.
+            2. FRACASSO: O cliente disse "não", "não quero", "obrigado", recusou a oferta/teste grátis E a conversa foi finalizada/encerrada pelo Bot.
+            3. ANDAMENTO: A conversa ainda está acontecendo, o cliente está tirando dúvidas, ou o bot fez uma pergunta e aguarda resposta. (Mesmo que o cliente tenha dito "não" para uma data, se o bot ofereceu outra coisa depois, ainda é andamento).
+
+            Responda APENAS uma palavra: SUCESSO, FRACASSO ou ANDAMENTO.
             """
             
-            resposta_classificacao = modelo_ia.generate_content(prompt_analise)
-            
-            # Tratamento simples da string de resposta
-            resultado = resposta_classificacao.text.strip().upper()
+            # Configuração de segurança baixa para não bloquear a análise
+            resp = modelo_ia.generate_content(prompt_auditoria)
+            status_ia = resp.text.strip().upper()
 
-            if "FECHADO" in resultado:
-                # Se o bot encerrou a conversa e não caiu no "if" de sucesso lá em cima,
-                # significa que a conversa acabou sem conversão.
-                return "fracasso"
-            else:
-                # Se está ABERTO, o bot está esperando o cliente responder.
-                return "andamento"
+            if "SUCESSO" in status_ia: return "sucesso"
+            if "FRACASSO" in status_ia: return "fracasso"
+            if "ANDAMENTO" in status_ia: return "andamento"
 
         except Exception as e:
-            print(f"⚠️ Erro leve na análise de status (fallback para andamento): {e}")
-            return "andamento"
+            print(f"⚠️ Erro na auditoria de status da IA: {e}")
+            return "andamento" # Fallback seguro
 
-    # Fallback padrão
     return "andamento"
 
 def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used):
