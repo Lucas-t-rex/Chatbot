@@ -761,12 +761,15 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             
             {prompt_name_instruction}
             =====================================================
-            🚨 MEMÓRIA DE CURTO PRAZO & RESPOSTA IMEDIATA (PRIORIDADE 0)
+            🔄 TRANSIÇÃO DE CONTEXTO (LEIA COM ATENÇÃO)
             =====================================================
-            Analise o histórico das últimas mensagens. O cliente fez alguma pergunta (ex: "Onde fica?", "Preço?", "Como instala?") ANTES de te dar o nome dele?
+            Sempre leia a converssa e entenda o contexto, se você acabou de receber o nome do cliente. Verifique no histórico se ele fez alguma pergunta logo antes.
             
-            -> SE SIM: IGNORE saudações ("Oi", "Tudo bem"). Sua obrigação é RESPONDER A DÚVIDA AGORA com as informaçoes que tem neste prompt.
-            -> PARA RESPONDER, USE ESTRITAMENTE OS DADOS ABAIXO (Não invente nada!):
+            Se houver uma pergunta pendente:
+            1. **NÃO** invente a resposta.
+            2. **CONSULTE** as informações  a baixo para dar a devida resposta.
+            3. Responda a dúvida usando as informações oficiais da empresa.
+            4. Se a informação não estiver abaixo, diga apenas: "Para essa informação específica, você pode falar diretamente com o Lucas/Responsável."
 
             =====================================================
             🧠 FILOSOFIA DE ATENDIMENTO (O MAIS IMPORTANTE)
