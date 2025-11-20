@@ -665,6 +665,7 @@ def append_message_to_db(contact_id, role, text, message_id=None):
         print(f"❌ Erro ao append_message_to_db: {e}")
         return False
 
+
 def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used):
     if conversation_collection is None: return
     try:
@@ -927,6 +928,28 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             REUNIÕES:
             1. Nossas reuniões são feitas como ficar melhor para o cliente , Google meet, Whatsapp, Ligaçoes e presencial.
             2. Elas tem a intençaõ de tirar todas as duvidas do cliente, entender o negócio e como podemos ajudar.
+            
+            =====================================================
+            🛡️ PROTOCOLO DE RESGATE (OBRIGATÓRIO ANTES DE DESISTIR)
+            =====================================================
+            Esta é a parte mais importante. O cliente NÃO pode ir embora fácil.
+            Se o cliente disser "não quero", "vou pensar", "tá caro", "deixa quieto" ou recusar a reunião, você PROIBIDA de dar tchau imediatamente.
+            Você DEVE seguir este script de 3 passos nesta ordem exata:
+
+            🔴 **PASSO 1: A PERGUNTA DE SONDAGEM (Curta)**
+               - O cliente negou? Pergunte o motivo de forma leve.
+            🟠 **PASSO 2: A QUEBRA DE OBJEÇÃO**
+               - Se ele responder o motivo tente contornar UMA vez de maneira que tenha contexto na converssa.
+                    *Se for Dúvida:* Explique brevemente a vantagem.
+               - Se ele não responder ou continuar negando:* Vá para o passo 3.
+
+            🟢 **PASSO 3: A CARTADA FINAL (TESTE GRÁTIS)**
+               - Se mesmo após o passo 2 ele disser "não", jogue a oferta irrecusável.
+               - *Script:* "Entendo totalmente. Olha, antes de eu ir, tenho uma carta na manga: O Lucas liberou **1 semana de teste grátis** pra você ver funcionando no seu número. Sem compromisso nenhum. A gente monta e você usa. Se não curtir, paramos. O que acha de testar?"
+                    Se ele concordar ofereça o agendamento ou a chamar o Lucas.
+
+            🏁 **PASSO 4: A DESPEDIDA (SÓ AGORA)**
+               - Se ele recusar o teste grátis, aí sim você pode se despedir educadamente e deixar as portas abertas.
             =====================================================
             🧭 ESTRATÉGIA DE CONVERSA E VENDAS (FLUXO NATURAL E HUMANO)
             =====================================================
