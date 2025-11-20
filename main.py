@@ -1191,6 +1191,11 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             if 'text' in msg and not msg['text'].startswith("Chamando função"):
                 old_history_gemini_format.append({'role': role, 'parts': [msg['text']]})
 
+    tipo_prompt = "FINAL (Vendas)" if known_customer_name else "GATE (Captura)"
+    print(f"\n[🔍 DEBUG PROMPT] O Python vai usar o prompt: {tipo_prompt}")
+    print(f"[🔍 DEBUG NOME] O nome conhecido no início da função é: '{known_customer_name}'")
+    if not known_customer_name:
+        print("[⚠️ ALERTA] Se a IA capturar o nome AGORA, ela ainda estará usando o prompt GATE (sem endereço) para responder.")
 
     system_instruction = get_system_prompt_unificado(
         saudacao, 
@@ -1199,7 +1204,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         contact_id,
         historico_str=historico_texto_para_prompt
     )
-    
+
     # =================================================================================
     # 🛡️ LÓGICA DE RETRY (TENTATIVA DE RECUPERAÇÃO DE ERRO)
     # =================================================================================
