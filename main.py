@@ -54,7 +54,8 @@ SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
 
 message_buffer = {}
 message_timers = {}
-BUFFER_TIME_SECONDS=8 
+BUFFER_TIME_SECONDS=8
+TEMPO_FOLLOWUP_MINUTOS = 2
 
 logging.basicConfig(
     filename="log.txt",
@@ -770,7 +771,8 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used,
         update_payload = {
             'sender_name': sender_name,
             'last_interaction': datetime.now(),
-            'conversation_status': status_calculado 
+            'conversation_status': status_calculado ,
+            'followup_sent': False
         }
         if customer_name:
             update_payload['customer_name'] = customer_name
@@ -801,6 +803,67 @@ def load_conversation_from_db(contact_id):
     except Exception as e:
         print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
     return None
+
+def verificar_followup_automatico():
+    if conversation_collection is None:
+        return
+
+    try:
+        # 1. Define o tempo de corte (agora - X minutos)
+        agora = datetime.now()
+        tempo_corte = agora - timedelta(minutes=TEMPO_FOLLOWUP_MINUTOS)
+
+        # 2. Busca candidatos no Banco de Dados
+        # CRITÉRIOS:
+        # - Status é 'andamento'
+        # - Última interação foi ANTES do tempo de corte (está inativo)
+        # - NÃO recebeu follow-up ainda (followup_sent != True)
+        # - NÃO está processando mensagem agora (processing != True)
+        query = {
+            "conversation_status": "andamento",
+            "last_interaction": {"$lt": tempo_corte},
+            "followup_sent": {"$ne": True}, 
+            "processing": {"$ne": True},
+            # Opcional: evitar mandar para quem tem intervenção humana ativa
+            "intervention_active": {"$ne": True}
+        }
+
+        # Busca todos que atendem aos critérios
+        candidatos = list(conversation_collection.find(query))
+
+        if not candidatos:
+            return  # Ninguém pra notificar
+
+        print(f"🕵️ [Follow-up] Encontrados {len(candidatos)} clientes inativos em andamento.")
+
+        for cliente in candidatos:
+            contact_id = cliente['_id']
+            
+            # 3. Ação: Enviar a mensagem
+            print(f"⏰ [Follow-up] Enviando mensagem para {contact_id}...")
+            
+            # Mensagem solicitada
+            msg_texto = "teste 1" 
+            
+            # Envia via Evolution API
+            jid = f"{contact_id}@s.whatsapp.net"
+            send_whatsapp_message(jid, msg_texto)
+
+            # 4. ATUALIZA O BANCO (CRÍTICO): Marca que já enviou para não enviar de novo no próximo minuto
+            conversation_collection.update_one(
+                {'_id': contact_id},
+                {
+                    '$set': {
+                        'followup_sent': True,
+                        # Opcional: Atualiza last_interaction para não ficar "velho" demais? 
+                        # Um sênior preferiria NÃO atualizar last_interaction aqui, 
+                        # para saber a real última vez que o HUMANO falou.
+                    }
+                }
+            )
+
+    except Exception as e:
+        print(f"❌ Erro no Job de Follow-up: {e}")
 
 def get_last_messages_summary(history, max_messages=4):
     clean_history = []
@@ -2056,7 +2119,9 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
     # --- ALTERE AS DUAS LINHAS ABAIXO ---
     scheduler.add_job(gerar_e_enviar_relatorio_diario, 'cron', hour=8, minute=0)
     print("⏰ Agendador de relatórios iniciado. O relatório será enviado DIARIAMENTE às 08:00.")
-    # --- FIM DA ALTERAÇÃO ---
+    
+    scheduler.add_job(verificar_followup_automatico, 'interval', minutes=1)
+    print(f"⏰ Agendador de Follow-up iniciado (Verificação a cada 1 min, gatilho: {TEMPO_FOLLOWUP_MINUTOS} min de inatividade).")
     
     import atexit
     atexit.register(lambda: scheduler.shutdown())
