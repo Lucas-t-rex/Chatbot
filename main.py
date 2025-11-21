@@ -267,13 +267,16 @@ class Agenda:
             return {"erro": f"Falha ao buscar CPF no banco de dados: {e}"}
 
     def salvar(self, nome: str, cpf_raw: str, telefone: str, servico: str, data_str: str, hora_str: str) -> Dict[str, Any]:
+        # --- TRATAMENTOS BÁSICOS ---
         apenas_numeros = re.sub(r'\D', '', str(cpf_raw)) if cpf_raw else ""
         cpf = limpar_cpf(cpf_raw)
         if not cpf:
             return {"erro": f"CPF inválido. Identifiquei {len(apenas_numeros)} números. O CPF precisa ter exatamente 11 dígitos."}
+        
         dt = parse_data(data_str)
         if not dt:
             return {"erro": "Data inválida."}
+        
         hora = validar_hora(hora_str)
         if not hora:
             return {"erro": "Hora inválida."}
@@ -297,6 +300,23 @@ class Agenda:
             inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
             fim_dt = inicio_dt + timedelta(minutes=duracao_minutos)
 
+            # ==============================================================================
+            # 🛡️ TRAVA DE SEGURANÇA (IDEMPOTÊNCIA) - A CORREÇÃO DO SEU BUG
+            # ==============================================================================
+            # Verifica se JÁ EXISTE um agendamento para ESTE CPF, NESTE HORÁRIO.
+            already_booked = self.collection.find_one({
+                "cpf": cpf,
+                "inicio": inicio_dt
+            })
+
+            if already_booked:
+                # Se achou, significa que a IA chamou a função duas vezes (Duplo Clique).
+                # Retornamos SUCESSO imediato para não gerar erro de conflito.
+                log_info(f"🛡️ [Anti-Bug] Agendamento duplicado detectado para {cpf}. Retornando sucesso falso.")
+                return {"sucesso": True, "msg": f"Confirmado! O agendamento de {nome} já está garantido no sistema para {dt.strftime('%d/%m/%Y')} às {hora}."}
+            # ==============================================================================
+
+            # Só conta conflitos se NÃO for o próprio usuário (passou pela trava acima)
             conflitos_atuais = self._contar_conflitos_no_banco(inicio_dt, fim_dt)
 
             if conflitos_atuais >= NUM_ATENDENTES:
@@ -933,18 +953,22 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 -     - Se o cliente disser 'sim' (ou 'pode ser', 'este mesmo'), você DEVE usar o placeholder `telefone="CONFIRMADO_NUMERO_ATUAL"` ao chamar a `fn_salvar_agendamento`. (O backend vai salvar o {clean_number} corretamente).
                 -     - Se o cliente disser 'não' e passar um NÚMERO NOVO (ex: "449888..."), você deve usar esse número novo (ex: `telefone="449888..."`).
 
-                - i. **CONFIRMAÇÃO OBRIGATÓRIA (GABARITO CURTO):**
-                -     1. Apresente o resumo COMPLETO. 
+                - i. **CONFIRMAÇÃO (GABARITO OBRIGATÓRIO):**
+                -   1. ANTES DE SALVAR, você DEVE apresentar o resumo para o cliente confirmar:
                 -        * Nome: (Insira o nome que o cliente informou)
                 -        * CPF: (Insira o CPF que o cliente informou)
                 -        * Telefone: (Se o cliente disse 'sim' para usar o número atual, mostre o número {clean_number}. Se ele passou um número novo, mostre o número novo que ele digitou.)
                 -        * Serviço: (Insira aqui o nome do serviço que você está agendando, ex: Reunião)
                 -        * Data: (Insira a data e hora escolhidas)
-                -     2. Pergunte: "Confere pra mim? Se estiver tudo certo, eu confirmo aqui."
-                -     3. **REGRA CRÍTICA DE AGENDAMENTO (ANTI-BUG):** PARE. Você está **PROIBIDO** de chamar a função `fn_salvar_agendamento` ANTES que o cliente responda positivamente a este gabarito.
+                -   2. Pergunte: "Confere pra mim? Se estiver tudo certo, eu confirmo aqui."
+                -   3. **PARE AGORA.** NÃO chame a função `fn_salvar_agendamento` nesta mensagem. Espere a resposta.
                 -        EXECUÇÃO (PÓS-CONFIRMAÇÃO):
                 -            SÓ ENTÃO, após a confirmação positiva do cliente (ex: 'ok', 'sim', 'confere'), sua próxima ação DEVE ser chamar `fn_salvar_agendamento` com os dados exatos do gabarito.
-                
+                - j. **EXECUÇÃO FINAL (SÓ APÓS O "SIM"):**
+                -      - Se (e SOMENTE SE) o cliente responder positivamente:
+                -      - AÍ SIM você chama a função `fn_salvar_agendamento`.
+                -      - Se a função retornar sucesso, você diz: "Agendado com sucesso! Te enviamos um lembrete antes." e ENCERRA o assunto de agendamento.
+
                 - k. **FLUXO DE ALTERAÇÃO/EXCLUSÃO:**
                 -     1. Se o cliente pedir para alterar/cancelar (ex: "quero excluir os meus horarios"), peça o CPF: "Claro. Qual seu CPF, por favor?"
                 -     2. **(Ação Pós-CPF):** Assim que o cliente responder o CPF (ex: "10062080970"), você deve obedecer a "REGRA MESTRA ANTI-ALUCINAÇÃO" e IMEDIATAMENTE chamar a ferramenta `fn_buscar_por_cpf`.
