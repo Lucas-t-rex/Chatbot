@@ -841,16 +841,14 @@ def load_conversation_from_db(contact_id):
 
 def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
     """
-    Função especialista: Apenas gera o texto. Não envia, não salva no banco.
+    Função especialista: Gera Copywriting persuasivo baseado em estágios psicológicos.
     """
-    # --- CORREÇÃO DO BUG AQUI ---
-    # MongoDB proíbe usar "not collection". Tem que usar "is None".
+    # Verificação de segurança (Anti-Crash)
     if modelo_ia is None or conversation_collection is None:
         return None
-    # ----------------------------
 
     try:
-        # Pega as últimas 6 mensagens para contexto
+        # 1. Contextualização (Lê as últimas 6 mensagens)
         convo_data = conversation_collection.find_one({'_id': contact_id})
         history = convo_data.get('history', [])[-6:]
         
@@ -858,27 +856,83 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         for m in history:
             role = "Cliente" if m.get('role') == 'user' else "Lyra"
             txt = m.get('text', '').replace('\n', ' ')
-            # Filtra logs técnicos
+            # Filtra logs técnicos para não sujar o contexto da IA
             if not txt.startswith("Chamando função") and not txt.startswith("[HUMAN"):
                 historico_texto += f"- {role}: {txt}\n"
 
-        # Define a instrução baseada no status
+        # 2. Definição da Estratégia Psicológica (O "Brain" da Venda)
         instrucao = ""
-        if status_alvo == "sucesso":
-            instrucao = f"O cliente ({nome_cliente}) já agendou. Agradeça a preferência e diga que qualquer dúvida é só chamar. Seja breve."
-        elif status_alvo == "fracasso":
-            instrucao = f"O cliente ({nome_cliente}) não quis o serviço. Seja gentil, diga que as portas estão abertas caso mude de ideia. Use tom leve."
-        elif status_alvo == "andamento":
-            if estagio == 1: instrucao = f"Cliente ({nome_cliente}) sumiu. Chame pelo nome e pergunte se ficou alguma dúvida."
-            elif estagio == 2: instrucao = f"Cliente ({nome_cliente}) continua ausente. Pergunte se ele conseguiu ver a mensagem anterior."
-            elif estagio == 3: instrucao = f"Último aviso para ({nome_cliente}). Diga que vai encerrar por enquanto para não incomodar, mas está à disposição."
 
+        if status_alvo == "sucesso":
+            instrucao = (
+                f"O cliente ({nome_cliente}) finalizou o processo com sucesso. "
+                "OBJETIVO: Agradecer com classe, reforçar vínculo e estimular continuidade. "
+                "ESTRATÉGIA PSICOLÓGICA: Gratidão genuína + Sensação de Parceria. "
+                "1. Agradeça sem exageros (seja profissional mas calorosa). "
+                "2. Crie uma sensação de parceria ('vamos seguir juntos' ou 'estamos no time'). "
+                "3. Faça o cliente sentir que fez uma ótima escolha e se sentir valorizado. "
+                "4. Não peça mais nada, apenas celebre a decisão."
+            )
+        
+        elif status_alvo == "fracasso":
+            instrucao = (
+                f"O cliente ({nome_cliente}) recusou ou desistiu. "
+                "OBJETIVO: Reverter com HUMOR, AUTOVALORIZAÇÃO e uma leve 'apertada'. "
+                "ESTRATÉGIA PSICOLÓGICA: Quebra de padrão + Humor Tático + Confiança (Zero Desespero). "
+                "1. Use HUMOR: Faça uma brincadeira leve sobre. "
+                "2. Autovalorização: Mostre que você queria muito ajudar porque SABE que funciona, mas respeita o tempo dele. "
+                "4. Finalize leve: Termine com um emoji divertido (😉, 🚀, 😂) deixando a porta aberta, mas mantendo a postura de quem se garante."
+            )
+            
+        elif status_alvo == "andamento":
+            
+            if estagio == 1:
+                # MENSAGEM 1: Reciprocidade + Respeito à rotina
+                instrucao = (
+                    f"O cliente ({nome_cliente}) parou de responder recentemente. "
+                    "OBJETIVO: Reconectar e validar sem parecer cobrança. "
+                    "ESTRATÉGIA PSICOLÓGICA: Use reciprocidade e continuação de contexto. "
+                    "1. Mostre empatia pela rotina corrida dele. "
+                    "2. Dê uma opção simples (ex: 'quer que eu resuma?') ou retome o último assunto do histórico de forma leve. "
+                    "3. Mantenha o cliente no controle."
+                )
+            
+            elif estagio == 2:
+                # MENSAGEM 2: Curiosidade + Utilidade
+                instrucao = (
+                    f"O cliente ({nome_cliente}) continua em silêncio. "
+                    "OBJETIVO: Despertar interesse sem insistência. "
+                    "ESTRATÉGIA PSICOLÓGICA: Curiosidade + Utilidade. "
+                    "1. Não pergunte apenas 'está aí?'. "
+                    "2. Traga uma informação útil ou um detalhe interessante baseado no que conversaram antes. "
+                    "3. Ofereça clareza, não venda. Seja a especialista que ajuda."
+                )
+            
+            elif estagio == 3:
+                # MENSAGEM 3: Fechamento Elegante + FOMO Leve
+                instrucao = (
+                    f"Última tentativa para ({nome_cliente}). "
+                    "OBJETIVO: Gerar urgência emocional suave + fechamento elegante. "
+                    "ESTRATÉGIA PSICOLÓGICA: FOMO leve + Autonomia. "
+                    "1. Encerre o ciclo com leveza (avise que vai parar de mandar mensagens por enquanto para não incomodar). "
+                    "2. Gere percepção de cuidado. "
+                    "3. Deixe a porta aberta para ele responder quando quiser, sem pressão."
+                )
+        # 3. O Prompt Mestre
         prompt = f"""
-        Aja como Lyra. Recupere essa conversa.
-        HISTÓRICO:
+        Você é a Lyra. Analise o histórico abaixo e gere uma mensagem de retomada.
+        
+        HISTÓRICO DA CONVERSA:
         {historico_texto}
-        MISSÃO: {instrucao}
-        REGRAS: Curto (máx 1 frase), tom humano, sem saudações de horário (bom dia/tarde).
+        
+        SUA MISSÃO AGORA:
+        {instrucao}
+        
+        REGRAS DE COPYWRITING:
+        - Use o nome '{nome_cliente}' de forma natural (não robótica).
+        - Seja CURTA e DIALOGAL (máximo 1 ou 2 frases curtas).
+        - NÃO use saudações temporais (Bom dia/Boa tarde), vá direto ao ponto.
+        - O tom deve ser humano, fluido e empático.
         """
         
         resp = modelo_ia.generate_content(prompt)
@@ -887,7 +941,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
     except Exception as e:
         print(f"⚠️ Falha na geração IA Followup: {e}")
         return None
-
+    
 def verificar_followup_automatico():
     if conversation_collection is None: return
 
