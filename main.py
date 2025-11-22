@@ -843,8 +843,11 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
     """
     Função especialista: Apenas gera o texto. Não envia, não salva no banco.
     """
-    if not modelo_ia or not conversation_collection:
+    # --- CORREÇÃO DO BUG AQUI ---
+    # MongoDB proíbe usar "not collection". Tem que usar "is None".
+    if modelo_ia is None or conversation_collection is None:
         return None
+    # ----------------------------
 
     try:
         # Pega as últimas 6 mensagens para contexto
@@ -855,6 +858,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         for m in history:
             role = "Cliente" if m.get('role') == 'user' else "Lyra"
             txt = m.get('text', '').replace('\n', ' ')
+            # Filtra logs técnicos
             if not txt.startswith("Chamando função") and not txt.startswith("[HUMAN"):
                 historico_texto += f"- {role}: {txt}\n"
 
@@ -879,10 +883,10 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         
         resp = modelo_ia.generate_content(prompt)
         return resp.text.strip()
+
     except Exception as e:
         print(f"⚠️ Falha na geração IA Followup: {e}")
         return None
-
 
 def verificar_followup_automatico():
     if conversation_collection is None: return
