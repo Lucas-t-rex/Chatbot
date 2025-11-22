@@ -782,7 +782,7 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used,
             'sender_name': sender_name,
             'last_interaction': datetime.now(),
             'conversation_status': status_calculado ,
-            'followup_sent': 0
+            'followup_stage': 0
         }
         if customer_name:
             update_payload['customer_name'] = customer_name
@@ -834,7 +834,7 @@ def verificar_followup_automatico():
                 "estagio_atual": 1, 
                 "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_2),
                 "prox_estagio": 2,
-                "msg": "teste 2 (Passaram 5 min)"
+                "msg": "teste 2 (Passaram 3 min)"
             },
             {
                 "estagio_atual": 2, 
