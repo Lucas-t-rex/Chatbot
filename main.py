@@ -60,6 +60,8 @@ TEMPO_FOLLOWUP_1 = 2
 TEMPO_FOLLOWUP_2 = 3
 TEMPO_FOLLOWUP_3 = 4
 
+TEMPO_FOLLOWUP_SUCESSO = 2  
+TEMPO_FOLLOWUP_FRACASSO = 2
 
 logging.basicConfig(
     filename="log.txt",
@@ -773,18 +775,40 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used,
     try:
         doc_atual = conversation_collection.find_one({'_id': contact_id})
         historico_atual = doc_atual.get('history', []) if doc_atual else []
+        status_anterior = doc_atual.get('conversation_status', 'andamento') if doc_atual else 'andamento' # <--- Pega o status velho
 
         if ultima_msg_gerada:
             historico_atual.append({'role': 'assistant', 'text': ultima_msg_gerada})
 
+        # 1. A IA Analisa o NOVO status
+        # (Se estava 'fracasso' e o cliente disse "quero comprar", a IA vai retornar 'andamento')
         status_calculado = analisar_status_da_conversa(historico_atual)
         
         update_payload = {
             'sender_name': sender_name,
             'last_interaction': datetime.now(),
-            'conversation_status': status_calculado ,
-            'followup_stage': 0
+            'conversation_status': status_calculado,
         }
+
+        # --- LÓGICA ANTI-LOOP INFINITO (SENIOR) ---
+        should_reset_stage = False
+
+        # CASO A: Sempre reseta se estiver em andamento (conversa viva)
+        if status_calculado == 'andamento':
+            should_reset_stage = True
+        
+        # CASO B: Reseta se o status MUDOU (ex: Andamento -> Sucesso, ou Fracasso -> Andamento)
+        # Isso garante que o follow-up de sucesso dispare na primeira vez, e que a repescagem funcione.
+        elif status_calculado != status_anterior:
+            should_reset_stage = True
+        
+        # CASO C: Se for Sucesso -> Sucesso ou Fracasso -> Fracasso, NÃO RESETA.
+        # Mantemos o estágio onde está (provavelmente já enviado) para não repetir msg.
+
+        if should_reset_stage:
+            update_payload['followup_stage'] = 0
+        # -------------------------------------------
+
         if customer_name:
             update_payload['customer_name'] = customer_name
 
@@ -816,70 +840,80 @@ def load_conversation_from_db(contact_id):
     return None
 
 def verificar_followup_automatico():
-    if conversation_collection is None:
-        return
+    if conversation_collection is None: return
 
     try:
         agora = datetime.now()
         
-        # Definição das regras de cada estágio (Ordem importa!)
-        # Logica: Se está no estágio X e passou do tempo Y, envia mensagem e move para estágio X+1
+        # LISTA DE REGRAS (Prioridade: Sucesso/Fracasso primeiro, depois Andamento)
         regras = [
+            # --- REGRAS FINAIS (Só enviam 1 vez e matam o processo jogando para estágio 99) ---
             {
+                "status_alvo": "sucesso",
+                "estagio_atual": 0, # Só pega se acabou de entrar no sucesso
+                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_SUCESSO),
+                "prox_estagio": 99, # 99 = Finalizado, não manda mais nada
+                "msg": "TESTE SUCESSO (Obrigado pela preferência!)"
+            },
+            {
+                "status_alvo": "fracasso",
+                "estagio_atual": 0,
+                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_FRACASSO),
+                "prox_estagio": 99, # 99 = Finalizado
+                "msg": "TESTE FRACASSO (Mudou de ideia?)"
+            },
+
+            # --- REGRAS DE ANDAMENTO (Teste 1, 2, 3) ---
+            {
+                "status_alvo": "andamento",
                 "estagio_atual": 0, 
                 "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_1),
                 "prox_estagio": 1,
-                "msg": "teste 1 (Passaram 2 min)"
+                "msg": "teste 1 (Andamento)"
             },
             {
+                "status_alvo": "andamento",
                 "estagio_atual": 1, 
                 "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_2),
                 "prox_estagio": 2,
-                "msg": "teste 2 (Passaram 3 min)"
+                "msg": "teste 2 (Andamento)"
             },
             {
+                "status_alvo": "andamento",
                 "estagio_atual": 2, 
                 "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_3),
                 "prox_estagio": 3,
-                "msg": "teste 3 (Último aviso)"
+                "msg": "teste 3 (Andamento Final)"
             }
         ]
 
         for regra in regras:
             query = {
-                "conversation_status": "andamento",
+                "conversation_status": regra["status_alvo"], # <--- Agora busca pelo status correto
                 "last_interaction": {"$lt": regra["tempo_corte"]},
-                "followup_stage": regra["estagio_atual"], # Pega quem está travado neste estágio
+                "followup_stage": regra["estagio_atual"],
                 "processing": {"$ne": True},
                 "intervention_active": {"$ne": True}
             }
             
-            # Se o campo followup_stage não existir no banco (clientes antigos), tratamos como 0
+            # Compatibilidade com dados antigos (se stage for null, considera 0)
             if regra["estagio_atual"] == 0:
                 query["followup_stage"] = {"$in": [0, None]}
 
-            candidatos = list(conversation_collection.find(query).limit(50)) # Limit 50 para evitar travar a thread se tiver muitos
+            candidatos = list(conversation_collection.find(query).limit(50))
 
             if candidatos:
-                print(f"🕵️ [Follow-up Estágio {regra['estagio_atual']} -> {regra['prox_estagio']}] Encontrados {len(candidatos)} clientes.")
+                print(f"🕵️ [Follow-up {regra['status_alvo'].upper()}] Encontrados {len(candidatos)} clientes.")
 
             for cliente in candidatos:
                 contact_id = cliente['_id']
-                
-                # Envia a mensagem
                 print(f"⏰ [Follow-up] Enviando '{regra['msg']}' para {contact_id}...")
-                jid = f"{contact_id}@s.whatsapp.net"
-                send_whatsapp_message(jid, regra["msg"])
+                
+                send_whatsapp_message(f"{contact_id}@s.whatsapp.net", regra["msg"])
 
-                # Atualiza para o próximo estágio
                 conversation_collection.update_one(
                     {'_id': contact_id},
-                    {
-                        '$set': {
-                            'followup_stage': regra["prox_estagio"]
-                        }
-                        # NÃO atualizamos last_interaction, pois é um envio automático, o cliente continua inativo.
-                    }
+                    {'$set': {'followup_stage': regra["prox_estagio"]}}
                 )
 
     except Exception as e:
