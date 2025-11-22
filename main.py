@@ -60,6 +60,7 @@ TEMPO_FOLLOWUP_1 = 2
 TEMPO_FOLLOWUP_2 = 3
 TEMPO_FOLLOWUP_3 = 4
 
+
 logging.basicConfig(
     filename="log.txt",
     level=logging.INFO,
