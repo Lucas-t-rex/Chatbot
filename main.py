@@ -839,85 +839,104 @@ def load_conversation_from_db(contact_id):
         print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
     return None
 
+def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
+    """
+    Função especialista: Apenas gera o texto. Não envia, não salva no banco.
+    """
+    if not modelo_ia or not conversation_collection:
+        return None
+
+    try:
+        # Pega as últimas 6 mensagens para contexto
+        convo_data = conversation_collection.find_one({'_id': contact_id})
+        history = convo_data.get('history', [])[-6:]
+        
+        historico_texto = ""
+        for m in history:
+            role = "Cliente" if m.get('role') == 'user' else "Lyra"
+            txt = m.get('text', '').replace('\n', ' ')
+            if not txt.startswith("Chamando função") and not txt.startswith("[HUMAN"):
+                historico_texto += f"- {role}: {txt}\n"
+
+        # Define a instrução baseada no status
+        instrucao = ""
+        if status_alvo == "sucesso":
+            instrucao = f"O cliente ({nome_cliente}) já agendou. Agradeça a preferência e diga que qualquer dúvida é só chamar. Seja breve."
+        elif status_alvo == "fracasso":
+            instrucao = f"O cliente ({nome_cliente}) não quis o serviço. Seja gentil, diga que as portas estão abertas caso mude de ideia. Use tom leve."
+        elif status_alvo == "andamento":
+            if estagio == 1: instrucao = f"Cliente ({nome_cliente}) sumiu. Chame pelo nome e pergunte se ficou alguma dúvida."
+            elif estagio == 2: instrucao = f"Cliente ({nome_cliente}) continua ausente. Pergunte se ele conseguiu ver a mensagem anterior."
+            elif estagio == 3: instrucao = f"Último aviso para ({nome_cliente}). Diga que vai encerrar por enquanto para não incomodar, mas está à disposição."
+
+        prompt = f"""
+        Aja como Lyra. Recupere essa conversa.
+        HISTÓRICO:
+        {historico_texto}
+        MISSÃO: {instrucao}
+        REGRAS: Curto (máx 1 frase), tom humano, sem saudações de horário (bom dia/tarde).
+        """
+        
+        resp = modelo_ia.generate_content(prompt)
+        return resp.text.strip()
+    except Exception as e:
+        print(f"⚠️ Falha na geração IA Followup: {e}")
+        return None
+
+
 def verificar_followup_automatico():
     if conversation_collection is None: return
 
     try:
         agora = datetime.now()
         
-        # LISTA DE REGRAS (Prioridade: Sucesso/Fracasso primeiro, depois Andamento)
+        # Configuração das regras
         regras = [
-            # --- REGRAS FINAIS (Só enviam 1 vez e matam o processo jogando para estágio 99) ---
-            {
-                "status_alvo": "sucesso",
-                "estagio_atual": 0, # Só pega se acabou de entrar no sucesso
-                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_SUCESSO),
-                "prox_estagio": 99, # 99 = Finalizado, não manda mais nada
-                "msg": "TESTE SUCESSO (Obrigado pela preferência!)"
-            },
-            {
-                "status_alvo": "fracasso",
-                "estagio_atual": 0,
-                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_FRACASSO),
-                "prox_estagio": 99, # 99 = Finalizado
-                "msg": "TESTE FRACASSO (Mudou de ideia?)"
-            },
-
-            # --- REGRAS DE ANDAMENTO (Teste 1, 2, 3) ---
-            {
-                "status_alvo": "andamento",
-                "estagio_atual": 0, 
-                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_1),
-                "prox_estagio": 1,
-                "msg": "teste 1 (Andamento)"
-            },
-            {
-                "status_alvo": "andamento",
-                "estagio_atual": 1, 
-                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_2),
-                "prox_estagio": 2,
-                "msg": "teste 2 (Andamento)"
-            },
-            {
-                "status_alvo": "andamento",
-                "estagio_atual": 2, 
-                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_3),
-                "prox_estagio": 3,
-                "msg": "teste 3 (Andamento Final)"
-            }
+            # Finais (Encerramento)
+            {"status": "sucesso",  "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_SUCESSO,  "fallback": "Obrigada! Qualquer coisa estou por aqui."},
+            {"status": "fracasso", "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_FRACASSO, "fallback": "Se mudar de ideia, é só chamar!"},
+            # Andamento (Funil)
+            {"status": "andamento", "stage_atual": 0, "prox_stage": 1, "time": TEMPO_FOLLOWUP_1, "fallback": "Ainda está por aí?"},
+            {"status": "andamento", "stage_atual": 1, "prox_stage": 2, "time": TEMPO_FOLLOWUP_2, "fallback": "Ficou alguma dúvida?"},
+            {"status": "andamento", "stage_atual": 2, "prox_stage": 3, "time": TEMPO_FOLLOWUP_3, "fallback": "Vou encerrar por aqui para não incomodar."}
         ]
 
-        for regra in regras:
+        for r in regras:
+            # Query otimizada
             query = {
-                "conversation_status": regra["status_alvo"], # <--- Agora busca pelo status correto
-                "last_interaction": {"$lt": regra["tempo_corte"]},
-                "followup_stage": regra["estagio_atual"],
+                "conversation_status": r["status"],
+                "last_interaction": {"$lt": agora - timedelta(minutes=r["time"])},
+                "followup_stage": r["stage_atual"],
                 "processing": {"$ne": True},
                 "intervention_active": {"$ne": True}
             }
-            
-            # Compatibilidade com dados antigos (se stage for null, considera 0)
-            if regra["estagio_atual"] == 0:
-                query["followup_stage"] = {"$in": [0, None]}
+            if r["stage_atual"] == 0: query["followup_stage"] = {"$in": [0, None]}
 
             candidatos = list(conversation_collection.find(query).limit(50))
-
+            
             if candidatos:
-                print(f"🕵️ [Follow-up {regra['status_alvo'].upper()}] Encontrados {len(candidatos)} clientes.")
+                print(f"🕵️ Processando Follow-up '{r['status']}' (Estágio {r['stage_atual']}->{r['prox_stage']}) para {len(candidatos)} clientes.")
 
             for cliente in candidatos:
-                contact_id = cliente['_id']
-                print(f"⏰ [Follow-up] Enviando '{regra['msg']}' para {contact_id}...")
-                
-                send_whatsapp_message(f"{contact_id}@s.whatsapp.net", regra["msg"])
+                cid = cliente['_id']
+                nome = cliente.get('customer_name') or cliente.get('sender_name') or "Cliente"
 
-                conversation_collection.update_one(
-                    {'_id': contact_id},
-                    {'$set': {'followup_stage': regra["prox_estagio"]}}
-                )
+                # 1. Chama o Especialista (IA)
+                msg = gerar_msg_followup_ia(cid, r["status"], r["stage_atual"], nome)
+                
+                # 2. Se o especialista falhar, usa o Fallback
+                if not msg: msg = f"{nome}, {r['fallback']}"
+
+                # 3. Executa o envio
+                print(f"🚀 Enviando para {cid}: {msg}")
+                send_whatsapp_message(f"{cid}@s.whatsapp.net", msg)
+                append_message_to_db(cid, 'assistant', msg) # Salva no histórico!
+
+                # 4. Atualiza o banco
+                conversation_collection.update_one({'_id': cid}, {'$set': {'followup_stage': r["prox_stage"]}})
 
     except Exception as e:
-        print(f"❌ Erro no Job de Follow-up: {e}")
+        print(f"❌ Erro no Loop de Follow-up: {e}")
 
 def get_last_messages_summary(history, max_messages=4):
     clean_history = []
