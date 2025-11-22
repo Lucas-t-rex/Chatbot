@@ -55,7 +55,10 @@ SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
 message_buffer = {}
 message_timers = {}
 BUFFER_TIME_SECONDS=8
-TEMPO_FOLLOWUP_MINUTOS = 2
+
+TEMPO_FOLLOWUP_1 = 2   
+TEMPO_FOLLOWUP_2 = 3
+TEMPO_FOLLOWUP_3 = 4
 
 logging.basicConfig(
     filename="log.txt",
@@ -72,6 +75,13 @@ try:
    
     db_conversas = client_conversas[DB_NAME] 
     conversation_collection = db_conversas.conversations
+
+    conversation_collection.create_index([
+        ("conversation_status", 1), 
+        ("last_interaction", 1), 
+        ("followup_stage", 1)
+    ])
+    print("🚀 [Performance] Índices de busca rápida garantidos no DB Conversas.")
    
     print(f"✅ [DB Conversas] Conectado ao MongoDB: '{DB_NAME}'")
 except Exception as e:
@@ -772,7 +782,7 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used,
             'sender_name': sender_name,
             'last_interaction': datetime.now(),
             'conversation_status': status_calculado ,
-            'followup_sent': False
+            'followup_sent': 0
         }
         if customer_name:
             update_payload['customer_name'] = customer_name
@@ -809,58 +819,67 @@ def verificar_followup_automatico():
         return
 
     try:
-        # 1. Define o tempo de corte (agora - X minutos)
         agora = datetime.now()
-        tempo_corte = agora - timedelta(minutes=TEMPO_FOLLOWUP_MINUTOS)
+        
+        # Definição das regras de cada estágio (Ordem importa!)
+        # Logica: Se está no estágio X e passou do tempo Y, envia mensagem e move para estágio X+1
+        regras = [
+            {
+                "estagio_atual": 0, 
+                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_1),
+                "prox_estagio": 1,
+                "msg": "teste 1 (Passaram 2 min)"
+            },
+            {
+                "estagio_atual": 1, 
+                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_2),
+                "prox_estagio": 2,
+                "msg": "teste 2 (Passaram 5 min)"
+            },
+            {
+                "estagio_atual": 2, 
+                "tempo_corte": agora - timedelta(minutes=TEMPO_FOLLOWUP_3),
+                "prox_estagio": 3,
+                "msg": "teste 3 (Último aviso)"
+            }
+        ]
 
-        # 2. Busca candidatos no Banco de Dados
-        # CRITÉRIOS:
-        # - Status é 'andamento'
-        # - Última interação foi ANTES do tempo de corte (está inativo)
-        # - NÃO recebeu follow-up ainda (followup_sent != True)
-        # - NÃO está processando mensagem agora (processing != True)
-        query = {
-            "conversation_status": "andamento",
-            "last_interaction": {"$lt": tempo_corte},
-            "followup_sent": {"$ne": True}, 
-            "processing": {"$ne": True},
-            # Opcional: evitar mandar para quem tem intervenção humana ativa
-            "intervention_active": {"$ne": True}
-        }
-
-        # Busca todos que atendem aos critérios
-        candidatos = list(conversation_collection.find(query))
-
-        if not candidatos:
-            return  # Ninguém pra notificar
-
-        print(f"🕵️ [Follow-up] Encontrados {len(candidatos)} clientes inativos em andamento.")
-
-        for cliente in candidatos:
-            contact_id = cliente['_id']
+        for regra in regras:
+            query = {
+                "conversation_status": "andamento",
+                "last_interaction": {"$lt": regra["tempo_corte"]},
+                "followup_stage": regra["estagio_atual"], # Pega quem está travado neste estágio
+                "processing": {"$ne": True},
+                "intervention_active": {"$ne": True}
+            }
             
-            # 3. Ação: Enviar a mensagem
-            print(f"⏰ [Follow-up] Enviando mensagem para {contact_id}...")
-            
-            # Mensagem solicitada
-            msg_texto = "teste 1" 
-            
-            # Envia via Evolution API
-            jid = f"{contact_id}@s.whatsapp.net"
-            send_whatsapp_message(jid, msg_texto)
+            # Se o campo followup_stage não existir no banco (clientes antigos), tratamos como 0
+            if regra["estagio_atual"] == 0:
+                query["followup_stage"] = {"$in": [0, None]}
 
-            # 4. ATUALIZA O BANCO (CRÍTICO): Marca que já enviou para não enviar de novo no próximo minuto
-            conversation_collection.update_one(
-                {'_id': contact_id},
-                {
-                    '$set': {
-                        'followup_sent': True,
-                        # Opcional: Atualiza last_interaction para não ficar "velho" demais? 
-                        # Um sênior preferiria NÃO atualizar last_interaction aqui, 
-                        # para saber a real última vez que o HUMANO falou.
+            candidatos = list(conversation_collection.find(query).limit(50)) # Limit 50 para evitar travar a thread se tiver muitos
+
+            if candidatos:
+                print(f"🕵️ [Follow-up Estágio {regra['estagio_atual']} -> {regra['prox_estagio']}] Encontrados {len(candidatos)} clientes.")
+
+            for cliente in candidatos:
+                contact_id = cliente['_id']
+                
+                # Envia a mensagem
+                print(f"⏰ [Follow-up] Enviando '{regra['msg']}' para {contact_id}...")
+                jid = f"{contact_id}@s.whatsapp.net"
+                send_whatsapp_message(jid, regra["msg"])
+
+                # Atualiza para o próximo estágio
+                conversation_collection.update_one(
+                    {'_id': contact_id},
+                    {
+                        '$set': {
+                            'followup_stage': regra["prox_estagio"]
+                        }
+                        # NÃO atualizamos last_interaction, pois é um envio automático, o cliente continua inativo.
                     }
-                }
-            )
+                )
 
     except Exception as e:
         print(f"❌ Erro no Job de Follow-up: {e}")
@@ -2121,7 +2140,7 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
     print("⏰ Agendador de relatórios iniciado. O relatório será enviado DIARIAMENTE às 08:00.")
     
     scheduler.add_job(verificar_followup_automatico, 'interval', minutes=1)
-    print(f"⏰ Agendador de Follow-up iniciado (Verificação a cada 1 min, gatilho: {TEMPO_FOLLOWUP_MINUTOS} min de inatividade).")
+    print(f"⏰ Agendador de Follow-up iniciado (Estágios ativos: {TEMPO_FOLLOWUP_1}, {TEMPO_FOLLOWUP_2}, {TEMPO_FOLLOWUP_3} min).")
     
     import atexit
     atexit.register(lambda: scheduler.shutdown())
