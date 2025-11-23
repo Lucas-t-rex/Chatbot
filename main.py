@@ -872,7 +872,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         else:
             regra_tratamento = (
                 "- NOME DESCONHECIDO: NÃO invente um nome. NÃO chame de 'cliente'.\n"
-                "- USE TRATAMENTO NEUTRO: Comece com 'Olá', 'Ei', 'Tudo bem?' ou vá direto ao assunto.\n"
+                "- USE TRATAMENTO NEUTRO: Comece com 'Olá', 'Você', 'Tudo bem?' ou vá direto ao assunto.\n"
                 "- Evite artigos de gênero (o/a) se não souber se é homem ou mulher."
             )
             display_name = "o cliente (nome não capturado)" # Nome genérico para o prompt interno
@@ -895,14 +895,19 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         
         elif status_alvo == "fracasso":
             instrucao = (
-                f"""O cliente ({display_name}) recusou ou desistiu. 
-                OBJETIVO: NÃO aceitar a perda passivamente. Tentar a 'Venda da Salvação' com HUMOR INTELIGENTE.
-                ESTRATÉGIA PSICOLÓGICA: Persistência Elegante + Foco na Dor do Manual vs. Prazer da Automação. 
-                1. NÃO diga apenas 'tchau' ou 'tudo bem'. Questione a decisão de forma leve.
-                2. TOQUE NA FERIDA (com humor): Brinque que não faz sentido ele ficar sem nós.
-                3. VENDA A SOLUÇÃO FINAL: Reforce que a Lyra resolve isso agora e traz paz/lucro.
-                4. Finalize provocando uma ação.
-                5. Contexto: Esta é uma tentativa final de reversão (Repescagem)"""
+            f"""O cliente ({display_name}) recusou ou desistiu.
+            OBJETIVO: Tentar uma última reversão de forma leve, simpática e bem-humorada — sem pressão e sem agressividade.
+            ESTILO DE COMUNICAÇÃO: Humor suave + elegância + tom acolhedor.
+            Nada de ironia pesada ou intimidação. A ideia é brincar de forma gentil, como quem sorri enquanto fala.
+            ESTRATÉGIA PSICOLÓGICA:
+            1. Questione a decisão de modo leve, quase como uma brincadeira amistosa.
+            2. Toque na dificuldade atual do cliente com humor sutil (ex.: rotina manual, complicações, tempo perdido).
+            3. Mostre que a nossa solução tornaria tudo mais simples e leve — benefício imediato.
+            4. Finalize deixando a porta aberta com classe, convidando a pessoa a repensar quando quiser.
+            5. Lembrar: Esta é uma tentativa final de repescagem, portanto deve soar leve, simpática e agradável.
+            DIRETRIZ DE TOM:
+            Frases no estilo: "Não vai me dizer que vai continuar com isso?", sempre com carinho, suavidade e sem julgar.
+            """
             )
             
         elif status_alvo == "andamento":
@@ -2086,27 +2091,48 @@ def process_message_logic(message_data, buffered_message_text=None):
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
-        # --- Lógica de LOCK ---
+        # ==============================================================================
+        # 🛡️ LÓGICA DE "SALA DE ESPERA" (A CORREÇÃO SÊNIOR)
+        # ==============================================================================
         now = datetime.now()
-        res = conversation_collection.update_one(
-            {'_id': clean_number, 'processing': {'$ne': True}},
-            {'$set': {'processing': True, 'processing_started_at': now}},
-            upsert=True 
+
+        # 1. Garante que o cliente existe no banco (SEM TRAVAR)
+        # O upsert=True aqui é SEGURO porque é um setOnInsert (só cria se não existir)
+        conversation_collection.update_one(
+            {'_id': clean_number},
+            {'$setOnInsert': {'created_at': now, 'history': []}},
+            upsert=True
         )
 
-        if res.matched_count == 0 and res.upserted_id is None:
-            print(f"⏳ {clean_number} já está sendo processado (lock). Reagendando...")
-            if buffered_message_text:
-                if clean_number not in message_buffer: message_buffer[clean_number] = []
-                message_buffer[clean_number].insert(0, buffered_message_text)
+        # 2. Tenta pegar o crachá de atendimento (LOCK)
+        # OBRIGATÓRIO: upsert=False (Padrão). Se não achar, NÃO CRIA NADA.
+        # Isso elimina 100% o erro E11000 (Duplicate Key).
+        res = conversation_collection.update_one(
+            {'_id': clean_number, 'processing': {'$ne': True}},
+            {'$set': {'processing': True, 'processing_started_at': now}}
+        )
+
+        # 3. SE NÃO CONSEGUIU O CRACHÁ (Matched Count = 0), ESPERA NA FILA
+        if res.matched_count == 0:
+            print(f"⏳ {clean_number} está ocupado. Colocando mensagem na FILA DE ESPERA...")
             
-            timer = threading.Timer(10.0, _trigger_ai_processing, args=[clean_number, message_data])
+            # Devolve o texto para o buffer (início da fila)
+            if buffered_message_text:
+                if clean_number not in message_buffer: 
+                    message_buffer[clean_number] = []
+                
+                # Evita duplicação no buffer e coloca no topo
+                if buffered_message_text not in message_buffer[clean_number]:
+                    message_buffer[clean_number].insert(0, buffered_message_text)
+            
+            # Agenda nova tentativa em 4 segundos (Backoff)
+            timer = threading.Timer(4.0, _trigger_ai_processing, args=[clean_number, message_data])
             message_timers[clean_number] = timer
             timer.start()
-            return 
+            return # Sai da função sem dar erro
         
         lock_acquired = True
-        # --- Fim do Lock ---
+        # ==============================================================================
         
         user_message_content = None
         
@@ -2118,6 +2144,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                     append_message_to_db(clean_number, 'user', msg_text)
         else:
             message = message_data.get('message', {})
+            # Lógica de Áudio (Mantida do seu código original)
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
                 print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
@@ -2128,47 +2155,41 @@ def process_message_logic(message_data, buffered_message_text=None):
                 with open(temp_audio_path, 'wb') as f: f.write(audio_data)
                 
                 user_message_content = transcrever_audio_gemini(temp_audio_path)
-                
-                try:
-                    os.remove(temp_audio_path)
-                except Exception as e:
-                    print(f"Aviso: não foi possível remover áudio temporário. {e}")
+                try: os.remove(temp_audio_path)
+                except: pass
 
                 if not user_message_content:
                     send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧", delay_ms=2000)
-                    user_message_content = "[Usuário enviou um áudio incompreensível]"
+                    user_message_content = "[Áudio incompreensível]"
             
             if not user_message_content:
-                user_message_content = "[Usuário enviou uma mensagem não suportada]"
-                
+                user_message_content = "[Mensagem não suportada]"
+            
             append_message_to_db(clean_number, 'user', user_message_content)
 
-        print(f"🧠 Processando Mensagem de {clean_number}: '{user_message_content}'")
+        print(f"🧠 IA Pensando para {clean_number}: '{user_message_content}'")
         
-        # --- LÓGICA DE INTERVENÇÃO (Verifica se é o Admin) ---
+        # --- Checagem de Admin ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
             if handle_responsible_command(user_message_content, clean_number):
                 return 
 
-        # --- LÓGICA DE "BOT LIGADO/DESLIGADO" ---
+        # --- Checagem Bot On/Off ---
         try:
-            bot_status_doc = conversation_collection.find_one({'_id': 'BOT_STATUS'})
-            is_active = bot_status_doc.get('is_active', True) if bot_status_doc else True 
-            
-            if not is_active:
-                print(f"🤖 Bot está em standby (desligado). Ignorando mensagem de {sender_name_from_wpp} ({clean_number}).")
+            bot_status = conversation_collection.find_one({'_id': 'BOT_STATUS'})
+            if bot_status and not bot_status.get('is_active', True):
+                print(f"🤖 Bot desligado. Ignorando {clean_number}.")
                 return 
-                
-        except Exception as e:
-            print(f"⚠️ Erro ao verificar o status do bot: {e}. Assumindo que está ligado.")
+        except: pass
 
-        conversation_status = conversation_collection.find_one({'_id': clean_number})
-
-        if conversation_status and conversation_status.get('intervention_active', False):
+        # --- Checagem Intervenção ---
+        convo_status = conversation_collection.find_one({'_id': clean_number})
+        if convo_status and convo_status.get('intervention_active', False):
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
             return 
 
-        known_customer_name = conversation_status.get('customer_name') if conversation_status else None
+        # Pega o nome para passar pra IA
+        known_customer_name = convo_status.get('customer_name') if convo_status else None
         
         log_info(f"[DEBUG RASTREIO | PONTO 2] Conteúdo final para IA (Cliente {clean_number}): '{user_message_content}'")
 
@@ -2180,88 +2201,57 @@ def process_message_logic(message_data, buffered_message_text=None):
         )
         
         if not ai_reply:
-            print("⚠️ A IA não gerou resposta.")
+            print("⚠️ A IA retornou vazio.")
             return 
 
         try:
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
-            # --- LÓGICA DE INTERVENÇÃO (Pós-IA) ---
+            # Lógica de Intervenção vinda da IA
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
-                
-                conversation_collection.update_one(
-                    {'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True
-                )
-                
-                # Intervenção urgente: 2 segundos
-                send_whatsapp_message(sender_number_full, "Só mais um instante, o Lucas já vai falar com você 🙏.", delay_ms=2000)
+                conversation_collection.update_one({'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True)
+                send_whatsapp_message(sender_number_full, "Um momento, estou chamando o Lucas! 🏃‍♂️", delay_ms=2000)
                 
                 if RESPONSIBLE_NUMBER:
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                     display_name = known_customer_name or sender_name_from_wpp
                     
-                    history_summary = "Nenhum histórico de conversa encontrado."
-                    if conversation_status:
-                        history_com_ultima_msg = load_conversation_from_db(clean_number).get('history', [])
-                        history_summary = get_last_messages_summary(history_com_ultima_msg)
-
-                    notification_msg = (
-                        f"🔔 *NOVA SOLICITAÇÃO DE ATENDIMENTO HUMANO* 🔔\n\n"
-                        f"👤 *Cliente:* {display_name}\n"
-                        f"📞 *Número:* `{clean_number}`\n\n"
-                        f"💬 *Motivo da Chamada:*\n_{reason}_\n\n"
-                        f"-----------------------------------\n"
-                        f"*AÇÃO NECESSÁRIA:*\nApós resolver, envie para *ESTE NÚMERO* o comando:\n`ok {clean_number}`\n"
-                        f"-----------------------------------\n"
-                        f"📜 *Resumo da Conversa:*\n{history_summary}\n\n"
-                        
+                    hist = load_conversation_from_db(clean_number).get('history', [])
+                    resumo = get_last_messages_summary(hist)
+                    
+                    msg_admin = (
+                        f"🚨 *INTERVENÇÃO SOLICITADA*\n"
+                        f"👤 {display_name} ({clean_number})\n"
+                        f"❓ Motivo: {reason}\n\n"
+                        f"📝 *Resumo:*\n{resumo}\n\n"
+                        f"👉 Para reativar o bot: `ok {clean_number}`"
                     )
-                    send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", notification_msg, delay_ms=1000)
+                    send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin, delay_ms=1000)
             
-            # --- INÍCIO DA LÓGICA DE ENVIO (COM A NOVA REGRA DE TEMPO) ---
             else:
-                def is_gabarito_de_confirmacao(text: str) -> bool:
-                    text_lower = text.lower()
-                    checks = [
-                        "nome:" in text_lower,
-                        "cpf:" in text_lower,
-                        "telefone:" in text_lower,
-                        "serviço:" in text_lower or "servico:" in text_lower,
-                        "data:" in text_lower,
-                        "hora:" in text_lower
-                    ]
-                    if sum(checks) >= 4: return True
-                    return False
+                # Lógica de Envio Normal (Gabarito vs Fracionado)
+                def is_gabarito(text):
+                    required = ["nome:", "cpf:", "telefone:", "serviço:", "data:", "hora:"]
+                    found = [k for k in required if k in text.lower()]
+                    return len(found) >= 3
 
-                if is_gabarito_de_confirmacao(ai_reply):
-                    # GABARITO: É uma mensagem única importante. Vamos dar 5 segundos.
-                    print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}: {ai_reply}")
-                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=5000)
-                
+                if is_gabarito(ai_reply):
+                    print(f"🤖 Resposta da IA (Gabarito) para {sender_name_from_wpp}")
+                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=4000)
                 else:
-                    # CONVERSA NORMAL: Aplica a regra 5s (primeira) / 7s (demais)
-                    print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}: {ai_reply}")
-                    
+                    print(f"🤖 Resposta da IA (Normal) para {sender_name_from_wpp}")
                     paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+                    if not paragraphs: return
 
-                    if not paragraphs:
-                        print(f"⚠️ IA gerou uma resposta vazia após o split para {sender_name_from_wpp}.")
-                        return 
-                    
                     for i, para in enumerate(paragraphs):
-                        current_delay_ms = 4000 if i == 0 else 5000
-                        
-                        send_whatsapp_message(sender_number_full, para, delay_ms=current_delay_ms)
-                        
-                        # O Python espera o tempo da animação terminar antes de mandar o próximo
-                        time_to_wait = current_delay_ms / 1000
-                        time.sleep(time_to_wait)
-            # --- FIM DA LÓGICA DE ENVIO ---
+                        current_delay = 4000 if i == 0 else 5000
+                        send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
+                        time.sleep(current_delay / 1000)
 
         except Exception as e:
-            print(f"❌ Erro ao processar envio ou intervenção: {e}")
-            send_whatsapp_message(sender_number_full, "Desculpe, tive um problema ao processar sua resposta. (Erro interno: SEND_LOGIC)", delay_ms=1000)
+            print(f"❌ Erro no envio: {e}")
+            send_whatsapp_message(sender_number_full, "Tive um erro técnico. Pode repetir?", delay_ms=1000)
 
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
