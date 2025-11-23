@@ -1003,16 +1003,27 @@ def verificar_followup_automatico():
 
             for cliente in candidatos:
                 cid = cliente['_id']
-                nome = cliente.get('customer_name') or cliente.get('sender_name') or "Cliente"
+                
+                # --- CORREÇÃO AQUI (Removido sender_name) ---
+                # Só usamos o nome se ele foi OFICIALMENTE capturado (customer_name).
+                # Se não tiver, a variável fica None e a IA usa tratamento neutro.
+                nome_oficial = cliente.get('customer_name') 
+                
+                # Para logs, usamos qualquer um, mas para a IA, só o oficial.
+                nome_log = nome_oficial or cliente.get('sender_name') or "Desconhecido"
 
-                # 1. Chama o Especialista (IA)
-                msg = gerar_msg_followup_ia(cid, r["status"], r["stage_atual"], nome)
+                # 1. Chama o Especialista (IA) passando APENAS o nome oficial (ou None)
+                msg = gerar_msg_followup_ia(cid, r["status"], r["stage_atual"], nome_oficial)
                 
                 # 2. Se o especialista falhar, usa o Fallback
-                if not msg: msg = f"{nome}, {r['fallback']}"
+                if not msg: 
+                    if nome_oficial:
+                        msg = f"{nome_oficial}, {r['fallback']}"
+                    else:
+                        msg = r['fallback'] # Fallback sem nome ("Ainda está por aí?")
 
                 # 3. Executa o envio
-                print(f"🚀 Enviando para {cid}: {msg}")
+                print(f"🚀 Enviando para {cid} ({nome_log}): {msg}")
                 send_whatsapp_message(f"{cid}@s.whatsapp.net", msg)
                 append_message_to_db(cid, 'assistant', msg) # Salva no histórico!
 
