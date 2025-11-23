@@ -1448,7 +1448,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> str:
     """
     Processa a chamada de ferramenta vinda da IA.
-    NOTA: 'agenda_instance' e 'conversation_collection' são globais.
+    NOTAS: 
+    - 'agenda_instance' e 'conversation_collection' são globais.
+    - Inclui métrica de leitura de histórico profundo.
     """
     global agenda_instance, conversation_collection
     
@@ -1563,22 +1565,24 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 if not convo:
                     return json.dumps({"erro": "Histórico não encontrado."}, ensure_ascii=False)
                 
+                # 1. Pega a lista PRIMEIRO
                 history_list = convo.get('history', [])
+                
+                # 2. Agora sim podemos contar e logar
+                qtd_total_historico = len(history_list)
+                print(f"📚 [METRICA] Memória Profunda ACIONADA! A IA foi buscar no banco um total de {qtd_total_historico} mensagens antigas.")
+
+                # 3. Formata o texto
                 texto_historico = "--- INÍCIO DA MEMÓRIA PROFUNDA ---\n"
-                for m in history_list: # Aqui ele lê TUDO, isso é barato pois não vai pra IA, só o resultado vai
+                for m in history_list: 
                     r = "Cliente" if m.get('role') == 'user' else "Lyra"
                     t = m.get('text', '')
                     if not t.startswith("Chamando função"):
                         texto_historico += f"[{m.get('ts', '')[:16]}] {r}: {t}\n"
                 texto_historico += "--- FIM DA MEMÓRIA PROFUNDA ---"
-                # Retorna apenas os últimos 2000 caracteres para não estourar o token de saída
-                return json.dumps({"sucesso": True, "historico": texto_historico[-2000:]}, ensure_ascii=False)
                 
-                return json.dumps({
-                    "sucesso": True, 
-                    "info": "Aqui está o histórico completo da conversa desde o início.",
-                    "historico_completo": texto_historico[-10000:] # Limita a 10k caracteres por segurança
-                }, ensure_ascii=False)
+                # 4. Retorna o texto limitado
+                return json.dumps({"sucesso": True, "historico": texto_historico[-2000:]}, ensure_ascii=False)
                 
             except Exception as e:
                 return json.dumps({"erro": f"Falha ao ler histórico: {e}"}, ensure_ascii=False)
@@ -1589,8 +1593,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
     except Exception as e:
         log_info(f"Erro fatal em handle_tool_call ({call_name}): {e}")
         return json.dumps({"erro": f"Exceção ao processar ferramenta: {e}"}, ensure_ascii=False)
-
-
+    
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
     """
     (VERSÃO FINAL - BLINDADA COM RETRY GLOBAL, CONTABILIDADE E JANELA DESLIZANTE)
@@ -1638,6 +1641,8 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         
         # AQUI ESTÁ A CORREÇÃO: Pegamos as últimas 15 e usamos ESSA lista para TUDO
         janela_recente = history_from_db[-6:] 
+        qtd_msg_enviadas = len(janela_recente)
+        print(f"📉 [METRICA] Janela Deslizante: Enviando apenas as últimas {qtd_msg_enviadas} mensagens para o Prompt.")
         historico_texto_para_prompt = ""
         old_history_gemini_format = []
         
