@@ -2201,73 +2201,100 @@ def process_message_logic(message_data, buffered_message_text=None):
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
+        # ==============================================================================
+        # 🛡️ LÓGICA DE "SALA DE ESPERA" (Atomicidade)
+        # ==============================================================================
         now = datetime.now()
+
+        # 1. Garante que o cliente existe no banco
         conversation_collection.update_one(
             {'_id': clean_number},
             {'$setOnInsert': {'created_at': now, 'history': []}},
             upsert=True
         )
 
+        # 2. Tenta pegar o crachá de atendimento (LOCK)
         res = conversation_collection.update_one(
             {'_id': clean_number, 'processing': {'$ne': True}},
             {'$set': {'processing': True, 'processing_started_at': now}}
         )
 
+        # 3. SE NÃO CONSEGUIU O CRACHÁ, ESPERA NA FILA
         if res.matched_count == 0:
             print(f"⏳ {clean_number} está ocupado. Colocando mensagem na FILA DE ESPERA...")
             
+            # Devolve para o buffer e tenta de novo em 4s
             if buffered_message_text:
                 if clean_number not in message_buffer: 
                     message_buffer[clean_number] = []
-                
                 if buffered_message_text not in message_buffer[clean_number]:
                     message_buffer[clean_number].insert(0, buffered_message_text)
             
             timer = threading.Timer(4.0, _trigger_ai_processing, args=[clean_number, message_data])
             message_timers[clean_number] = timer
             timer.start()
-            return # Sai da função sem dar erro
+            return 
         
         lock_acquired = True
+        # ==============================================================================
         
         user_message_content = None
         
+        # --- CENÁRIO 1: TEXTO (Vindo do Buffer) ---
         if buffered_message_text:
             user_message_content = buffered_message_text
             messages_to_save = user_message_content.split(". ")
             for msg_text in messages_to_save:
                 if msg_text and msg_text.strip():
                     append_message_to_db(clean_number, 'user', msg_text)
+        
+        # --- CENÁRIO 2: MENSAGEM NOVA (Áudio ou Texto direto) ---
         else:
             message = message_data.get('message', {})
+            
+            # >>>> TRATAMENTO DE ÁUDIO (Onde a mágica acontece) <<<<
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
                 print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
+                
                 audio_base64 = message['base64']
                 audio_data = base64.b64decode(audio_base64)
                 os.makedirs("/tmp", exist_ok=True) 
                 temp_audio_path = f"/tmp/audio_{clean_number}_{message_id}.ogg"
+                
                 with open(temp_audio_path, 'wb') as f: f.write(audio_data)
                 
-                user_message_content = transcrever_audio_gemini(temp_audio_path, contact_id=clean_number)
+                # Passa o contact_id para cobrar o token corretamente
+                texto_transcrito = transcrever_audio_gemini(temp_audio_path, contact_id=clean_number)
+                
                 try: os.remove(temp_audio_path)
                 except: pass
 
+                if not texto_transcrito or texto_transcrito.startswith("["):
+                    send_whatsapp_message(sender_number_full, "Desculpe, tive um problema técnico para ouvir seu áudio. Pode escrever ou tentar de novo? 🎧", delay_ms=2000)
+                    user_message_content = "[Erro no Áudio]"
+                else:
+                    # AQUI ESTÁ O SEGREDO: Adicionamos a etiqueta para a IA saber que é áudio
+                    user_message_content = f"[Transcrição de Áudio]: {texto_transcrito}"
+            
+            else:
+                # Se não for áudio nem buffer, tenta pegar texto direto (ex: imagem com legenda)
+                user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
                 if not user_message_content:
-                    send_whatsapp_message(sender_number_full, "Desculpe, não consegui entender o áudio. Pode tentar novamente? 🎧", delay_ms=2000)
-                    user_message_content = "[Áudio incompreensível]"
+                    user_message_content = "[Mensagem não suportada (Imagem/Figurinha)]"
             
-            if not user_message_content:
-                user_message_content = "[Mensagem não suportada]"
-            
-            append_message_to_db(clean_number, 'user', user_message_content)
+            # Salva no histórico (O texto transcrito agora vai pro DB)
+            if user_message_content:
+                append_message_to_db(clean_number, 'user', user_message_content)
 
         print(f"🧠 IA Pensando para {clean_number}: '{user_message_content}'")
         
+        # --- Checagem de Admin ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
             if handle_responsible_command(user_message_content, clean_number):
                 return 
 
+        # --- Checagem Bot On/Off ---
         try:
             bot_status = conversation_collection.find_one({'_id': 'BOT_STATUS'})
             if bot_status and not bot_status.get('is_active', True):
@@ -2275,15 +2302,18 @@ def process_message_logic(message_data, buffered_message_text=None):
                 return 
         except: pass
 
+        # --- Checagem Intervenção ---
         convo_status = conversation_collection.find_one({'_id': clean_number})
         if convo_status and convo_status.get('intervention_active', False):
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
             return 
 
+        # Pega o nome para passar pra IA
         known_customer_name = convo_status.get('customer_name') if convo_status else None
         
         log_info(f"[DEBUG RASTREIO | PONTO 2] Conteúdo final para IA (Cliente {clean_number}): '{user_message_content}'")
 
+        # Chama a IA (Ela vai ler o histórico do DB, que agora tem o áudio transcrito)
         ai_reply = gerar_resposta_ia_com_tools(
             clean_number,
             sender_name_from_wpp,
@@ -2296,8 +2326,10 @@ def process_message_logic(message_data, buffered_message_text=None):
             return 
 
         try:
+            # Salva a resposta da IA no histórico
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
+            # Lógica de Intervenção vinda da IA
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
                 conversation_collection.update_one({'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True)
@@ -2307,6 +2339,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                     display_name = known_customer_name or sender_name_from_wpp
                     
+                    # Pega resumo para o admin
                     hist = load_conversation_from_db(clean_number).get('history', [])
                     resumo = get_last_messages_summary(hist)
                     
@@ -2320,6 +2353,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin, delay_ms=1000)
             
             else:
+                # Lógica de Envio Normal (Gabarito vs Fracionado)
                 def is_gabarito(text):
                     required = ["nome:", "cpf:", "telefone:", "serviço:", "data:", "hora:"]
                     found = [k for k in required if k in text.lower()]
@@ -2345,6 +2379,7 @@ def process_message_logic(message_data, buffered_message_text=None):
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
+        # --- Libera o Lock ---
         if clean_number and lock_acquired and conversation_collection is not None:
             conversation_collection.update_one(
                 {'_id': clean_number},
