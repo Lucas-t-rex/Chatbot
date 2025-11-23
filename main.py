@@ -280,7 +280,7 @@ class Agenda:
             log_info(f"Erro em buscar_por_cpf: {e}")
             return {"erro": f"Falha ao buscar CPF no banco de dados: {e}"}
 
-    def salvar(self, nome: str, cpf_raw: str, telefone: str, servico: str, data_str: str, hora_str: str) -> Dict[str, Any]:
+    def salvar(self, nome: str, cpf_raw: str, telefone: str, servico: str, data_str: str, hora_str: str, owner_id: str = None) -> Dict[str, Any]:
         # --- TRATAMENTOS BÁSICOS ---
         apenas_numeros = re.sub(r'\D', '', str(cpf_raw)) if cpf_raw else ""
         cpf = limpar_cpf(cpf_raw)
@@ -337,6 +337,7 @@ class Agenda:
                 return {"erro": f"Horário {hora} indisponível. O proprietário já está ocupado neste horário."}
             
             novo_documento = {
+                "owner_whatsapp_id": owner_id,  
                 "nome": nome.strip(),
                 "cpf": cpf,
                 "telefone": telefone.strip(),
@@ -344,6 +345,7 @@ class Agenda:
                 "duracao_minutos": duracao_minutos,
                 "inicio": inicio_dt, 
                 "fim": fim_dt,
+                "reminder_sent": False, 
                 "created_at": datetime.now(timezone.utc)
             }
             
@@ -1074,6 +1076,87 @@ def get_last_messages_summary(history, max_messages=4):
             
     return "\n".join(relevant_summary)
 
+def verificar_lembretes_agendados():
+    if not agenda_instance or not conversation_collection:
+        return
+
+    print("⏰ [Job] Verificando lembretes de agendamento...")
+    
+    try:
+        agora = datetime.now()
+        janela_limite = agora + timedelta(hours=24)
+        
+        query = {
+            "inicio": {"$gt": agora, "$lte": janela_limite},
+            "reminder_sent": {"$ne": True},
+            "created_at": {"$lte": datetime.now(timezone.utc) - timedelta(hours=2)} 
+        }
+
+        # Buscamos os candidatos
+        pendentes = list(agenda_instance.collection.find(query))
+        
+        if not pendentes:
+            return # Nada para fazer
+
+        print(f"🔔 Encontrados {len(pendentes)} clientes para lembrar.")
+
+        for ag in pendentes:
+            try:
+                # Prioridade: ID da conversa. Fallback: Telefone do cadastro
+                destinatario_id = ag.get("owner_whatsapp_id")
+                if not destinatario_id:
+                    # Tenta limpar o telefone salvo se não tiver o ID
+                    raw_tel = ag.get("telefone", "")
+                    destinatario_id = re.sub(r'\D', '', str(raw_tel))
+                
+                if not destinatario_id:
+                    print(f"⚠️ Pulei agendamento {ag['_id']} sem ID válido.")
+                    continue
+
+                # Formatação Inteligente da Data
+                data_inicio = ag["inicio"]
+                nome_cliente = ag.get("nome", "Cliente").split()[0].capitalize()
+                hora_formatada = data_inicio.strftime('%H:%M')
+                
+                # Lógica de "Amanhã" vs "Hoje"
+                dia_agendamento = data_inicio.date()
+                dia_hoje = agora.date()
+                
+                if dia_agendamento == dia_hoje:
+                    texto_dia = "hoje mais tarde"
+                elif dia_agendamento == dia_hoje + timedelta(days=1):
+                    texto_dia = "amanhã"
+                else:
+                    texto_dia = f"no dia {data_inicio.strftime('%d/%m')}"
+
+                # Mensagem Amigável
+                msg_lembrete = (
+                    f"Oi {nome_cliente}! Passando pra lembrar do seu compromisso conosco {texto_dia} às {hora_formatada}. "
+                    "Te espero ansiosa! 😊"
+                )
+
+                # Envio
+                jid_destino = f"{destinatario_id}@s.whatsapp.net"
+                print(f"🚀 Enviando lembrete para {jid_destino}...")
+                send_whatsapp_message(jid_destino, msg_lembrete)
+
+                # Flag de Sucesso (Update Atômico)
+                agenda_instance.collection.update_one(
+                    {"_id": ag["_id"]},
+                    {"$set": {"reminder_sent": True}}
+                )
+                
+                # Opcional: Salvar no histórico de conversa também
+                append_message_to_db(destinatario_id, 'assistant', msg_lembrete)
+                
+                time.sleep(2) # Pausa amigável entre envios
+
+            except Exception as e_loop:
+                print(f"❌ Erro ao processar lembrete individual: {e_loop}")
+
+    except Exception as e:
+        print(f"❌ Erro crítico no Job de Lembretes: {e}")
+
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "") -> str:
     
     # Esta é a verificação que você pediu:
@@ -1404,7 +1487,8 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 telefone=telefone_arg, # Use a variável modificada
                 servico=args.get("servico", ""),
                 data_str=args.get("data", ""),
-                hora_str=args.get("hora", "")
+                hora_str=args.get("hora", ""),
+                owner_id=contact_id
             )
             return json.dumps(resp, ensure_ascii=False)
 
@@ -2280,6 +2364,9 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
     
     scheduler.add_job(verificar_followup_automatico, 'interval', minutes=1)
     print(f"⏰ Agendador de Follow-up iniciado (Estágios ativos: {TEMPO_FOLLOWUP_1}, {TEMPO_FOLLOWUP_2}, {TEMPO_FOLLOWUP_3} min).")
+
+    scheduler.add_job(verificar_lembretes_agendados, 'interval', minutes=60)
+    print("⏰ Agendador de Lembretes (24h antes) iniciado.")
     
     import atexit
     atexit.register(lambda: scheduler.shutdown())
