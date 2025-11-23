@@ -21,7 +21,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from typing import Any, Dict, List, Optional
 
 CLIENT_NAME="Neuro'up Soluções em Tecnologia"
-RESPONSIBLE_NUMBER="554898389781" 
+RESPONSIBLE_NUMBER="554898389781"
 
 load_dotenv()
 
@@ -56,7 +56,7 @@ message_buffer = {}
 message_timers = {}
 BUFFER_TIME_SECONDS=8
 
-TEMPO_FOLLOWUP_1 = 2   
+TEMPO_FOLLOWUP_1 = 2
 TEMPO_FOLLOWUP_2 = 3
 TEMPO_FOLLOWUP_3 = 4
 
@@ -1564,12 +1564,15 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                     return json.dumps({"erro": "Histórico não encontrado."}, ensure_ascii=False)
                 
                 history_list = convo.get('history', [])
-                texto_historico = ""
-                for m in history_list:
+                texto_historico = "--- INÍCIO DA MEMÓRIA PROFUNDA ---\n"
+                for m in history_list: # Aqui ele lê TUDO, isso é barato pois não vai pra IA, só o resultado vai
                     r = "Cliente" if m.get('role') == 'user' else "Lyra"
                     t = m.get('text', '')
                     if not t.startswith("Chamando função"):
                         texto_historico += f"[{m.get('ts', '')[:16]}] {r}: {t}\n"
+                texto_historico += "--- FIM DA MEMÓRIA PROFUNDA ---"
+                # Retorna apenas os últimos 2000 caracteres para não estourar o token de saída
+                return json.dumps({"sucesso": True, "historico": texto_historico[-2000:]}, ensure_ascii=False)
                 
                 return json.dumps({
                     "sucesso": True, 
@@ -1634,20 +1637,23 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         history_from_db = convo_data.get('history', [])
         
         # AQUI ESTÁ A CORREÇÃO: Pegamos as últimas 15 e usamos ESSA lista para TUDO
-        janela_recente = history_from_db[-15:] 
+        janela_recente = history_from_db[-6:] 
+        historico_texto_para_prompt = ""
+        old_history_gemini_format = []
         
         # Loop 1: Texto para o Prompt do Sistema
         for m in janela_recente:
-            role_name = "Cliente" if m.get('role') == 'user' else "Você (Lyra)"
+            role_name = "Cliente" if m.get('role') == 'user' else "Lyra"
             txt = m.get('text', '').replace('\n', ' ')
-            # Filtra logs técnicos
+            # Ignora logs técnicos para não gastar token e não confundir a IA
             if not txt.startswith("Chamando função") and not txt.startswith("[HUMAN"):
                 historico_texto_para_prompt += f"- {role_name}: {txt}\n"
 
-        # Loop 2: Objeto para a Memória Técnica da IA (CORRIGIDO: usa janela_recente)
+        # Loop 2: Histórico Técnico para o Gemini (CRÍTICO: Usar janela_recente aqui também!)
         for msg in janela_recente:
             role = msg.get('role', 'user')
             if role == 'assistant': role = 'model'
+            
             # Filtra logs técnicos
             if 'text' in msg and not msg['text'].startswith("Chamando função"):
                 old_history_gemini_format.append({'role': role, 'parts': [msg['text']]})
