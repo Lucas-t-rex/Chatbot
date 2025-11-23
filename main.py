@@ -96,11 +96,9 @@ def limpar_cpf(cpf_raw: Optional[str]) -> Optional[str]:
         return None
     
     s = re.sub(r'\D', '', str(cpf_raw))
-    
     l = len(s)
     if l == 22 and s[:11] == s[11:]:
         s = s[:11]
-
     return s if len(s) == 11 else None
 
 def parse_data(data_str: str) -> Optional[datetime]:
@@ -152,7 +150,20 @@ def gerar_slots_de_trabalho(intervalo_min: int) -> List[str]:
             current_min += intervalo_min
     return slots
 
-
+def extrair_tokens_da_resposta(response):
+    """
+    Extrai separadamente tokens de entrada (prompt) e saída (resposta).
+    Retorna uma tupla: (tokens_input, tokens_output)
+    """
+    try:
+        if hasattr(response, 'usage_metadata'):
+            usage = response.usage_metadata
+            # Pega entrada e saída separadamente conforme documentação oficial
+            return (usage.prompt_token_count, usage.candidates_token_count)
+        return (0, 0)
+    except:
+        return (0, 0)
+    
 class Agenda:
     def __init__(self, uri: str, db_name: str, collection_name: str):
         try:
@@ -314,23 +325,15 @@ class Agenda:
             inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
             fim_dt = inicio_dt + timedelta(minutes=duracao_minutos)
 
-            # ==============================================================================
-            # 🛡️ TRAVA DE SEGURANÇA (IDEMPOTÊNCIA) - A CORREÇÃO DO SEU BUG
-            # ==============================================================================
-            # Verifica se JÁ EXISTE um agendamento para ESTE CPF, NESTE HORÁRIO.
             already_booked = self.collection.find_one({
                 "cpf": cpf,
                 "inicio": inicio_dt
             })
 
             if already_booked:
-                # Se achou, significa que a IA chamou a função duas vezes (Duplo Clique).
-                # Retornamos SUCESSO imediato para não gerar erro de conflito.
                 log_info(f"🛡️ [Anti-Bug] Agendamento duplicado detectado para {cpf}. Retornando sucesso falso.")
                 return {"sucesso": True, "msg": f"Confirmado! O agendamento de {nome} já está garantido no sistema para {dt.strftime('%d/%m/%Y')} às {hora}."}
-            # ==============================================================================
 
-            # Só conta conflitos se NÃO for o próprio usuário (passou pela trava acima)
             conflitos_atuais = self._contar_conflitos_no_banco(inicio_dt, fim_dt)
 
             if conflitos_atuais >= NUM_ATENDENTES:
@@ -395,17 +398,14 @@ class Agenda:
         
         try:
             agora = datetime.now()
-            # A query busca todos os agendamentos futuros do CPF
             query = {"cpf": cpf, "inicio": {"$gte": agora}}
-            
-            # Usa delete_many para apagar todos que derem match
+
             resultado = self.collection.delete_many(query)
             
             count = resultado.deleted_count
             if count == 0:
                 return {"erro": "Nenhum agendamento futuro encontrado para este CPF."}
             
-            # Retorna a mensagem de sucesso com a contagem
             return {"sucesso": True, "msg": f"{count} agendamento(s) futuros foram removidos com sucesso."}
         
         except Exception as e:
@@ -549,7 +549,6 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
     tools = [
         {
             "function_declarations": [
-                # --- Ferramentas da AGENDA ---
                 {
                     "name": "fn_listar_horarios_disponiveis",
                     "description": "Verifica e retorna horários VAGOS para uma REUNIÃO em uma DATA específica. ESSENCIAL usar esta função antes de oferecer horários.",
@@ -707,16 +706,16 @@ def analisar_status_da_conversa(history):
     - SUCESSO: Se houve agendamento confirmado ou pedido de intervenção humana (falar com Lucas).
     - FRACASSO: Se o cliente recusou as ofertas/tentativas e a conversa foi encerrada (despedida).
     - ANDAMENTO: Se a conversa ainda está viva, com perguntas pendentes ou negociação em aberto.
+    
+    RETORNO: Retorna uma tupla (status, tokens_input, tokens_output)
     """
     if not history:
-        return "andamento"
-    # 1. Formata o histórico recente como um texto legível para a IA
-    # Pegamos as últimas 15 interações para ter contexto suficiente (negativas anteriores)
+        return "andamento", 0, 0
+
     msgs_para_analise = history[-15:] 
     historico_texto = ""
     
     # Verifica "fatos consumados" (Funções) no código para garantir precisão máxima no Sucesso
-    # (Ainda mantemos isso pois é à prova de falhas, mas deixamos a IA julgar o resto)
     for msg in msgs_para_analise:
         role = "Bot" if msg.get('role') in ['assistant', 'model'] else "Cliente"
         text = msg.get('text', '')
@@ -725,7 +724,8 @@ def analisar_status_da_conversa(history):
         # mas usamos para flag de sucesso imediato se for agendamento/intervenção
         if "Chamando função:" in text:
             if "fn_salvar_agendamento" in text or "fn_solicitar_intervencao" in text:
-                return "sucesso"
+                # Retorna sucesso e ZEROs (pois não gastou token de IA aqui)
+                return "sucesso", 0, 0
             continue # Pula linhas técnicas de log na leitura da IA
             
         historico_texto += f"- {role}: {text}\n"
@@ -744,10 +744,10 @@ def analisar_status_da_conversa(history):
             1. STATUS: SUCESSO (Só marque se FINALIZOU):
                - O Agendamento foi EFETIVAMENTE CONFIRMADO pelo Bot (Ex: "Agendamento salvo", "Confirmado com sucesso", "Tudo certo, te aguardamos").
                - OU houve pedido de Intervenção Humana (Falar com Lucas).
-               - IMPORTANTE: Se o cliente apenas escolheu o horário, passando cpf , ainda nao chegou a confirmar efetivamente explicitamente ate o final do gabartio, ISSO NÃO É SUCESSO AINDA.
+               - IMPORTANTE: Se o cliente apenas escolheu o horário, passando cpf, ainda nao chegou a confirmar efetivamente explicitamente ate o final do gabarito, ISSO NÃO É SUCESSO AINDA.
 
             2. STATUS: ANDAMENTO (Prioridade Alta)
-               - Use este status se o Bot ainda está tentando argumentar, oferecendo "teste grátis", perguntando o motivo da recusa ou tentando reverter o "não". Resumindo a converssa ainda esta viva.
+               - Use este status se o Bot ainda está tentando argumentar, oferecendo "teste grátis", perguntando o motivo da recusa ou tentando reverter o "não". Resumindo a conversa ainda esta viva.
                - ATENÇÃO: Se o cliente disse "não", mas o Bot respondeu com uma pergunta ou contra-oferta, o status É ANDAMENTO. A venda ainda não morreu.
 
             3. STATUS: FRACASSO
@@ -758,33 +758,43 @@ def analisar_status_da_conversa(history):
             Responda APENAS uma palavra: SUCESSO, FRACASSO ou ANDAMENTO.
             """
             
-            # Configuração de segurança baixa para não bloquear a análise
+            # Chama a IA
             resp = modelo_ia.generate_content(prompt_auditoria)
+            
+            # --- CAPTURA SEPARADA (Importante para o cálculo financeiro) ---
+            in_tokens, out_tokens = extrair_tokens_da_resposta(resp)
+            # ---------------------------------------------------------------
+
             status_ia = resp.text.strip().upper()
 
-            if "SUCESSO" in status_ia: return "sucesso"
-            if "FRACASSO" in status_ia: return "fracasso"
-            if "ANDAMENTO" in status_ia: return "andamento"
+            if "SUCESSO" in status_ia: return "sucesso", in_tokens, out_tokens
+            if "FRACASSO" in status_ia: return "fracasso", in_tokens, out_tokens
+            
+            # Qualquer outra coisa é andamento
+            return "andamento", in_tokens, out_tokens
 
         except Exception as e:
             print(f"⚠️ Erro na auditoria de status da IA: {e}")
-            return "andamento" # Fallback seguro
+            return "andamento", 0, 0 # Fallback seguro
 
-    return "andamento"
+    return "andamento", 0, 0
 
-def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used, ultima_msg_gerada=None):
+def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used_chat_in, tokens_used_chat_out, ultima_msg_gerada=None):
     if conversation_collection is None: return
     try:
         doc_atual = conversation_collection.find_one({'_id': contact_id})
         historico_atual = doc_atual.get('history', []) if doc_atual else []
-        status_anterior = doc_atual.get('conversation_status', 'andamento') if doc_atual else 'andamento' # <--- Pega o status velho
+        status_anterior = doc_atual.get('conversation_status', 'andamento') if doc_atual else 'andamento'
 
         if ultima_msg_gerada:
             historico_atual.append({'role': 'assistant', 'text': ultima_msg_gerada})
 
-        # 1. A IA Analisa o NOVO status
-        # (Se estava 'fracasso' e o cliente disse "quero comprar", a IA vai retornar 'andamento')
-        status_calculado = analisar_status_da_conversa(historico_atual)
+        status_calculado, audit_in, audit_out = analisar_status_da_conversa(historico_atual)
+
+        final_input = tokens_used_chat_in + audit_in
+        final_output = tokens_used_chat_out + audit_out
+        
+        total_combined = final_input + final_output
         
         update_payload = {
             'sender_name': sender_name,
@@ -792,24 +802,18 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used,
             'conversation_status': status_calculado,
         }
 
-        # --- LÓGICA ANTI-LOOP INFINITO (SENIOR) ---
+        # --- LÓGICA DE RESET DE ESTÁGIO ---
         should_reset_stage = False
-
-        # CASO A: Sempre reseta se estiver em andamento (conversa viva)
+        
         if status_calculado == 'andamento':
             should_reset_stage = True
         
-        # CASO B: Reseta se o status MUDOU (ex: Andamento -> Sucesso, ou Fracasso -> Andamento)
-        # Isso garante que o follow-up de sucesso dispare na primeira vez, e que a repescagem funcione.
         elif status_calculado != status_anterior:
             should_reset_stage = True
         
-        # CASO C: Se for Sucesso -> Sucesso ou Fracasso -> Fracasso, NÃO RESETA.
-        # Mantemos o estágio onde está (provavelmente já enviado) para não repetir msg.
-
         if should_reset_stage:
             update_payload['followup_stage'] = 0
-        # -------------------------------------------
+        # ----------------------------------
 
         if customer_name:
             update_payload['customer_name'] = customer_name
@@ -818,7 +822,11 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used,
             {'_id': contact_id},
             {
                 '$set': update_payload,
-                '$inc': {'total_tokens_consumed': tokens_used}
+                '$inc': {
+                    'total_tokens_consumed': total_combined, # Total Geral
+                    'tokens_input': final_input,             # Novo Campo: Só entrada (barato)
+                    'tokens_output': final_output            # Novo Campo: Só saída (caro)
+                } 
             },
             upsert=True
         )
@@ -831,7 +839,6 @@ def load_conversation_from_db(contact_id):
         result = conversation_collection.find_one({'_id': contact_id})
         if result:
             history = result.get('history', [])
-            # Filtra o prompt do sistema antigo (boa prática)
             history_filtered = [msg for msg in history if not msg.get('text', '').strip().startswith("A data e hora atuais são:")]
             history_sorted = sorted(history_filtered, key=lambda m: m.get('ts', ''))
             result['history'] = history_sorted
@@ -845,12 +852,10 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
     """
     Função especialista: Gera Copywriting persuasivo baseado em estágios psicológicos.
     """
-    # Verificação de segurança (Anti-Crash)
     if modelo_ia is None or conversation_collection is None:
         return None
 
     try:
-        # 1. Contextualização (Lê as últimas 6 mensagens)
         convo_data = conversation_collection.find_one({'_id': contact_id})
         history = convo_data.get('history', [])[-6:]
         
@@ -858,19 +863,16 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         for m in history:
             role = "Cliente" if m.get('role') == 'user' else "Lyra"
             txt = m.get('text', '').replace('\n', ' ')
-            # Filtra logs técnicos para não sujar o contexto da IA
             if not txt.startswith("Chamando função") and not txt.startswith("[HUMAN"):
                 historico_texto += f"- {role}: {txt}\n"
 
-        # --- LÓGICA DE NOME ---
         nome_valido = False
-        # Lista de palavras para ignorar
         if nome_cliente and str(nome_cliente).lower() not in ['cliente', 'none', 'null', 'unknown', 'none']:
             nome_valido = True
         
         if nome_valido:
             regra_tratamento = f"- Use o nome '{nome_cliente}' de forma natural e esporádica."
-            display_name = nome_cliente # Nome real para o prompt
+            display_name = nome_cliente 
         else:
             regra_tratamento = (
                 "- NOME DESCONHECIDO: NÃO invente um nome. NÃO chame de 'cliente'.\n"
@@ -878,9 +880,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                 "- Evite artigos de gênero (o/a) se não souber se é homem ou mulher."
             )
             display_name = "o cliente (nome não capturado)" # Nome genérico para o prompt interno
-        # ----------------------
 
-        # 2. Definição da Estratégia Psicológica (O "Brain" da Venda)
         instrucao = ""
 
         if status_alvo == "sucesso":
@@ -907,15 +907,12 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
             3. Mostre que a nossa solução tornaria tudo mais simples e leve — benefício imediato.
             4. Finalize deixando a porta aberta com classe, convidando a pessoa a repensar quando quiser.
             5. Lembrar: Esta é uma tentativa final de repescagem, portanto deve soar leve, simpática e agradável.
-            DIRETRIZ DE TOM:
-            Frases no estilo: "Não vai me dizer que vai continuar com isso?", sempre com carinho, suavidade e sem julgar.
             """
             )
             
         elif status_alvo == "andamento":
             
             if estagio == 1:
-                # MENSAGEM 1: Reciprocidade + Respeito à rotina
                 instrucao = (
                     f"""O cliente ({display_name}) parou de responder recentemente. 
                     OBJETIVO: Reconectar e validar sem parecer cobrança. 
@@ -926,7 +923,6 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                 )
             
             elif estagio == 2:
-                # MENSAGEM 2: Curiosidade + Utilidade
                 instrucao = (
                     f"""O cliente ({display_name}) continua em silêncio. 
                     OBJETIVO: Despertar interesse sem insistência. 
@@ -937,7 +933,6 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                 )
             
             elif estagio == 3:
-                # MENSAGEM 3: Fechamento Elegante + FOMO Leve
                 instrucao = (
                     f"""Última tentativa para ({display_name}). 
                     OBJETIVO: Gerar urgência emocional suave + fechamento elegante. 
@@ -948,10 +943,8 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                     4. Se despeça, agradeça e se mantenha a disposição."""
                 )
             else:
-                # Fallback genérico caso estagio venha errado
                 instrucao = f"O cliente ({display_name}) está inativo. Pergunte educadamente se ainda tem interesse."
 
-        # 3. O Prompt Mestre
         prompt = f"""
         Você é a Lyra. Analise o histórico abaixo e gere uma mensagem de retomada.
         
@@ -969,6 +962,20 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         """
         
         resp = modelo_ia.generate_content(prompt)
+
+        # --- CONTABILIDADE SEPARADA (Input vs Output) ---
+        in_tok, out_tok = extrair_tokens_da_resposta(resp)
+        
+        if in_tok > 0 or out_tok > 0:
+            conversation_collection.update_one(
+                {'_id': contact_id},
+                {'$inc': {
+                    'total_tokens_consumed': in_tok + out_tok, # Mantém o total
+                    'tokens_input': in_tok,                    # Input (Prompt + Histórico)
+                    'tokens_output': out_tok                   # Output (Resposta Gerada)
+                }}
+            )
+
         return resp.text.strip()
 
     except Exception as e:
@@ -980,20 +987,15 @@ def verificar_followup_automatico():
 
     try:
         agora = datetime.now()
-        
-        # Configuração das regras
         regras = [
-            # Finais (Encerramento)
             {"status": "sucesso",  "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_SUCESSO,  "fallback": "Obrigada! Qualquer coisa estou por aqui."},
             {"status": "fracasso", "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_FRACASSO, "fallback": "Se mudar de ideia, é só chamar!"},
-            # Andamento (Funil)
             {"status": "andamento", "stage_atual": 0, "prox_stage": 1, "time": TEMPO_FOLLOWUP_1, "fallback": "Ainda está por aí?"},
             {"status": "andamento", "stage_atual": 1, "prox_stage": 2, "time": TEMPO_FOLLOWUP_2, "fallback": "Ficou alguma dúvida?"},
             {"status": "andamento", "stage_atual": 2, "prox_stage": 3, "time": TEMPO_FOLLOWUP_3, "fallback": "Vou encerrar por aqui para não incomodar."}
         ]
 
         for r in regras:
-            # Query otimizada
             query = {
                 "conversation_status": r["status"],
                 "last_interaction": {"$lt": agora - timedelta(minutes=r["time"])},
@@ -1011,30 +1013,22 @@ def verificar_followup_automatico():
             for cliente in candidatos:
                 cid = cliente['_id']
                 
-                # --- CORREÇÃO AQUI (Removido sender_name) ---
-                # Só usamos o nome se ele foi OFICIALMENTE capturado (customer_name).
-                # Se não tiver, a variável fica None e a IA usa tratamento neutro.
                 nome_oficial = cliente.get('customer_name') 
-                
-                # Para logs, usamos qualquer um, mas para a IA, só o oficial.
+
                 nome_log = nome_oficial or cliente.get('sender_name') or "Desconhecido"
 
-                # 1. Chama o Especialista (IA) passando APENAS o nome oficial (ou None)
                 msg = gerar_msg_followup_ia(cid, r["status"], r["stage_atual"], nome_oficial)
-                
-                # 2. Se o especialista falhar, usa o Fallback
+
                 if not msg: 
                     if nome_oficial:
                         msg = f"{nome_oficial}, {r['fallback']}"
                     else:
                         msg = r['fallback'] # Fallback sem nome ("Ainda está por aí?")
 
-                # 3. Executa o envio
                 print(f"🚀 Enviando para {cid} ({nome_log}): {msg}")
                 send_whatsapp_message(f"{cid}@s.whatsapp.net", msg)
-                append_message_to_db(cid, 'assistant', msg) # Salva no histórico!
+                append_message_to_db(cid, 'assistant', msg) 
 
-                # 4. Atualiza o banco
                 conversation_collection.update_one({'_id': cid}, {'$set': {'followup_stage': r["prox_stage"]}})
 
     except Exception as e:
@@ -1042,32 +1036,26 @@ def verificar_followup_automatico():
 
 def get_last_messages_summary(history, max_messages=4):
     clean_history = []
-    
-    # 1. Processa o histórico COMPLETO para limpar o "lixo"
+
     for message in history: 
         role = "Cliente" if message.get('role') == 'user' else "Bot"
         text = message.get('text', '').strip()
 
-        # --- FILTROS (Mantém os antigos e adiciona os novos) ---
         if role == "Cliente" and text.startswith("A data e hora atuais são:"):
             continue 
         if role == "Bot" and text.startswith("Entendido. A Regra de Ouro"):
             continue 
-        
-        # --- NOVOS FILTROS (Para limpar a notificação) ---
+
         if role == "Bot" and text.startswith("Chamando função:"):
             continue
         if role == "Bot" and text.startswith("[HUMAN_INTERVENTION]"):
             continue
-        # --- FIM DOS NOVOS FILTROS ---
             
         clean_history.append(f"*{role}:* {text}")
     
-    # 2. Pega os últimos 'max_messages' da lista JÁ LIMPA
     relevant_summary = clean_history[-max_messages:]
     
     if not relevant_summary:
-        # Fallback: Se tudo for filtrado, pega a última mensagem real do cliente
         user_messages = [msg.get('text') for msg in history if msg.get('role') == 'user' and not msg.get('text', '').startswith("A data e hora atuais são:")]
         if user_messages:
             return f"*Cliente:* {user_messages[-1]}"
@@ -1092,7 +1080,6 @@ def verificar_lembretes_agendados():
             "created_at": {"$lte": datetime.now(timezone.utc) - timedelta(hours=2)} 
         }
 
-        # Buscamos os candidatos
         pendentes = list(agenda_instance.collection.find(query))
         
         if not pendentes:
@@ -1102,10 +1089,8 @@ def verificar_lembretes_agendados():
 
         for ag in pendentes:
             try:
-                # Prioridade: ID da conversa. Fallback: Telefone do cadastro
                 destinatario_id = ag.get("owner_whatsapp_id")
                 if not destinatario_id:
-                    # Tenta limpar o telefone salvo se não tiver o ID
                     raw_tel = ag.get("telefone", "")
                     destinatario_id = re.sub(r'\D', '', str(raw_tel))
                 
@@ -1113,12 +1098,10 @@ def verificar_lembretes_agendados():
                     print(f"⚠️ Pulei agendamento {ag['_id']} sem ID válido.")
                     continue
 
-                # Formatação Inteligente da Data
                 data_inicio = ag["inicio"]
                 nome_cliente = ag.get("nome", "Cliente").split()[0].capitalize()
                 hora_formatada = data_inicio.strftime('%H:%M')
                 
-                # Lógica de "Amanhã" vs "Hoje"
                 dia_agendamento = data_inicio.date()
                 dia_hoje = agora.date()
                 
@@ -1129,27 +1112,22 @@ def verificar_lembretes_agendados():
                 else:
                     texto_dia = f"no dia {data_inicio.strftime('%d/%m')}"
 
-                # Mensagem Amigável
                 msg_lembrete = (
                     f"Oi {nome_cliente}! Passando pra lembrar do seu compromisso conosco {texto_dia} às {hora_formatada}. "
                     "Te espero ansiosa! 😊"
                 )
 
-                # Envio
                 jid_destino = f"{destinatario_id}@s.whatsapp.net"
                 print(f"🚀 Enviando lembrete para {jid_destino}...")
                 send_whatsapp_message(jid_destino, msg_lembrete)
 
-                # Flag de Sucesso (Update Atômico)
                 agenda_instance.collection.update_one(
                     {"_id": ag["_id"]},
                     {"$set": {"reminder_sent": True}}
                 )
                 
-                # Opcional: Salvar no histórico de conversa também
                 append_message_to_db(destinatario_id, 'assistant', msg_lembrete)
-                
-                time.sleep(2) # Pausa amigável entre envios
+                time.sleep(2) 
 
             except Exception as e_loop:
                 print(f"❌ Erro ao processar lembrete individual: {e_loop}")
@@ -1159,20 +1137,14 @@ def verificar_lembretes_agendados():
 
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "") -> str:
     
-    # Esta é a verificação que você pediu:
     if known_customer_name:
-        # ==========================================================
-        # CAMINHO 1: NOME É CONHECIDO. Envia o prompt principal de vendas.
-        # ==========================================================
-        
-        # Limpa o nome para exibição
+
         palavras = known_customer_name.strip().split()
         if len(palavras) >= 2 and palavras[0].lower() == palavras[1].lower():
             known_customer_name = palavras[0].capitalize()
         else:
             known_customer_name = " ".join([p.capitalize() for p in palavras])
         
-        # A instrução de nome agora é só uma linha no topo.
         prompt_name_instruction = f"O nome do usuário com quem você está falando é: {known_customer_name}. Trate-o por este nome."
 
         prompt_final = f"""
@@ -1369,7 +1341,11 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             =====================================================
             Seu objetivo é ser uma assistente prestativa, não uma vendedora robótica. Demonstre curiosidade genuína e tente criar uma conexão amigável, mas sempre de forma profissional e concisa (poucas palavras, dinâmica). Seja "esperta" e preste atenção no que o cliente diz.
             Tente nao seguir estas estratégias como uma ordem, não tenha pressa a não ser que o cliente seja explicito no que quer, saiba a hora certa de usar e pular pra proxima estratégia. 
-            
+            Como seria um fluxo ideal(Você não deve ser natural, e seguir o fluxo de acordo de como a converssa é , nada de forçar o fluxo ideal.): 
+                1. Com o nome do cliente ja captado, tira duvida de se tiver, ja perguntando qual é o negocio dele. E se nao tiver duvida, faz pergutas abertas pra induzir a converssa.
+                2. Depois tenta conectar o nosso serviço de maneira que ajude ele com o nosso , sempre vangloriando nosso preduto e serviço.
+                3. Se notar disposição ofereça o agendamento ou falar com o Lucas no momento certo!
+                
             1.  **TRANSIÇÃO PÓS-NOME:**
                 - Se o cliente já fez uma pergunta, responda imediatamente.
                 - Se o cliente só disse "Oi", puxe um assunto leve (Ex: "Prazer, Fulano! O que te traz aqui hoje?").
@@ -1456,7 +1432,6 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
     global agenda_instance, conversation_collection
     
     try:
-        # --- Ferramentas da AGENDA ---
         if not agenda_instance and call_name.startswith("fn_"):
             if call_name in ["fn_listar_horarios_disponiveis", "fn_buscar_por_cpf", "fn_salvar_agendamento", "fn_excluir_agendamento", "fn_alterar_agendamento"]:
                 return json.dumps({"erro": "A função de agendamento está desabilitada (Sem conexão com o DB da Agenda)."}, ensure_ascii=False)
@@ -1475,11 +1450,9 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         elif call_name == "fn_salvar_agendamento":
             telefone_arg = args.get("telefone", "")
             
-            # Se a IA usou o placeholder, troque pelo contact_id (clean_number)
             if telefone_arg == "CONFIRMADO_NUMERO_ATUAL":
                 telefone_arg = contact_id 
                 print(f"ℹ️ Placeholder 'CONFIRMADO_NUMERO_ATUAL' detectado. Usando o contact_id: {contact_id}")
-            # --- FIM DA MODIFICAÇÃO ---
 
             resp = agenda_instance.salvar(
                 nome=args.get("nome", ""),
@@ -1524,29 +1497,23 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
                 nome_limpo = nome_bruto
                 try:
-                    # 1. Tenta dividir por espaço (Ex: "Daniel Daniel")
                     palavras = nome_bruto.split()
                     if len(palavras) >= 2 and palavras[0].lower() == palavras[1].lower():
                         nome_limpo = palavras[0].capitalize() # Pega só o primeiro
                         print(f"--- [DEBUG ANTI-BUG] Corrigido (Espaço): '{nome_bruto}' -> '{nome_limpo}'")
 
-                    # 2. SE NÃO FOR O CASO 1, checa se é uma palavra só duplicada (Ex: "Danieldaniel")
-                    # Esta é a lógica nova e crucial
                     else:
                         l = len(nome_bruto)
                         if l > 2 and l % 2 == 0: # Se for par e maior que 2
                             metade1 = nome_bruto[:l//2]
                             metade2 = nome_bruto[l//2:]
                             
-                            # Se as metades forem IDÊNTICAS
                             if metade1.lower() == metade2.lower():
                                 nome_limpo = metade1.capitalize() # Pega só a primeira metade
                                 print(f"--- [DEBUG ANTI-BUG] Corrigido (Sem Espaço): '{nome_bruto}' -> '{nome_limpo}'")
                             else:
-                                # Se não for duplicado, só capitaliza o que veio
                                 nome_limpo = " ".join([p.capitalize() for p in palavras])
                         else:
-                            # Se for ímpar ou não duplicado, só capitaliza
                             nome_limpo = " ".join([p.capitalize() for p in palavras])
 
                 except Exception as e:
@@ -1579,7 +1546,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
     """
-    (VERSÃO FINAL - BLINDADA COM RETRY GLOBAL)
+    (VERSÃO FINAL - BLINDADA COM RETRY GLOBAL E CONTABILIDADE FINANCEIRA)
     Gerencia o loop de ferramentas e tenta até 3 vezes se a IA devolver uma resposta vazia ou der erro.
     Aplica-se a TODAS as interações do bot.
     """
@@ -1590,7 +1557,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     if conversation_collection is None:
         return "Desculpe, estou com um problema interno (DB de conversas não carregado)."
 
-    # --- 1. PREPARAÇÃO DE DADOS (NOME E SAUDAÇÃO) ---
     def _normalize_name(n: Optional[str]) -> Optional[str]:
         if not n: return None
         s = str(n).strip()
@@ -1617,7 +1583,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         saudacao = "Olá" 
 
-    # --- 2. CARREGA HISTÓRICO ---
     convo_data = load_conversation_from_db(contact_id)
     historico_texto_para_prompt = ""
     old_history_gemini_format = []
@@ -1650,9 +1615,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         historico_str=historico_texto_para_prompt
     )
 
-    # =================================================================================
-    # 🛡️ LÓGICA DE RETRY (TENTATIVA DE RECUPERAÇÃO DE ERRO)
-    # =================================================================================
     max_retries = 3 
     for attempt in range(max_retries):
         try:
@@ -1665,7 +1627,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             
             chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
             
-            # Log apenas para monitoramento (o usuário não vê isso)
             if attempt > 0:
                 print(f"🔁 Tentativa {attempt+1} de gerar resposta para {log_display}...")
             else:
@@ -1673,12 +1634,14 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             
             resposta_ia = chat_session.send_message(user_message)
             
-            total_tokens_this_turn = 0
-            try:
-                total_tokens_this_turn += resposta_ia.usage_metadata.total_token_count
-            except: pass
+            # --- CONTABILIDADE INICIAL DO TURNO (SEPARADA) ---
+            turn_input = 0
+            turn_output = 0
+            
+            t_in, t_out = extrair_tokens_da_resposta(resposta_ia)
+            turn_input += t_in
+            turn_output += t_out
 
-            # --- LOOP DE FERRAMENTAS (TOOLS) ---
             while True:
                 cand = resposta_ia.candidates[0]
                 func_call = None
@@ -1699,89 +1662,80 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
                 log_info(f"📤 Resultado da função: {resultado_json_str}")
 
-                # Se a função foi capturar nome, a gente DERRUBA essa sessão do Gate
-                # e começa uma nova sessão com o Prompt Final IMEDIATAMENTE.
                 if call_name == "fn_capturar_nome":
                     try:
                         res_data = json.loads(resultado_json_str)
-                        nome_salvo = res_data.get("nome_salvo") or res_data.get("nome_extraido") # garante pegar o nome
+                        nome_salvo = res_data.get("nome_salvo") or res_data.get("nome_extraido") 
                         
                         if nome_salvo:
                             print(f"🔄 Troca de Contexto: Nome '{nome_salvo}' salvo! Reiniciando com Prompt de Vendas...")
                             
-                            # AQUI ACONTECE A MÁGICA QUE VOCÊ PEDIU:
-                            # O Python chama a IA de novo, mas agora passando o nome.
-                            # Isso força o Python a carregar o 'prompt_final' (que sabe o endereço).
                             return gerar_resposta_ia_com_tools(
                                 contact_id, 
                                 sender_name, 
                                 user_message, 
-                                known_customer_name=nome_salvo # <--- O Segredo está aqui
+                                known_customer_name=nome_salvo 
                             )
                     except Exception as e:
                         print(f"⚠️ Erro ao tentar reiniciar fluxo (hot-swap): {e}")
-                # ===============================================================
                 
-                # Check de intervenção humana vinda da ferramenta
                 try:
                     res_data = json.loads(resultado_json_str)
                     if res_data.get("tag_especial") == "[HUMAN_INTERVENTION]":
-                        # --- CORREÇÃO: Salva o status SUCESSO antes de retornar ---
                         msg_intervencao = f"[HUMAN_INTERVENTION] Motivo: {res_data.get('motivo', 'Solicitado.')}"
                         
+                        # Salva sucesso e cobra os tokens gastos até aqui
                         save_conversation_to_db(
                             contact_id, 
                             sender_name, 
                             known_customer_name, 
-                            total_tokens_this_turn, 
+                            turn_input, # Passa Input separado
+                            turn_output, # Passa Output separado
                             ultima_msg_gerada=msg_intervencao
                         )
 
                         return msg_intervencao
                 except: pass
 
-                # Envia o resultado da função de volta para a IA
                 resposta_ia = chat_session.send_message(
                     [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
                 )
-                try:
-                    total_tokens_this_turn += resposta_ia.usage_metadata.total_token_count
-                except: pass
+                
+                # --- SOMA TOKENS DAS FERRAMENTAS ---
+                t_in_tool, t_out_tool = extrair_tokens_da_resposta(resposta_ia)
+                turn_input += t_in_tool
+                turn_output += t_out_tool
 
-            # --- EXTRAÇÃO SEGURA DA RESPOSTA FINAL ---
+
             ai_reply_text = ""
             try:
-                # Tenta pegar o texto normal
                 ai_reply_text = resposta_ia.text
             except:
                 try:
-                    # Tenta pegar de parts[0] (estrutura alternativa)
                     ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
                 except:
-                    # SE CHEGAR AQUI, A RESPOSTA VEIO VAZIA (O ERRO DO SEU LOG)
                     print(f"⚠️ AVISO: Resposta vazia da IA na tentativa {attempt+1}. Forçando nova tentativa...")
                     if attempt < max_retries - 1:
-                        time.sleep(1.5) # Espera 1.5 seg e tenta de novo
-                        continue # Pula para a próxima rodada do loop 'for'
+                        time.sleep(1.5) 
+                        continue 
                     else:
                         raise Exception("Todas as tentativas falharam e retornaram vazio.")
 
-            # Se o código chegou aqui, temos texto válido! Salva e retorna.
-            save_conversation_to_db(contact_id, sender_name, known_customer_name, total_tokens_this_turn, ai_reply_text)
+            # Salva passando os totais separados
+            save_conversation_to_db(contact_id, sender_name, known_customer_name, turn_input, turn_output, ai_reply_text)
 
             return ai_reply_text
 
         except Exception as e:
             print(f"❌ Erro na tentativa {attempt+1}: {e}")
             if attempt < max_retries - 1:
-                time.sleep(1) # Espera um pouco antes de tentar de novo
+                time.sleep(1) 
             else:
-                # Se falhar 3 vezes seguidas, aí sim mandamos uma mensagem amigável
                 return "A mensagem que você enviou deu erro aqui no whatsapp. 😵‍💫 Pode enviar novamente, por favor?"
     
     return "Erro crítico de comunicação."
 
-def transcrever_audio_gemini(caminho_do_audio):
+def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
     if not GEMINI_API_KEY:
         print("❌ Erro: API Key não definida para transcrição.")
         return None
@@ -1790,19 +1744,31 @@ def transcrever_audio_gemini(caminho_do_audio):
 
     try:
         audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
-        
         modelo_transcritor = genai.GenerativeModel('gemini-2.5-flash') 
-        
         prompt_transcricao = "Transcreva este áudio exatamente como foi falado. Apenas o texto, sem comentários."
-
+        
         response = modelo_transcritor.generate_content([prompt_transcricao, audio_file])
         
+        # --- CONTABILIDADE SEPARADA (Input vs Output) ---
+        if contact_id and conversation_collection:
+            in_tok, out_tok = extrair_tokens_da_resposta(response)
+            
+            if in_tok > 0 or out_tok > 0:
+                conversation_collection.update_one(
+                    {'_id': contact_id},
+                    {'$inc': {
+                        'total_tokens_consumed': in_tok + out_tok, # Total (Retrocompatibilidade)
+                        'tokens_input': in_tok,                    # Input (Onde o áudio pesa)
+                        'tokens_output': out_tok                   # Output (O texto gerado)
+                    }}
+                )
+                print(f"💰 [Áudio] Tokens contabilizados: {in_tok} (Input) + {out_tok} (Output)")
+
         try:
             genai.delete_file(audio_file.name)
         except:
             pass
 
-        # 5. Extração do texto
         if response.text:
             texto_transcrito = response.text.strip()
             print(f"✅ Transcrição recebida: '{texto_transcrito}'")
@@ -1813,13 +1779,27 @@ def transcrever_audio_gemini(caminho_do_audio):
 
     except Exception as e:
         print(f"❌ Erro ao transcrever áudio: {e}")
-        # Tenta uma segunda vez (Retry simples) se for erro de conexão
         try:
             print("🔄 Tentando transcrição novamente (Retry)...")
             time.sleep(2)
             modelo_retry = genai.GenerativeModel('gemini-2.5-flash')
             audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
             response_retry = modelo_retry.generate_content(["Transcreva o áudio.", audio_file_retry])
+
+            # --- CONTABILIDADE DO RETRY (Também gasta) ---
+            if contact_id and conversation_collection:
+                in_tok_retry, out_tok_retry = extrair_tokens_da_resposta(response_retry)
+                
+                if in_tok_retry > 0 or out_tok_retry > 0:
+                    conversation_collection.update_one(
+                        {'_id': contact_id},
+                        {'$inc': {
+                            'total_tokens_consumed': in_tok_retry + out_tok_retry,
+                            'tokens_input': in_tok_retry,
+                            'tokens_output': out_tok_retry
+                        }}
+                    )
+
             genai.delete_file(audio_file_retry.name)
             return response_retry.text.strip()
         except Exception as e2:
@@ -2175,48 +2155,34 @@ def process_message_logic(message_data, buffered_message_text=None):
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
 
-        # ==============================================================================
-        # 🛡️ LÓGICA DE "SALA DE ESPERA" (A CORREÇÃO SÊNIOR)
-        # ==============================================================================
         now = datetime.now()
-
-        # 1. Garante que o cliente existe no banco (SEM TRAVAR)
-        # O upsert=True aqui é SEGURO porque é um setOnInsert (só cria se não existir)
         conversation_collection.update_one(
             {'_id': clean_number},
             {'$setOnInsert': {'created_at': now, 'history': []}},
             upsert=True
         )
 
-        # 2. Tenta pegar o crachá de atendimento (LOCK)
-        # OBRIGATÓRIO: upsert=False (Padrão). Se não achar, NÃO CRIA NADA.
-        # Isso elimina 100% o erro E11000 (Duplicate Key).
         res = conversation_collection.update_one(
             {'_id': clean_number, 'processing': {'$ne': True}},
             {'$set': {'processing': True, 'processing_started_at': now}}
         )
 
-        # 3. SE NÃO CONSEGUIU O CRACHÁ (Matched Count = 0), ESPERA NA FILA
         if res.matched_count == 0:
             print(f"⏳ {clean_number} está ocupado. Colocando mensagem na FILA DE ESPERA...")
             
-            # Devolve o texto para o buffer (início da fila)
             if buffered_message_text:
                 if clean_number not in message_buffer: 
                     message_buffer[clean_number] = []
                 
-                # Evita duplicação no buffer e coloca no topo
                 if buffered_message_text not in message_buffer[clean_number]:
                     message_buffer[clean_number].insert(0, buffered_message_text)
             
-            # Agenda nova tentativa em 4 segundos (Backoff)
             timer = threading.Timer(4.0, _trigger_ai_processing, args=[clean_number, message_data])
             message_timers[clean_number] = timer
             timer.start()
             return # Sai da função sem dar erro
         
         lock_acquired = True
-        # ==============================================================================
         
         user_message_content = None
         
@@ -2228,7 +2194,6 @@ def process_message_logic(message_data, buffered_message_text=None):
                     append_message_to_db(clean_number, 'user', msg_text)
         else:
             message = message_data.get('message', {})
-            # Lógica de Áudio (Mantida do seu código original)
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
                 print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
@@ -2238,7 +2203,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                 temp_audio_path = f"/tmp/audio_{clean_number}_{message_id}.ogg"
                 with open(temp_audio_path, 'wb') as f: f.write(audio_data)
                 
-                user_message_content = transcrever_audio_gemini(temp_audio_path)
+                user_message_content = transcrever_audio_gemini(temp_audio_path, contact_id=clean_number)
                 try: os.remove(temp_audio_path)
                 except: pass
 
@@ -2253,12 +2218,10 @@ def process_message_logic(message_data, buffered_message_text=None):
 
         print(f"🧠 IA Pensando para {clean_number}: '{user_message_content}'")
         
-        # --- Checagem de Admin ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
             if handle_responsible_command(user_message_content, clean_number):
                 return 
 
-        # --- Checagem Bot On/Off ---
         try:
             bot_status = conversation_collection.find_one({'_id': 'BOT_STATUS'})
             if bot_status and not bot_status.get('is_active', True):
@@ -2266,13 +2229,11 @@ def process_message_logic(message_data, buffered_message_text=None):
                 return 
         except: pass
 
-        # --- Checagem Intervenção ---
         convo_status = conversation_collection.find_one({'_id': clean_number})
         if convo_status and convo_status.get('intervention_active', False):
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
             return 
 
-        # Pega o nome para passar pra IA
         known_customer_name = convo_status.get('customer_name') if convo_status else None
         
         log_info(f"[DEBUG RASTREIO | PONTO 2] Conteúdo final para IA (Cliente {clean_number}): '{user_message_content}'")
@@ -2291,7 +2252,6 @@ def process_message_logic(message_data, buffered_message_text=None):
         try:
             append_message_to_db(clean_number, 'assistant', ai_reply)
             
-            # Lógica de Intervenção vinda da IA
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
                 conversation_collection.update_one({'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True)
@@ -2314,7 +2274,6 @@ def process_message_logic(message_data, buffered_message_text=None):
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin, delay_ms=1000)
             
             else:
-                # Lógica de Envio Normal (Gabarito vs Fracionado)
                 def is_gabarito(text):
                     required = ["nome:", "cpf:", "telefone:", "serviço:", "data:", "hora:"]
                     found = [k for k in required if k in text.lower()]
@@ -2340,7 +2299,6 @@ def process_message_logic(message_data, buffered_message_text=None):
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
-        # --- Libera o Lock ---
         if clean_number and lock_acquired and conversation_collection is not None:
             conversation_collection.update_one(
                 {'_id': clean_number},
@@ -2379,5 +2337,4 @@ else:
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))
-    # Desative o 'debug=True' em produção. Use 'debug=False'.
     app.run(host='0.0.0.0', port=port, debug=False)
