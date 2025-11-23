@@ -860,28 +860,49 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
             if not txt.startswith("Chamando função") and not txt.startswith("[HUMAN"):
                 historico_texto += f"- {role}: {txt}\n"
 
+        # --- LÓGICA DE NOME ---
+        nome_valido = False
+        # Lista de palavras para ignorar
+        if nome_cliente and str(nome_cliente).lower() not in ['cliente', 'none', 'null', 'unknown', 'none']:
+            nome_valido = True
+        
+        if nome_valido:
+            regra_tratamento = f"- Use o nome '{nome_cliente}' de forma natural e esporádica."
+            display_name = nome_cliente # Nome real para o prompt
+        else:
+            regra_tratamento = (
+                "- NOME DESCONHECIDO: NÃO invente um nome. NÃO chame de 'cliente'.\n"
+                "- USE TRATAMENTO NEUTRO: Comece com 'Olá', 'Ei', 'Tudo bem?' ou vá direto ao assunto.\n"
+                "- Evite artigos de gênero (o/a) se não souber se é homem ou mulher."
+            )
+            display_name = "o cliente (nome não capturado)" # Nome genérico para o prompt interno
+        # ----------------------
+
         # 2. Definição da Estratégia Psicológica (O "Brain" da Venda)
         instrucao = ""
 
         if status_alvo == "sucesso":
             instrucao = (
-                f"O cliente ({nome_cliente}) finalizou o processo com sucesso. "
-                "OBJETIVO: Agradecer com classe, reforçar vínculo e estimular continuidade. "
-                "ESTRATÉGIA PSICOLÓGICA: Gratidão genuína + Sensação de Parceria. "
-                "1. Agradeça sem exageros (seja profissional mas calorosa). "
-                "2. Crie uma sensação de parceria ('vamos seguir juntos' ou 'estamos no time'). "
-                "3. Faça o cliente sentir que fez uma ótima escolha e se sentir valorizado. "
-                "4. Não peça mais nada, apenas celebre a decisão."
+                f"""O cliente ({display_name}) finalizou o processo com sucesso. 
+                OBJETIVO: Agradecer com classe, reforçar vínculo e estimular continuidade. 
+                ESTRATÉGIA PSICOLÓGICA: Gratidão genuína + Sensação de Parceria. 
+                1. Agradeça sem exageros (seja profissional mas calorosa). 
+                2. Crie uma sensação de parceria. 
+                3. Faça o cliente sentir que fez uma ótima escolha e se sentir valorizado. 
+                4. Não peça mais nada, apenas celebre a decisão.
+                5. Contexto: Este é um contato de agradecimento pós-venda."""
             )
         
         elif status_alvo == "fracasso":
             instrucao = (
-                f"O cliente ({nome_cliente}) recusou ou desistiu. "
-                "OBJETIVO: Reverter com HUMOR, AUTOVALORIZAÇÃO e uma leve 'apertada'. "
-                "ESTRATÉGIA PSICOLÓGICA: Quebra de padrão + Humor Tático + Confiança (Zero Desespero). "
-                "1. Use HUMOR: Faça uma brincadeira leve sobre. "
-                "2. Autovalorização: Mostre que você queria muito ajudar porque SABE que funciona, mas respeita o tempo dele. "
-                "4. Finalize leve: Termine com um emoji divertido (😉, 🚀, 😂) deixando a porta aberta, mas mantendo a postura de quem se garante."
+                f"""O cliente ({display_name}) recusou ou desistiu. 
+                OBJETIVO: NÃO aceitar a perda passivamente. Tentar a 'Venda da Salvação' com HUMOR INTELIGENTE.
+                ESTRATÉGIA PSICOLÓGICA: Persistência Elegante + Foco na Dor do Manual vs. Prazer da Automação. 
+                1. NÃO diga apenas 'tchau' ou 'tudo bem'. Questione a decisão de forma leve.
+                2. TOQUE NA FERIDA (com humor): Brinque que não faz sentido ele ficar sem nós.
+                3. VENDA A SOLUÇÃO FINAL: Reforce que a Lyra resolve isso agora e traz paz/lucro.
+                4. Finalize provocando uma ação.
+                5. Contexto: Esta é uma tentativa final de reversão (Repescagem)"""
             )
             
         elif status_alvo == "andamento":
@@ -889,35 +910,40 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
             if estagio == 1:
                 # MENSAGEM 1: Reciprocidade + Respeito à rotina
                 instrucao = (
-                    f"O cliente ({nome_cliente}) parou de responder recentemente. "
-                    "OBJETIVO: Reconectar e validar sem parecer cobrança. "
-                    "ESTRATÉGIA PSICOLÓGICA: Use reciprocidade e continuação de contexto. "
-                    "1. Mostre empatia pela rotina corrida dele. "
-                    "2. Dê uma opção simples (ex: 'quer que eu resuma?') ou retome o último assunto do histórico de forma leve. "
-                    "3. Mantenha o cliente no controle."
+                    f"""O cliente ({display_name}) parou de responder recentemente. 
+                    OBJETIVO: Reconectar e validar sem parecer cobrança. 
+                    ESTRATÉGIA PSICOLÓGICA: Use reciprocidade e continuação de contexto. 
+                    1. Mostre empatia pela rotina corrida dele. 
+                    2. Dê uma opção simples (ex: 'quer que eu resuma?') ou retome o último assunto do histórico de forma leve. 
+                    3. Mantenha o cliente no controle."""
                 )
             
             elif estagio == 2:
                 # MENSAGEM 2: Curiosidade + Utilidade
                 instrucao = (
-                    f"O cliente ({nome_cliente}) continua em silêncio. "
-                    "OBJETIVO: Despertar interesse sem insistência. "
-                    "ESTRATÉGIA PSICOLÓGICA: Curiosidade + Utilidade. "
-                    "1. Não pergunte apenas 'está aí?'. "
-                    "2. Traga uma informação útil ou um detalhe interessante baseado no que conversaram antes. "
-                    "3. Ofereça clareza, não venda. Seja a especialista que ajuda."
+                    f"""O cliente ({display_name}) continua em silêncio. 
+                    OBJETIVO: Despertar interesse sem insistência. 
+                    ESTRATÉGIA PSICOLÓGICA: Curiosidade + Utilidade. 
+                    1. Não pergunte apenas 'está aí?'. 
+                    2. Traga uma informação útil ou um detalhe interessante baseado no que conversaram antes. 
+                    3. Ofereça clareza, não venda. Seja a especialista que ajuda."""
                 )
             
             elif estagio == 3:
                 # MENSAGEM 3: Fechamento Elegante + FOMO Leve
                 instrucao = (
-                    f"Última tentativa para ({nome_cliente}). "
-                    "OBJETIVO: Gerar urgência emocional suave + fechamento elegante. "
-                    "ESTRATÉGIA PSICOLÓGICA: FOMO leve + Autonomia. "
-                    "1. Encerre o ciclo com leveza (avise que vai parar de mandar mensagens por enquanto para não incomodar). "
-                    "2. Gere percepção de cuidado. "
-                    "3. Deixe a porta aberta para ele responder quando quiser, sem pressão."
+                    f"""Última tentativa para ({display_name}). 
+                    OBJETIVO: Gerar urgência emocional suave + fechamento elegante. 
+                    ESTRATÉGIA PSICOLÓGICA: FOMO leve + Autonomia. 
+                    1. Encerre o ciclo com leveza (avise que vai parar de mandar mensagens por enquanto para não incomodar). 
+                    2. Gere percepção de cuidado. 
+                    3. Deixe a porta aberta para ele responder quando quiser, sem pressão.
+                    4. Se despeça, agradeça e se mantenha a disposição."""
                 )
+            else:
+                # Fallback genérico caso estagio venha errado
+                instrucao = f"O cliente ({display_name}) está inativo. Pergunte educadamente se ainda tem interesse."
+
         # 3. O Prompt Mestre
         prompt = f"""
         Você é a Lyra. Analise o histórico abaixo e gere uma mensagem de retomada.
@@ -929,7 +955,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         {instrucao}
         
         REGRAS DE COPYWRITING:
-        - Use o nome '{nome_cliente}' de forma natural (não robótica).
+        {regra_tratamento}
         - Seja CURTA e DIALOGAL (máximo 1 ou 2 frases curtas).
         - NÃO use saudações temporais (Bom dia/Boa tarde), vá direto ao ponto.
         - O tom deve ser humano, fluido e empático.
