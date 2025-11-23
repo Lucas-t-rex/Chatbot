@@ -659,6 +659,17 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                         },
                         "required": ["nome_extraido"]
                     }
+                },
+                {
+                    "name": "fn_consultar_historico_completo",
+                    "description": "MEMÓRIA PROFUNDA: Use isto APENAS se o usuário perguntar 'lembra do que eu disse?', 'qual meu cpf mesmo?' ou citar algo antigo que não está na conversa recente. Isso lê o histórico completo do banco de dados.(É necessario apenas quando precisamos lembrar de algo falado antigamente.)",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "query": {"type_": "STRING", "description": "Opcional: O que você está procurando especificamente? (Ex: 'cpf', 'nome', 'data')"}
+                        },
+                        "required": []
+                    }
                 }
             ]
         }
@@ -1065,7 +1076,7 @@ def get_last_messages_summary(history, max_messages=4):
     return "\n".join(relevant_summary)
 
 def verificar_lembretes_agendados():
-    if not agenda_instance or not conversation_collection:
+    if agenda_instance is None or conversation_collection is None: # <--- USE "IS NONE"
         return
 
     print("⏰ [Job] Verificando lembretes de agendamento...")
@@ -1391,6 +1402,16 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             
             ### 💡 2. QUANDO O CLIENTE DIZ “VOU PENSAR” (DEPOIS DA OFERTA DA REUNIÃO)
             > “Perfeito, é bom pensar mesmo! Posso te perguntar o que você gostaria de pensar melhor? Sera que consigo te ajudar com alguma dúvida antes?.”
+
+            =====================================================
+            🧠 GESTÃO DE MEMÓRIA (IMPORTANTE)
+            =====================================================
+            ATENÇÃO: Você só está vendo as últimas 15 mensagens da conversa no contexto imediato.
+            - Se o cliente disser "Lembra que eu te falei meu CPF?" ou "Como combinamos semana passada?", você NÃO TERÁ essa informação na memória recente.
+            - NESSE CASO, você DEVE usar a ferramenta `fn_consultar_historico_completo` para ler o passado.
+            - NÃO alucine nem invente. Se não está no histórico acima e o cliente cobrou, USE A FERRAMENTA.
+            - Se nao encontrar nada diga que nao se lembra e se a pessoa pode repetir. 
+
         """
         return prompt_final
 
@@ -1535,6 +1556,29 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         elif call_name == "fn_solicitar_intervencao":
             motivo = args.get("motivo", "Motivo não especificado pela IA.")
             return json.dumps({"sucesso": True, "motivo": motivo, "tag_especial": "[HUMAN_INTERVENTION]"})
+        
+        elif call_name == "fn_consultar_historico_completo":
+            try:
+                convo = conversation_collection.find_one({'_id': contact_id})
+                if not convo:
+                    return json.dumps({"erro": "Histórico não encontrado."}, ensure_ascii=False)
+                
+                history_list = convo.get('history', [])
+                texto_historico = ""
+                for m in history_list:
+                    r = "Cliente" if m.get('role') == 'user' else "Lyra"
+                    t = m.get('text', '')
+                    if not t.startswith("Chamando função"):
+                        texto_historico += f"[{m.get('ts', '')[:16]}] {r}: {t}\n"
+                
+                return json.dumps({
+                    "sucesso": True, 
+                    "info": "Aqui está o histórico completo da conversa desde o início.",
+                    "historico_completo": texto_historico[-10000:] # Limita a 10k caracteres por segurança
+                }, ensure_ascii=False)
+                
+            except Exception as e:
+                return json.dumps({"erro": f"Falha ao ler histórico: {e}"}, ensure_ascii=False)
 
         else:
             return json.dumps({"erro": f"Ferramenta desconhecida: {call_name}"}, ensure_ascii=False)
@@ -1546,9 +1590,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
     """
-    (VERSÃO FINAL - BLINDADA COM RETRY GLOBAL E CONTABILIDADE FINANCEIRA)
-    Gerencia o loop de ferramentas e tenta até 3 vezes se a IA devolver uma resposta vazia ou der erro.
-    Aplica-se a TODAS as interações do bot.
+    (VERSÃO FINAL - BLINDADA COM RETRY GLOBAL, CONTABILIDADE E JANELA DESLIZANTE)
     """
     global modelo_ia 
 
@@ -1583,21 +1625,30 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         saudacao = "Olá" 
 
+    # --- CARREGA HISTÓRICO COM OTIMIZAÇÃO (JANELA DESLIZANTE) ---
     convo_data = load_conversation_from_db(contact_id)
     historico_texto_para_prompt = ""
     old_history_gemini_format = []
+    
     if convo_data:
         history_from_db = convo_data.get('history', [])
-        msgs_recentes = history_from_db[-10:] # Pega as últimas 10 para não estourar tokens
-        for m in msgs_recentes:
+        
+        # AQUI ESTÁ A CORREÇÃO: Pegamos as últimas 15 e usamos ESSA lista para TUDO
+        janela_recente = history_from_db[-15:] 
+        
+        # Loop 1: Texto para o Prompt do Sistema
+        for m in janela_recente:
             role_name = "Cliente" if m.get('role') == 'user' else "Você (Lyra)"
             txt = m.get('text', '').replace('\n', ' ')
-            if not txt.startswith("Chamando função"): # Filtra logs técnicos
+            # Filtra logs técnicos
+            if not txt.startswith("Chamando função") and not txt.startswith("[HUMAN"):
                 historico_texto_para_prompt += f"- {role_name}: {txt}\n"
 
-        for msg in history_from_db:
+        # Loop 2: Objeto para a Memória Técnica da IA (CORRIGIDO: usa janela_recente)
+        for msg in janela_recente:
             role = msg.get('role', 'user')
             if role == 'assistant': role = 'model'
+            # Filtra logs técnicos
             if 'text' in msg and not msg['text'].startswith("Chamando função"):
                 old_history_gemini_format.append({'role': role, 'parts': [msg['text']]})
 
@@ -1618,13 +1669,14 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     max_retries = 3 
     for attempt in range(max_retries):
         try:
-            # Reinicia o objeto de chat a cada tentativa para limpar estados quebrados
+            # Reinicia o objeto de chat
             modelo_com_sistema = genai.GenerativeModel(
                 modelo_ia.model_name,
                 system_instruction=system_instruction,
                 tools=tools
             )
             
+            # Agora sim: Inicia o chat APENAS com as mensagens da janela
             chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
             
             if attempt > 0:
@@ -1634,7 +1686,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             
             resposta_ia = chat_session.send_message(user_message)
             
-            # --- CONTABILIDADE INICIAL DO TURNO (SEPARADA) ---
+            # --- CONTABILIDADE INICIAL ---
             turn_input = 0
             turn_output = 0
             
@@ -1651,7 +1703,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     func_call = None
 
                 if not func_call or not getattr(func_call, "name", None):
-                    break # Sai do loop se não houver chamada de função
+                    break 
 
                 call_name = func_call.name
                 call_args = {key: value for key, value in func_call.args.items()}
@@ -1669,7 +1721,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                         
                         if nome_salvo:
                             print(f"🔄 Troca de Contexto: Nome '{nome_salvo}' salvo! Reiniciando com Prompt de Vendas...")
-                            
                             return gerar_resposta_ia_com_tools(
                                 contact_id, 
                                 sender_name, 
@@ -1684,16 +1735,14 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     if res_data.get("tag_especial") == "[HUMAN_INTERVENTION]":
                         msg_intervencao = f"[HUMAN_INTERVENTION] Motivo: {res_data.get('motivo', 'Solicitado.')}"
                         
-                        # Salva sucesso e cobra os tokens gastos até aqui
                         save_conversation_to_db(
                             contact_id, 
                             sender_name, 
                             known_customer_name, 
-                            turn_input, # Passa Input separado
-                            turn_output, # Passa Output separado
+                            turn_input, 
+                            turn_output, 
                             ultima_msg_gerada=msg_intervencao
                         )
-
                         return msg_intervencao
                 except: pass
 
@@ -1705,7 +1754,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 t_in_tool, t_out_tool = extrair_tokens_da_resposta(resposta_ia)
                 turn_input += t_in_tool
                 turn_output += t_out_tool
-
 
             ai_reply_text = ""
             try:
@@ -1721,7 +1769,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     else:
                         raise Exception("Todas as tentativas falharam e retornaram vazio.")
 
-            # Salva passando os totais separados
             save_conversation_to_db(contact_id, sender_name, known_customer_name, turn_input, turn_output, ai_reply_text)
 
             return ai_reply_text
