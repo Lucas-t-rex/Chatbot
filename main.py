@@ -1749,17 +1749,16 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
         
         response = modelo_transcritor.generate_content([prompt_transcricao, audio_file])
         
-        # --- CONTABILIDADE SEPARADA (Input vs Output) ---
-        if contact_id and conversation_collection:
+        if contact_id and conversation_collection is not None:
             in_tok, out_tok = extrair_tokens_da_resposta(response)
             
             if in_tok > 0 or out_tok > 0:
                 conversation_collection.update_one(
                     {'_id': contact_id},
                     {'$inc': {
-                        'total_tokens_consumed': in_tok + out_tok, # Total (Retrocompatibilidade)
-                        'tokens_input': in_tok,                    # Input (Onde o áudio pesa)
-                        'tokens_output': out_tok                   # Output (O texto gerado)
+                        'total_tokens_consumed': in_tok + out_tok, 
+                        'tokens_input': in_tok,                    
+                        'tokens_output': out_tok                   
                     }}
                 )
                 print(f"💰 [Áudio] Tokens contabilizados: {in_tok} (Input) + {out_tok} (Output)")
@@ -1786,8 +1785,8 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
             audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
             response_retry = modelo_retry.generate_content(["Transcreva o áudio.", audio_file_retry])
 
-            # --- CONTABILIDADE DO RETRY (Também gasta) ---
-            if contact_id and conversation_collection:
+            # --- CORREÇÃO AQUI TAMBÉM: "is not None" ---
+            if contact_id and conversation_collection is not None:
                 in_tok_retry, out_tok_retry = extrair_tokens_da_resposta(response_retry)
                 
                 if in_tok_retry > 0 or out_tok_retry > 0:
