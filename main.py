@@ -683,8 +683,8 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         if tools: 
-            modelo_ia = genai.GenerativeModel('gemini-2.5-flash', tools=tools)
-            print("✅ Modelo do Gemini (gemini-2.5-flash) inicializado com FERRAMENTAS.")
+            modelo_ia = genai.GenerativeModel('gemini-2.0-flash', tools=tools)
+            print("✅ Modelo do Gemini (gemini-2.0-flash) inicializado com FERRAMENTAS.")
         else:
              print("AVISO: Modelo do Gemini não inicializado pois a conexão com a Agenda falhou (tools vazias).")
     except Exception as e:
@@ -1598,7 +1598,7 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
 
     try:
         audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
-        modelo_transcritor = genai.GenerativeModel('gemini-2.5-flash') 
+        modelo_transcritor = genai.GenerativeModel('gemini-2.0-flash') 
         prompt_transcricao = "Transcreva este áudio exatamente como foi falado. Apenas o texto, sem comentários."
         
         response = modelo_transcritor.generate_content([prompt_transcricao, audio_file])
@@ -1635,7 +1635,7 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
         try:
             print("🔄 Tentando transcrição novamente (Retry)...")
             time.sleep(2)
-            modelo_retry = genai.GenerativeModel('gemini-2.5-flash')
+            modelo_retry = genai.GenerativeModel('gemini-2.0-flash')
             audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
             response_retry = modelo_retry.generate_content(["Transcreva o áudio.", audio_file_retry])
 
