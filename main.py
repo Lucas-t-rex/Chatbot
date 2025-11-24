@@ -20,6 +20,8 @@ from pymongo.errors import ConnectionFailure, OperationFailure
 from apscheduler.schedulers.background import BackgroundScheduler
 from typing import Any, Dict, List, Optional
 
+
+FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
 CLIENT_NAME="Neuro'up Soluções em Tecnologia"
 RESPONSIBLE_NUMBER="554898389781"
 
@@ -713,80 +715,66 @@ def append_message_to_db(contact_id, role, text, message_id=None):
 
 def analisar_status_da_conversa(history):
     """
-    Definições para a IA:
-    - SUCESSO: Se houve agendamento confirmado ou pedido de intervenção humana (falar com Lucas).
-    - FRACASSO: Se o cliente recusou as ofertas/tentativas e a conversa foi encerrada (despedida).
-    - ANDAMENTO: Se a conversa ainda está viva, com perguntas pendentes ou negociação em aberto.
-    
-    RETORNO: Retorna uma tupla (status, tokens_input, tokens_output)
+    Auditoria Híbrida:
+    1. Verifica SUCESSO via código (Custo Zero).
+    2. Se não for sucesso, usa IA com prompt MINIMALISTA para ver se é Fracasso ou Andamento.
     """
     if not history:
         return "andamento", 0, 0
 
-    msgs_para_analise = history[-15:] 
-    historico_texto = ""
+    # --- PASSO 1: VERIFICAÇÃO TÉCNICA (GRÁTIS) ---
+    # Olha as últimas mensagens para ver se houve chamada de função crítica
+    # Isso economiza milhares de tokens pois não chama o Gemini aqui.
+    for msg in history[-2:]: # Olha só as 2 últimas pra garantir
+        text = msg.get('text', '')
+        if "fn_salvar_agendamento" in text or "fn_solicitar_intervencao" in text:
+            print("✅ [Auditor] Sucesso detectado via Código (Economia de Tokens!)")
+            return "sucesso", 0, 0
+
+    # --- PASSO 2: AUDITORIA IA (SÓ SE NÃO FOI SUCESSO) ---
+    # Se chegou aqui, ou é 'andamento' ou 'fracasso'.
+    # Usamos um prompt MÍNIMO para gastar pouco.
     
-    # Verifica "fatos consumados" (Funções) no código para garantir precisão máxima no Sucesso
+    msgs_para_analise = history[-4:] # Sua otimização de 4 mensagens
+    historico_texto = ""
     for msg in msgs_para_analise:
         role = "Bot" if msg.get('role') in ['assistant', 'model'] else "Cliente"
-        text = msg.get('text', '')
-        
-        # Se tiver log de função, limpamos para não confundir a IA, 
-        # mas usamos para flag de sucesso imediato se for agendamento/intervenção
-        if "Chamando função:" in text:
-            if "fn_salvar_agendamento" in text or "fn_solicitar_intervencao" in text:
-                # Retorna sucesso e ZEROs (pois não gastou token de IA aqui)
-                return "sucesso", 0, 0
-            continue # Pula linhas técnicas de log na leitura da IA
-            
-        historico_texto += f"- {role}: {text}\n"
+        txt_limpo = msg.get('text', '').replace('\n', ' ')
+        if "Chamando função" not in txt_limpo: # Não envia log técnico pro auditor
+            historico_texto += f"{role}: {txt_limpo}\n"
 
-    # 2. Se não achou sucesso técnico, manda o texto para o Gemini Auditar
     if modelo_ia:
         try:
+            # Prompt "Dieta Rigorosa" - Focado apenas em detectar o FIM
             prompt_auditoria = f"""
-            Aja como um Auditor de Qualidade de Chatbot. Leia a conversa abaixo e defina o STATUS ATUAL.
-
-            CONVERSA:
+            Analise a conversa:
             {historico_texto}
 
-            REGRAS DE CLASSIFICAÇÃO:
-
-            1. STATUS: SUCESSO (Só marque se FINALIZOU):
-               - O Agendamento foi EFETIVAMENTE CONFIRMADO pelo Bot (Ex: "Agendamento salvo", "Confirmado com sucesso", "Tudo certo, te aguardamos").
-               - OU houve pedido de Intervenção Humana (Falar com Lucas).
-               - IMPORTANTE: Se o cliente apenas escolheu o horário, passando cpf, ainda nao chegou a confirmar efetivamente explicitamente ate o final do gabarito, ISSO NÃO É SUCESSO AINDA.
-
-            2. STATUS: ANDAMENTO (Prioridade Alta)
+            1. STATUS: ANDAMENTO (Prioridade Alta)
                - Use este status se o Bot ainda está tentando argumentar, oferecendo "teste grátis", perguntando o motivo da recusa ou tentando reverter o "não". Resumindo a conversa ainda esta viva.
                - ATENÇÃO: Se o cliente disse "não", mas o Bot respondeu com uma pergunta ou contra-oferta, o status É ANDAMENTO. A venda ainda não morreu.
 
-            3. STATUS: FRACASSO
+            2. STATUS: FRACASSO
                - Ocorre APENAS se o Bot aceitou a negativa E enviou uma mensagem FINAL de despedida.
                - Exemplos de fim: "Tenha uma ótima tarde", "Ficamos à disposição", "Até logo".
                - Se o Bot não se despediu explicitamente, NÃO marque fracasso.
 
-            Responda APENAS uma palavra: SUCESSO, FRACASSO ou ANDAMENTO.
+            Responda APENAS uma palavra: FRACASSO ou ANDAMENTO.
             """
             
-            # Chama a IA
             resp = modelo_ia.generate_content(prompt_auditoria)
-            
-            # --- CAPTURA SEPARADA (Importante para o cálculo financeiro) ---
             in_tokens, out_tokens = extrair_tokens_da_resposta(resp)
-            # ---------------------------------------------------------------
-
-            status_ia = resp.text.strip().upper()
-
-            if "SUCESSO" in status_ia: return "sucesso", in_tokens, out_tokens
-            if "FRACASSO" in status_ia: return "fracasso", in_tokens, out_tokens
             
-            # Qualquer outra coisa é andamento
+            status_ia = resp.text.strip().upper()
+            
+            if "FRACASSO" in status_ia: 
+                return "fracasso", in_tokens, out_tokens
+            
             return "andamento", in_tokens, out_tokens
 
         except Exception as e:
-            print(f"⚠️ Erro na auditoria de status da IA: {e}")
-            return "andamento", 0, 0 # Fallback seguro
+            print(f"⚠️ Erro auditoria: {e}")
+            return "andamento", 0, 0
 
     return "andamento", 0, 0
 
@@ -1076,25 +1064,34 @@ def get_last_messages_summary(history, max_messages=4):
     return "\n".join(relevant_summary)
 
 def verificar_lembretes_agendados():
-    if agenda_instance is None or conversation_collection is None: # <--- USE "IS NONE"
+    if agenda_instance is None or conversation_collection is None:
         return
 
-    print("⏰ [Job] Verificando lembretes de agendamento...")
+    print("⏰ [Job] Verificando lembretes de agendamento (Hora Maringá)...")
     
     try:
-        agora = datetime.now()
+        # --- CORREÇÃO DE FUSO HORÁRIO AQUI ---
+        # 1. Pega a hora atual exata em Maringá/Brasil
+        agora_brasil = datetime.now(FUSO_HORARIO)
+        
+        # 2. Remove a informação de timezone (tzinfo=None) para ficar "naive"
+        # Isso é necessário porque o datetime.combine usado no 'salvar' geralmente salva sem timezone no Mongo.
+        # Assim comparamos banana com banana (hora local gravada vs hora local atual).
+        agora = agora_brasil.replace(tzinfo=None)
+        
         janela_limite = agora + timedelta(hours=24)
         
         query = {
             "inicio": {"$gt": agora, "$lte": janela_limite},
             "reminder_sent": {"$ne": True},
+            # Garante que não pega agendamentos feitos agora (delay de segurança de 2h)
             "created_at": {"$lte": datetime.now(timezone.utc) - timedelta(hours=2)} 
         }
 
         pendentes = list(agenda_instance.collection.find(query))
         
         if not pendentes:
-            return # Nada para fazer
+            return 
 
         print(f"🔔 Encontrados {len(pendentes)} clientes para lembrar.")
 
@@ -1106,15 +1103,14 @@ def verificar_lembretes_agendados():
                     destinatario_id = re.sub(r'\D', '', str(raw_tel))
                 
                 if not destinatario_id:
-                    print(f"⚠️ Pulei agendamento {ag['_id']} sem ID válido.")
                     continue
 
-                data_inicio = ag["inicio"]
+                data_inicio = ag["inicio"] # Data vinda do banco (já está no horário local salvo)
                 nome_cliente = ag.get("nome", "Cliente").split()[0].capitalize()
                 hora_formatada = data_inicio.strftime('%H:%M')
                 
                 dia_agendamento = data_inicio.date()
-                dia_hoje = agora.date()
+                dia_hoje = agora.date() # Compara com o dia de hoje em Maringá
                 
                 if dia_agendamento == dia_hoje:
                     texto_dia = "hoje mais tarde"
@@ -1640,7 +1636,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         history_from_db = convo_data.get('history', [])
         
         # AQUI ESTÁ A CORREÇÃO: Pegamos as últimas 15 e usamos ESSA lista para TUDO
-        janela_recente = history_from_db[-6:] 
+        janela_recente = history_from_db[-8:] 
         qtd_msg_enviadas = len(janela_recente)
         print(f"📉 [METRICA] Janela Deslizante: Enviando apenas as últimas {qtd_msg_enviadas} mensagens para o Prompt.")
         historico_texto_para_prompt = ""
@@ -1991,7 +1987,7 @@ def gerar_e_enviar_relatorio_diario():
         except:
             pass # Se falhar em notificar, apenas loga no console
 
-scheduler = BackgroundScheduler(daemon=True, timezone='America/Sao_Paulo')
+scheduler = BackgroundScheduler(daemon=True, timezone=FUSO_HORARIO)
 scheduler.start()
 
 app = Flask(__name__)
