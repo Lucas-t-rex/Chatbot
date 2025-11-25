@@ -56,7 +56,7 @@ SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
 
 message_buffer = {}
 message_timers = {}
-BUFFER_TIME_SECONDS=8
+BUFFER_TIME_SECONDS=12
 
 TEMPO_FOLLOWUP_1 = 2
 TEMPO_FOLLOWUP_2 = 3
@@ -856,7 +856,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
 
     try:
         convo_data = conversation_collection.find_one({'_id': contact_id})
-        history = convo_data.get('history', [])[-6:]
+        history = convo_data.get('history', [])[-8:]
         
         historico_texto = ""
         for m in history:
@@ -913,33 +913,44 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
             
             if estagio == 1:
                 instrucao = (
-                    f"""O cliente ({display_name}) parou de responder recentemente. 
-                    OBJETIVO: Reconectar e validar sem parecer cobrança. 
-                    ESTRATÉGIA PSICOLÓGICA: Use reciprocidade e continuação de contexto. 
-                    1. Mostre empatia pela rotina corrida dele. 
-                    2. Dê uma opção simples (ex: 'quer que eu resuma?') ou retome o último assunto do histórico de forma leve. 
-                    3. Mantenha o cliente no controle."""
+                    f"""O cliente parou de responder há pouco tempo.
+                    OBJETIVO: Empatia pela falta de tempo. NÃO pareça cobrança.
+                    
+                    ESTRUTURA OBRIGATÓRIA DA RESPOSTA:
+                    "{display_name}, parece que você tá ocupado né? Só não esquece de nos dar um oi depois pra falarmos sobre [ASSUNTO_DA_CONVERSA]. 😉"
+                    
+                    REGRAS CRÍTICAS:
+                    1. NÃO diga "Oi", "Tudo bem" ou "Olá". Comece direto pelo nome ou pela frase.
+                    2. NÃO diga "Vi que você não agendou" (Isso é chato).
+                    3. Use {historico_texto} para dar contexto real do que estavam falando"""
                 )
             
             elif estagio == 2:
                 instrucao = (
-                    f"""O cliente ({display_name}) continua em silêncio. 
-                    OBJETIVO: Despertar interesse sem insistência. 
-                    ESTRATÉGIA PSICOLÓGICA: Curiosidade + Utilidade. 
-                    1. Não pergunte apenas 'está aí?'. 
-                    2. Traga uma informação útil ou um detalhe interessante baseado no que conversaram antes. 
-                    3. Ofereça clareza, não venda. Seja a especialista que ajuda."""
+                    f"""O cliente continua em silêncio.
+                    OBJETIVO: Provocação leve sobre oportunidade perdida.
+                    
+                    ESTRUTURA OBRIGATÓRIA DA RESPOSTA:
+                    "{display_name}, você sumiu! De verdade, eu não quero que você perca as oportunidades que a tecnologia pode trazer pra sua empresa. Você quer saber o que eu tenho separado pra você?"
+                    
+                    REGRAS CRÍTICAS:
+                    1. NÃO use saudações (Oi/Olá).
+                    2. NÃO fale "imagino a correria" de novo.
+                    3. Seja direta e instigante."""
                 )
             
             elif estagio == 3:
                 instrucao = (
-                    f"""Última tentativa para ({display_name}). 
-                    OBJETIVO: Gerar urgência emocional suave + fechamento elegante. 
-                    ESTRATÉGIA PSICOLÓGICA: FOMO leve + Autonomia. 
-                    1. Encerre o ciclo com leveza (avise que vai parar de mandar mensagens por enquanto para não incomodar). 
-                    2. Gere percepção de cuidado. 
-                    3. Deixe a porta aberta para ele responder quando quiser, sem pressão.
-                    4. Se despeça, agradeça e se mantenha a disposição."""
+                    f"""Última tentativa. O cliente provavelmente não vai fechar.
+                    OBJETIVO: Validar a dúvida dele e sair de cena com classe.
+                    
+                    ESTRUTURA OBRIGATÓRIA DA RESPOSTA:
+                    "É, {display_name}... acho que você deve ter ficado em dúvida ou imaginado algo errado. Tenho certeza que se falasse com o Lucas ia mudar de ideia. De qualquer forma, pra não te incomodar, vou me despedir por aqui. Mas fico à disposição, é só chamar quando precisar!"
+                    
+                    REGRAS CRÍTICAS:
+                    1. NÃO invente motivos (não fale de finanças ou família).
+                    2. Cite o nome do LUCAS como autoridade.
+                    3. Encerre o papo sem fazer pergunta final."""
                 )
             else:
                 instrucao = f"O cliente ({display_name}) está inativo. Pergunte educadamente se ainda tem interesse."
@@ -1070,21 +1081,15 @@ def verificar_lembretes_agendados():
     print("⏰ [Job] Verificando lembretes de agendamento (Hora Maringá)...")
     
     try:
-        # --- CORREÇÃO DE FUSO HORÁRIO AQUI ---
-        # 1. Pega a hora atual exata em Maringá/Brasil
+        # --- CORREÇÃO DE FUSO HORÁRIO ---
         agora_brasil = datetime.now(FUSO_HORARIO)
-        
-        # 2. Remove a informação de timezone (tzinfo=None) para ficar "naive"
-        # Isso é necessário porque o datetime.combine usado no 'salvar' geralmente salva sem timezone no Mongo.
-        # Assim comparamos banana com banana (hora local gravada vs hora local atual).
-        agora = agora_brasil.replace(tzinfo=None)
+        agora = agora_brasil.replace(tzinfo=None) # Remove timezone para comparar com o banco
         
         janela_limite = agora + timedelta(hours=24)
         
         query = {
             "inicio": {"$gt": agora, "$lte": janela_limite},
             "reminder_sent": {"$ne": True},
-            # Garante que não pega agendamentos feitos agora (delay de segurança de 2h)
             "created_at": {"$lte": datetime.now(timezone.utc) - timedelta(hours=2)} 
         }
 
@@ -1105,13 +1110,18 @@ def verificar_lembretes_agendados():
                 if not destinatario_id:
                     continue
 
-                data_inicio = ag["inicio"] # Data vinda do banco (já está no horário local salvo)
+                data_inicio = ag["inicio"]
                 nome_cliente = ag.get("nome", "Cliente").split()[0].capitalize()
+                
+                # --- NOVO: PEGA O NOME DO SERVIÇO ---
+                nome_servico = ag.get("servico", "compromisso") # Se não tiver, usa "compromisso"
+                
                 hora_formatada = data_inicio.strftime('%H:%M')
                 
                 dia_agendamento = data_inicio.date()
-                dia_hoje = agora.date() # Compara com o dia de hoje em Maringá
+                dia_hoje = agora.date()
                 
+                # Lógica para definir se é "hoje", "amanhã" ou "dia X"
                 if dia_agendamento == dia_hoje:
                     texto_dia = "hoje mais tarde"
                 elif dia_agendamento == dia_hoje + timedelta(days=1):
@@ -1119,8 +1129,9 @@ def verificar_lembretes_agendados():
                 else:
                     texto_dia = f"no dia {data_inicio.strftime('%d/%m')}"
 
+                # --- MENSAGEM ATUALIZADA ---
                 msg_lembrete = (
-                    f"Oi {nome_cliente}! Passando pra lembrar do seu compromisso conosco {texto_dia} às {hora_formatada}. "
+                    f"{nome_cliente}! Só reforçando: você tem *{nome_servico}* conosco {texto_dia} às {hora_formatada}. "
                     "Te espero ansiosa! 😊"
                 )
 
@@ -1138,6 +1149,9 @@ def verificar_lembretes_agendados():
 
             except Exception as e_loop:
                 print(f"❌ Erro ao processar lembrete individual: {e_loop}")
+
+    except Exception as e:
+        print(f"❌ Erro crítico no Job de Lembretes: {e}")
 
     except Exception as e:
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
@@ -1169,7 +1183,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         
         === 🤖 PERSONA (LYRA) ===
         ROLE: Atendente, vendedora e Especialista em Automação da Neuro'Up Soluções.
-        TOm: Humana, Educada, Profissional, Objetiva e Empática.
+        TOM: Humana, Educada, Profissional, Objetiva e Empática.
+        ESSENCIA: Aprenda a converssas
         [REGRAS VISUAIS E DE ESTILO ]
             1. **QUEBRA DE LINHA:** Sempre pule uma linha entre a sua reação e a próxima pergunta.
             2. **EFEITO CAMALEÃO (IMPORTANTE):** Espelhe o cliente.
@@ -1224,7 +1239,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         
         PASSO 5: Cliente disse "SIM/PODE"?
         -> AÇÃO FINAL: Chame `fn_salvar_agendamento`.
-        -> PÓS-AÇÃO: "Agendado com sucesso! Te enviamos um lembrete." (NÃO pergunte "algo mais" aqui para não confundir o status).
+        -> PÓS-AÇÃO: "Agendado com sucesso! Te enviaremos um lembrete." (NÃO pergunte "algo mais" aqui para não confundir o status).
         
         === 🛡️ PROTOCOLO DE RESGATE (OBRIGATÓRIO) ===
         Se o cliente disser "NÃO", "VOU PENSAR", "TÁ CARO" ou recusar reunião:
