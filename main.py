@@ -664,11 +664,11 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                 },
                 {
                     "name": "fn_consultar_historico_completo",
-                    "description": "MEMÓRIA PROFUNDA: Use isto APENAS se o usuário perguntar 'lembra do que eu disse?', 'qual meu cpf mesmo?' ou citar algo antigo que não está na conversa recente. Isso lê o histórico completo do banco de dados.(É necessario apenas quando precisamos lembrar de algo falado antigamente.)",
+                    "description": "MEMÓRIA DE LONGO PRAZO (Obrigatório): Use esta ferramenta PROATIVAMENTE sempre que precisar de uma informação (Ramo, CPF, Nome, Dores, Contexto anterior) que não esteja visível nas mensagens recentes. REGRA: Antes de fazer qualquer pergunta de cadastro ou contexto ao cliente, consulte esta memória para ver se ele já não respondeu antigamente.",
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
-                            "query": {"type_": "STRING", "description": "Opcional: O que você está procurando especificamente? (Ex: 'cpf', 'nome', 'data')"}
+                            "query": {"type_": "STRING", "description": "O que você está procurando? (Ex: 'ramo da empresa', 'cpf', 'motivo do contato')"}
                         },
                         "required": []
                     }
@@ -911,7 +911,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
             
         elif status_alvo == "andamento":
             
-            if estagio == 1:
+            if estagio == 0:
                 instrucao = (
                     f"""O cliente parou de responder há pouco tempo.
                     OBJETIVO: Empatia pela falta de tempo. NÃO pareça cobrança.
@@ -925,7 +925,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                     3. Use {historico_texto} para dar contexto real do que estavam falando"""
                 )
             
-            elif estagio == 2:
+            elif estagio == 1:
                 instrucao = (
                     f"""O cliente continua em silêncio.
                     OBJETIVO: Provocação leve sobre oportunidade perdida.
@@ -939,7 +939,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                     3. Seja direta e instigante."""
                 )
             
-            elif estagio == 3:
+            elif estagio == 2:
                 instrucao = (
                     f"""Última tentativa. O cliente provavelmente não vai fechar.
                     OBJETIVO: Validar a dúvida dele e sair de cena com classe.
@@ -1179,7 +1179,13 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         
         INSTRUÇÃO DE LEITURA:
         1. Responda dúvidas pendentes no histórico usando APENAS dados abaixo. Se não souber, direcione para o humano (Lucas).
-        2. MEMÓRIA: Se o cliente citar dados passados não visíveis aqui, USE `fn_consultar_historico_completo`.
+
+        === 🧠 PROTOCOLO DE MEMÓRIA INTELIGENTE ===
+        O cliente ODEIA repetir informações. Siga este fluxo CASO imagine que precisa de informaçoes passadas:
+        1. Você precisa de um dado (Ex: Ramo, CPF, Telefone, Nome)?
+        2. Verifique se está no chat recente acima.
+        3. Se não estiver, CHAME IMEDIATAMENTE `fn_consultar_historico_completo`.
+        4. SÓ PERGUNTE ao cliente se a ferramenta confirmar que o dado nunca foi informado.
         
         === 🤖 PERSONA (LYRA) ===
         ROLE: Atendente, vendedora e Especialista em Automação da Neuro'Up Soluções.
@@ -1241,21 +1247,45 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         -> AÇÃO FINAL: Chame `fn_salvar_agendamento`.
         -> PÓS-AÇÃO: "Agendado com sucesso! Te enviaremos um lembrete." (NÃO pergunte "algo mais" aqui para não confundir o status).
         
-        === 🛡️ PROTOCOLO DE RESGATE (OBRIGATÓRIO) ===
-        Se o cliente disser "NÃO", "VOU PENSAR", "TÁ CARO" ou recusar reunião:
+        === 🛡️ PROTOCOLO DE RESGATE E OBJEÇÕES (FUNIL DE 3 PASSOS) ===
+        Se o cliente disser "não", "vou ver", "não quero", "tá caro" ou recusar:
         
-        1. 🚫 PROIBIDO ACEITAR O "NÃO" DE IMEDIATO.
-        2. PERGUNTE O MOTIVO (Sondagem): "Poxa, entendo. Mas posso saber o que te impede agora? O agendamento é gratuito e sem compromisso."
-        3. CONTORNE: Se ele der o motivo, explique brevemente a vantagem.
-        4. CARTADA FINAL: "O Lucas liberou 1 semana de teste grátis. Bora testar?"
-        5. DESPEDIDA: Só se ele negar o teste grátis, aí sim: "Entendi. Fico à disposição!"
+        PASSO 1: A SONDAGEM SUAVE (Primeiro "Não")
+        -> Objetivo: Entender o motivo sem pressionar.
+        -> O que fazer: NÃO oferte nada ainda. Apenas mostre pena e pergunte o porquê.
+        -> Exemplo: "Poxa, que pena... Mas posso te perguntar, é por causa do momento, do valor ou alguma outra dúvida? Queria só entender pra melhorar meu atendimento. 😊"
+        
+        PASSO 2: A QUEBRA DE OBJEÇÃO (Se o cliente explicar o motivo)
+        -> Objetivo: Tentar resolver o problema específico dele.
+        -> Se for Preço: "Entendo total. Mas pensa na economia de tempo... se a IA recuperar 2 vendas por mês, ela já se paga!"
+        -> Se for Tempo/Complexidade: "A instalação é super rápida, a gente cuida de tudo pra você em 1 dia."
+        -> Se for "Vou pensar": "Claro! Mas qual a dúvida que ficou pegando? As vezes consigo te ajudar agora."
+        -> FINALIZAÇÃO DO PASSO 2: Tente agendar de novo: "Dito isso, bora bater aquele papo rápido com o Lucas sem compromisso?"
+        
+        PASSO 3: A CARTADA FINAL (Se o cliente disser "Não" de novo - O "Teste Grátis")
+        -> Objetivo: O Último Recurso. Só use se o Passo 2 não funcionou.
+        -> O que fazer: Ofereça a semana gratuita como algo exclusivo.
+        -> Exemplo: "Entendi, Fulano. Antes de eu desistir de você rsrs, o Lucas me autorizou a liberar 1 SEMANA DE TESTE GRÁTIS pra você ver funcionando . Sem custo, sem cartão. Topa testar?"
+        
+        PASSO 4: DESPEDIDA (Se ele recusar o teste grátis)
+        -> Aceite a derrota com elegância. "Entendido! As portas ficam abertas. O que precisar pode contar comigo. Um abraço!"
+        
+        🚫 REGRA CRÍTICA: NUNCA pule do Passo 1 direto para o Passo 3 na mesma mensagem. Espere a resposta do cliente.
         
         === 💰 ALGORITMO DE VENDAS ===
         1. ESCUTA ATIVA (VALIDAÇÃO):Preste atenção no que o cliente diz, responda sempre fazendo sentido, verifique se o cliente mencionou como nos conheceu ou fez um comentário solto.
         2. SONDAGEM: Pergunte o ramo do cliente e dores (ex: "Atende muito no whats?").
-        3. CONEXÃO: Mostre como a Lyra resolve essa dor.
-        4. FECHAMENTO: Oferte a reunião com o Lucas. "Quer falar com ele agora ou agendar?"
-        - Se pedir pra falar agora -> `fn_solicitar_intervencao`.
+        3. CONEXÃO: Mostre como a nosso produto pode resolver essa dor.
+        4. FECHAMENTO: USE ESTE ROTEIRO PARA O FECHAMENTO:
+        "Olha, acho que o ideal é você converssar com o proprietario. 
+        Posso chamar o Lucas agora pra falar com voce por aqui? Ou, se estiver ocupado, a gente agenda uma reunião pra outra hora. 
+        É sem custo e sem compromisso, só uma conversa mesmo pra tirar dúvidas! O que fica melhor pra você?"
+        
+        - Se o cliente disser "AGORA", "CHAMA ELE", "PODE SER":
+          -> AÇÃO: Chame a tool `fn_solicitar_intervencao` IMEDIATAMENTE.
+          
+        - Se o cliente disser "AGENDAR", "DEPOIS", "OUTRA HORA":
+          -> AÇÃO: Inicie o fluxo de agenda chamando `fn_listar_horarios_disponiveis`.
         
         === 🛠️ REGRAS TÉCNICAS (TOOLS) ===
         1. [ANTI-ALUCINAÇÃO]: Se o usuário der o dado (CPF/Nome), CHAME A TOOL NA HORA.
@@ -1409,30 +1439,33 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         
         elif call_name == "fn_consultar_historico_completo":
             try:
+                print(f"🧠 [MEMÓRIA] IA solicitou busca no histórico antigo para: {contact_id}") # Log Limpo
+
                 convo = conversation_collection.find_one({'_id': contact_id})
                 if not convo:
                     return json.dumps({"erro": "Histórico não encontrado."}, ensure_ascii=False)
                 
-                # 1. Pega a lista PRIMEIRO
                 history_list = convo.get('history', [])
                 
-                # 2. Agora sim podemos contar e logar
-                qtd_total_historico = len(history_list)
-                print(f"📚 [METRICA] Memória Profunda ACIONADA! A IA foi buscar no banco um total de {qtd_total_historico} mensagens antigas.")
-
-                # 3. Formata o texto
-                texto_historico = "--- INÍCIO DA MEMÓRIA PROFUNDA ---\n"
+                texto_historico = "--- INÍCIO DO HISTÓRICO COMPLETO (BANCO DE DADOS) ---\n"
                 for m in history_list: 
                     r = "Cliente" if m.get('role') == 'user' else "Lyra"
                     t = m.get('text', '')
-                    if not t.startswith("Chamando função"):
+                    # Ignora logs técnicos para limpar a leitura
+                    if not t.startswith("Chamando função") and not t.startswith("[HUMAN"):
                         texto_historico += f"[{m.get('ts', '')[:16]}] {r}: {t}\n"
-                texto_historico += "--- FIM DA MEMÓRIA PROFUNDA ---"
+                texto_historico += "--- FIM DO HISTÓRICO COMPLETO ---"
                 
-                # 4. Retorna o texto limitado
-                return json.dumps({"sucesso": True, "historico": texto_historico[-2000:]}, ensure_ascii=False)
+                qtd_msgs = len(history_list)
+                tamanho_texto = len(texto_historico)
+
+                print(f"✅ [MEMÓRIA] Sucesso! {qtd_msgs} mensagens recuperadas ({tamanho_texto} caracteres) e enviadas para a IA.")
+
+                # 4. Retorna TUDO (Removemos o slice [-2000:])
+                return json.dumps({"sucesso": True, "historico": texto_historico}, ensure_ascii=False)
                 
             except Exception as e:
+                print(f"❌ [MEMÓRIA] Erro ao ler histórico: {e}")
                 return json.dumps({"erro": f"Falha ao ler histórico: {e}"}, ensure_ascii=False)
 
         else:
