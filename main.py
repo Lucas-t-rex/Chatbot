@@ -25,7 +25,8 @@ from flask_cors import CORS
 FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
 CLIENT_NAME="Neuro'up Soluções em Tecnologia"
 RESPONSIBLE_NUMBER="554898389781"
-
+ADMIN_USER = "admin"
+ADMIN_PASS = "neuro2025"
 load_dotenv()
 
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
@@ -2313,106 +2314,76 @@ else:
 @app.route('/api/login', methods=['POST'])
 def api_login():
     """
-    Verifica se o par Telefone + CPF existe em algum agendamento no banco.
-    Se existir, libera o acesso.
+    Login Administrativo.
+    Verifica se usuário e senha batem com as variáveis do código.
     """
     data = request.json
     if not data:
-        return jsonify({"erro": "Dados não fornecidos"}), 400
+        return jsonify({"erro": "Dados não enviados"}), 400
 
-    # Limpeza rigorosa dos dados recebidos
-    telefone_login = re.sub(r'\D', '', str(data.get('telefone', '')))
-    cpf_login = re.sub(r'\D', '', str(data.get('cpf', '')))
+    usuario = data.get('usuario', '')
+    senha = data.get('senha', '')
 
-    if not telefone_login or not cpf_login:
-        return jsonify({"erro": "Telefone e CPF são obrigatórios"}), 400
-
-    try:
-        if agenda_instance is None:
-            return jsonify({"erro": "Banco de dados desconectado"}), 500
-
-        # Busca se existe ALGUM agendamento com esse Telefone E esse CPF
-        # Usamos o 'owner_whatsapp_id' pois é sua chave principal de telefone
-        usuario_valido = agenda_instance.collection.find_one({
-            "owner_whatsapp_id": telefone_login,
-            "cpf": cpf_login
-        })
-
-        if usuario_valido:
-            # Login Sucesso! Retornamos o nome para o App exibir "Olá, Fulano"
-            return jsonify({
-                "sucesso": True,
-                "usuario": {
-                    "nome": usuario_valido.get("nome", "Cliente"),
-                    "telefone": telefone_login
-                }
-            }), 200
-        else:
-            return jsonify({"erro": "Telefone ou CPF não encontrados. Verifique se você já tem agendamentos conosco."}), 401
-
-    except Exception as e:
-        print(f"❌ Erro na API Login: {e}")
-        return jsonify({"erro": "Erro interno no servidor"}), 500
+    # Verifica se bate com a senha mestra
+    if usuario == ADMIN_USER and senha == ADMIN_PASS:
+        return jsonify({
+            "sucesso": True,
+            "usuario": {
+                "nome": "Administrador Neuro'Up",
+                "nivel": "master"
+            }
+        }), 200
+    else:
+        return jsonify({"erro": "Usuário ou senha incorretos."}), 401
 
 
 @app.route('/api/meus-agendamentos', methods=['GET'])
 def api_meus_agendamentos():
     """
-    Retorna a lista formatada para o App.
-    Exemplo de uso: /api/meus-agendamentos?telefone=554491018419
+    Retorna TODOS os agendamentos do banco de dados para o Admin.
     """
-    telefone = request.args.get('telefone')
+    # Não precisamos mais de parametro telefone, pois o admin vê tudo.
     
-    # Limpeza do telefone vindo da URL
-    telefone_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
-
-    if not telefone_limpo:
-        return jsonify({"erro": "Telefone é obrigatório"}), 400
-
     try:
         if agenda_instance is None:
             return jsonify([]), 500
 
-        # Busca agendamentos (Ordenados do mais recente para o mais antigo ou vice-versa)
-        # Aqui ordenamos por data de inicio (Crescente)
-        agendamentos_db = agenda_instance.collection.find(
-            {"owner_whatsapp_id": telefone_limpo}
-        ).sort("inicio", 1)
+        # 🔥 AQUI ESTÁ O PULO DO GATO: .find({}) sem filtros busca TUDO
+        agendamentos_db = agenda_instance.collection.find({}).sort("inicio", 1)
 
         lista_formatada = []
         agora = datetime.now()
 
         for ag in agendamentos_db:
-            inicio_dt = ag.get("inicio") # MongoDB retorna datetime
+            inicio_dt = ag.get("inicio")
             fim_dt = ag.get("fim")
             
-            # Se por acaso não for datetime (banco sujo), converte
             if not isinstance(inicio_dt, datetime): continue
             
-            # Lógica de Status Inteligente
             status = "agendado"
             if inicio_dt < agora:
                 status = "concluido"
             
-            # Monta o JSON Exato que você pediu
             item = {
-                "id": str(ag.get("_id")), # Importante para editar/cancelar depois
-                "dia": inicio_dt.strftime("%Y-%m-%d"), # Formato ISO para o Flutter ler fácil
-                "dia_formatado": inicio_dt.strftime("%d/%m/%Y"), # Para exibir bonito
+                "id": str(ag.get("_id")), 
+                "dia": inicio_dt.strftime("%Y-%m-%d"),
+                "dia_visual": inicio_dt.strftime("%d/%m"),
                 "hora_inicio": inicio_dt.strftime("%H:%M"),
                 "hora_fim": fim_dt.strftime("%H:%M") if fim_dt else "",
                 "servico": ag.get("servico", "Atendimento").capitalize(),
                 "status": status,
-                "profissional": "Lucas" # Pode virar dinâmico no futuro
+                # 👇 Agora enviamos quem é o cliente para você saber
+                "cliente_nome": ag.get("nome", "Sem Nome").title(),
+                "cliente_telefone": ag.get("telefone", "")
             }
             lista_formatada.append(item)
 
         return jsonify(lista_formatada), 200
 
     except Exception as e:
-        print(f"❌ Erro na API Agendamentos: {e}")
+        print(f"❌ Erro na API Admin: {e}")
         return jsonify({"erro": str(e)}), 500
-
+    
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))
