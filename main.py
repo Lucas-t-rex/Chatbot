@@ -19,6 +19,7 @@ from pymongo.server_api import ServerApi
 from pymongo.errors import ConnectionFailure, OperationFailure
 from apscheduler.schedulers.background import BackgroundScheduler
 from typing import Any, Dict, List, Optional
+from flask_cors import CORS
 
 
 FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
@@ -1172,13 +1173,14 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         [SYSTEM CONFIGURATION]
         NOW: {horario_atual} | SAUDAÇÃO: {saudacao}
         {prompt_name_instruction}
-        
+        Missão: O seu dever é sempre agendar ou forçar o cliente a falar com o Lucas de maneira amigavel, respeitosa e vendedora sem errar nas etapas abaixo e nao parecer forçada.
         === CONTEXTO & MEMÓRIA ===
         HISTÓRICO:
         {historico_str}
         
         INSTRUÇÃO DE LEITURA:
         1. Responda dúvidas pendentes no histórico usando APENAS dados abaixo. Se não souber, direcione para o humano (Lucas).
+        2. Se o cliente perguntar de informações tecnicas que não estão abaixo diga que deve falar com o lucas.
 
         === 🧠 PROTOCOLO DE MEMÓRIA INTELIGENTE ===
         O cliente ODEIA repetir informações. Siga este fluxo CASO imagine que precisa de informaçoes passadas:
@@ -1217,7 +1219,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         2. PLANO SECRETÁRIO: Tudo do anterior + Agenda Inteligente (marca/altera/app de gestão).
         TECH: Pro-code (personalizável), IA rápida (14-23ms), Setup Robusto.
         INSTALAÇÃO: Entendimento > Coleta > Personalização > Code > Teste (1 dia) > Acompanhamento (1 semana).
-        
+        Informações: Chatbots apenas para whatsapp.
         == 🛠️ FLUXO DE AGENDAMENTO (REGRA DE OURO) ===
         Siga esta ordem EXATA para evitar erros. NÃO inverta passos.
         
@@ -1876,6 +1878,7 @@ scheduler = BackgroundScheduler(daemon=True, timezone=FUSO_HORARIO)
 scheduler.start()
 
 app = Flask(__name__)
+CORS(app) 
 processed_messages = set() 
 
 @app.route('/webhook', methods=['POST'])
@@ -2306,6 +2309,109 @@ else:
     print("\nEncerrando o programa devido a erros na inicialização (Verifique APIs e DBs).")
     # (O programa não deve continuar se os componentes principais falharem)
     exit() # Encerra se o modelo ou DBs falharem
+
+@app.route('/api/login', methods=['POST'])
+def api_login():
+    """
+    Verifica se o par Telefone + CPF existe em algum agendamento no banco.
+    Se existir, libera o acesso.
+    """
+    data = request.json
+    if not data:
+        return jsonify({"erro": "Dados não fornecidos"}), 400
+
+    # Limpeza rigorosa dos dados recebidos
+    telefone_login = re.sub(r'\D', '', str(data.get('telefone', '')))
+    cpf_login = re.sub(r'\D', '', str(data.get('cpf', '')))
+
+    if not telefone_login or not cpf_login:
+        return jsonify({"erro": "Telefone e CPF são obrigatórios"}), 400
+
+    try:
+        if agenda_instance is None:
+            return jsonify({"erro": "Banco de dados desconectado"}), 500
+
+        # Busca se existe ALGUM agendamento com esse Telefone E esse CPF
+        # Usamos o 'owner_whatsapp_id' pois é sua chave principal de telefone
+        usuario_valido = agenda_instance.collection.find_one({
+            "owner_whatsapp_id": telefone_login,
+            "cpf": cpf_login
+        })
+
+        if usuario_valido:
+            # Login Sucesso! Retornamos o nome para o App exibir "Olá, Fulano"
+            return jsonify({
+                "sucesso": True,
+                "usuario": {
+                    "nome": usuario_valido.get("nome", "Cliente"),
+                    "telefone": telefone_login
+                }
+            }), 200
+        else:
+            return jsonify({"erro": "Telefone ou CPF não encontrados. Verifique se você já tem agendamentos conosco."}), 401
+
+    except Exception as e:
+        print(f"❌ Erro na API Login: {e}")
+        return jsonify({"erro": "Erro interno no servidor"}), 500
+
+
+@app.route('/api/meus-agendamentos', methods=['GET'])
+def api_meus_agendamentos():
+    """
+    Retorna a lista formatada para o App.
+    Exemplo de uso: /api/meus-agendamentos?telefone=554491018419
+    """
+    telefone = request.args.get('telefone')
+    
+    # Limpeza do telefone vindo da URL
+    telefone_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
+
+    if not telefone_limpo:
+        return jsonify({"erro": "Telefone é obrigatório"}), 400
+
+    try:
+        if agenda_instance is None:
+            return jsonify([]), 500
+
+        # Busca agendamentos (Ordenados do mais recente para o mais antigo ou vice-versa)
+        # Aqui ordenamos por data de inicio (Crescente)
+        agendamentos_db = agenda_instance.collection.find(
+            {"owner_whatsapp_id": telefone_limpo}
+        ).sort("inicio", 1)
+
+        lista_formatada = []
+        agora = datetime.now()
+
+        for ag in agendamentos_db:
+            inicio_dt = ag.get("inicio") # MongoDB retorna datetime
+            fim_dt = ag.get("fim")
+            
+            # Se por acaso não for datetime (banco sujo), converte
+            if not isinstance(inicio_dt, datetime): continue
+            
+            # Lógica de Status Inteligente
+            status = "agendado"
+            if inicio_dt < agora:
+                status = "concluido"
+            
+            # Monta o JSON Exato que você pediu
+            item = {
+                "id": str(ag.get("_id")), # Importante para editar/cancelar depois
+                "dia": inicio_dt.strftime("%Y-%m-%d"), # Formato ISO para o Flutter ler fácil
+                "dia_formatado": inicio_dt.strftime("%d/%m/%Y"), # Para exibir bonito
+                "hora_inicio": inicio_dt.strftime("%H:%M"),
+                "hora_fim": fim_dt.strftime("%H:%M") if fim_dt else "",
+                "servico": ag.get("servico", "Atendimento").capitalize(),
+                "status": status,
+                "profissional": "Lucas" # Pode virar dinâmico no futuro
+            }
+            lista_formatada.append(item)
+
+        return jsonify(lista_formatada), 200
+
+    except Exception as e:
+        print(f"❌ Erro na API Agendamentos: {e}")
+        return jsonify({"erro": str(e)}), 500
 
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
