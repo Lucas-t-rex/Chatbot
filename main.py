@@ -2342,13 +2342,10 @@ def api_meus_agendamentos():
     """
     Retorna TODOS os agendamentos do banco de dados para o Admin.
     """
-    # Não precisamos mais de parametro telefone, pois o admin vê tudo.
-    
     try:
         if agenda_instance is None:
             return jsonify([]), 500
 
-        # 🔥 AQUI ESTÁ O PULO DO GATO: .find({}) sem filtros busca TUDO
         agendamentos_db = agenda_instance.collection.find({}).sort("inicio", 1)
 
         lista_formatada = []
@@ -2357,6 +2354,7 @@ def api_meus_agendamentos():
         for ag in agendamentos_db:
             inicio_dt = ag.get("inicio")
             fim_dt = ag.get("fim")
+            created_at_dt = ag.get("created_at") # Pega a data de criação
             
             if not isinstance(inicio_dt, datetime): continue
             
@@ -2364,6 +2362,11 @@ def api_meus_agendamentos():
             if inicio_dt < agora:
                 status = "concluido"
             
+            # Formata a data de criação se existir
+            created_at_str = ""
+            if isinstance(created_at_dt, datetime):
+                created_at_str = created_at_dt.strftime("%d/%m/%Y %H:%M")
+
             item = {
                 "id": str(ag.get("_id")), 
                 "dia": inicio_dt.strftime("%Y-%m-%d"),
@@ -2372,9 +2375,13 @@ def api_meus_agendamentos():
                 "hora_fim": fim_dt.strftime("%H:%M") if fim_dt else "",
                 "servico": ag.get("servico", "Atendimento").capitalize(),
                 "status": status,
-                # 👇 Agora enviamos quem é o cliente para você saber
                 "cliente_nome": ag.get("nome", "Sem Nome").title(),
-                "cliente_telefone": ag.get("telefone", "")
+                "cliente_telefone": ag.get("telefone", ""),
+                
+                # --- NOVOS CAMPOS QUE VOCÊ PRECISA ADICIONAR ---
+                "cpf": ag.get("cpf", ""),
+                "owner_whatsapp_id": ag.get("owner_whatsapp_id", ""),
+                "created_at": created_at_str
             }
             lista_formatada.append(item)
 
