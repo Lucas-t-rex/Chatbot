@@ -20,6 +20,7 @@ from pymongo.errors import ConnectionFailure, OperationFailure
 from apscheduler.schedulers.background import BackgroundScheduler
 from typing import Any, Dict, List, Optional
 from flask_cors import CORS
+from bson.objectid import ObjectId
 
 
 FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
@@ -2339,13 +2340,11 @@ def api_login():
 
 @app.route('/api/meus-agendamentos', methods=['GET'])
 def api_meus_agendamentos():
-    """
-    Retorna TODOS os agendamentos do banco de dados para o Admin.
-    """
     try:
         if agenda_instance is None:
             return jsonify([]), 500
 
+        # Buscamos tudo
         agendamentos_db = agenda_instance.collection.find({}).sort("inicio", 1)
 
         lista_formatada = []
@@ -2354,15 +2353,20 @@ def api_meus_agendamentos():
         for ag in agendamentos_db:
             inicio_dt = ag.get("inicio")
             fim_dt = ag.get("fim")
-            created_at_dt = ag.get("created_at") # Pega a data de criação
+            created_at_dt = ag.get("created_at")
             
             if not isinstance(inicio_dt, datetime): continue
             
-            status = "agendado"
-            if inicio_dt < agora:
-                status = "concluido"
+            # --- LÓGICA NOVA DO STATUS ---
+            # Lê o status gravado no banco. Se não tiver, assume 'agendado'.
+            status_db = ag.get("status", "agendado")
             
-            # Formata a data de criação se existir
+            # Se o horário já passou E ainda está como 'agendado', 
+            # enviamos um status visual para o app saber que está pendente de ação
+            status_final = status_db
+            if inicio_dt < agora and status_db == "agendado":
+                status_final = "pendente_acao" # O App vai pintar de Roxo/Cinza
+
             created_at_str = ""
             if isinstance(created_at_dt, datetime):
                 created_at_str = created_at_dt.strftime("%d/%m/%Y %H:%M")
@@ -2374,11 +2378,9 @@ def api_meus_agendamentos():
                 "hora_inicio": inicio_dt.strftime("%H:%M"),
                 "hora_fim": fim_dt.strftime("%H:%M") if fim_dt else "",
                 "servico": ag.get("servico", "Atendimento").capitalize(),
-                "status": status,
+                "status": status_final, # <-- Enviamos o status calculado
                 "cliente_nome": ag.get("nome", "Sem Nome").title(),
                 "cliente_telefone": ag.get("telefone", ""),
-                
-                # --- NOVOS CAMPOS QUE VOCÊ PRECISA ADICIONAR ---
                 "cpf": ag.get("cpf", ""),
                 "owner_whatsapp_id": ag.get("owner_whatsapp_id", ""),
                 "created_at": created_at_str
@@ -2389,6 +2391,36 @@ def api_meus_agendamentos():
 
     except Exception as e:
         print(f"❌ Erro na API Admin: {e}")
+        return jsonify({"erro": str(e)}), 500
+
+# 2. ADICIONE ESTAS NOVAS ROTAS (Para o App chamar)
+
+@app.route('/api/agendamento/atualizar-status', methods=['POST'])
+def api_atualizar_status():
+    """Define como 'concluido' ou 'ausencia'"""
+    data = request.json
+    ag_id = data.get('id')
+    novo_status = data.get('status') # 'concluido' ou 'ausencia'
+
+    try:
+        agenda_instance.collection.update_one(
+            {"_id": ObjectId(ag_id)},
+            {"$set": {"status": novo_status}}
+        )
+        return jsonify({"sucesso": True}), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+@app.route('/api/agendamento/deletar', methods=['POST'])
+def api_deletar_id():
+    """Apaga o agendamento pelo ID (Cancelar)"""
+    data = request.json
+    ag_id = data.get('id')
+
+    try:
+        agenda_instance.collection.delete_one({"_id": ObjectId(ag_id)})
+        return jsonify({"sucesso": True}), 200
+    except Exception as e:
         return jsonify({"erro": str(e)}), 500
     
 if __name__ == '__main__':
