@@ -2431,7 +2431,63 @@ def api_deletar_id():
         return jsonify({"sucesso": True}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
+
+@app.route('/api/horarios-disponiveis', methods=['POST'])
+def api_horarios_disponiveis():
+    """
+    Retorna os slots vagos para o App, usando a mesma regra da IA.
+    Esperado: { "data": "DD/MM/YYYY", "servico": "reunião" }
+    """
+    data = request.json
+    data_str = data.get('data') # Ex: "28/11/2025"
+    servico = data.get('servico', 'reunião')
     
+    if not agenda_instance:
+        return jsonify({"erro": "Agenda não conectada"}), 500
+        
+    # Reutiliza a lógica robusta da classe Agenda
+    resultado = agenda_instance.listar_horarios_disponiveis(data_str, servico)
+    return jsonify(resultado), 200
+
+@app.route('/api/agendamento/criar', methods=['POST'])
+def api_criar_agendamento():
+    """
+    Cria um agendamento manual via App.
+    """
+    data = request.json
+    
+    # Extrai dados do formulário do App
+    nome = data.get('nome')
+    cpf = data.get('cpf')
+    telefone = data.get('telefone')
+    servico = data.get('servico', 'reunião')
+    data_str = data.get('data') # DD/MM/YYYY
+    hora_str = data.get('hora') # HH:MM
+    
+    # Se o admin estiver criando, o owner_whatsapp_id pode ser o telefone limpo
+    # para que os lembretes funcionem.
+    telefone_limpo = re.sub(r'\D', '', str(telefone))
+    owner_id = telefone_limpo if telefone_limpo else "admin_manual"
+
+    if not agenda_instance:
+        return jsonify({"erro": "Agenda offline"}), 500
+
+    # Usa o método salvar() que já tem todas as travas de segurança (conflito, feriado, etc)
+    resultado = agenda_instance.salvar(
+        nome=nome,
+        cpf_raw=cpf,
+        telefone=telefone,
+        servico=servico,
+        data_str=data_str,
+        hora_str=hora_str,
+        owner_id=owner_id
+    )
+    
+    if "erro" in resultado:
+        return jsonify(resultado), 400 # Retorna erro 400 se falhar (ex: horário ocupado)
+        
+    return jsonify(resultado), 200
+
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))
