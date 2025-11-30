@@ -2369,7 +2369,16 @@ def api_meus_agendamentos():
 
             created_at_str = ""
             if isinstance(created_at_dt, datetime):
-                created_at_str = created_at_dt.strftime("%d/%m/%Y %H:%M")
+                # Se a data vier do Mongo sem fuso (naive), assumimos que é UTC
+                if created_at_dt.tzinfo is None:
+                    created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
+                
+                # Converte para o horário de Brasília/São Paulo
+                fuso_br = pytz.timezone('America/Sao_Paulo')
+                data_br = created_at_dt.astimezone(fuso_br)
+                
+                # Formata para string
+                created_at_str = data_br.strftime("%d/%m/%Y %H:%M")
 
             item = {
                 "id": str(ag.get("_id")), 
