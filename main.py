@@ -196,10 +196,34 @@ class Agenda:
         except OperationFailure as e:
             print(f"⚠️ [DB Agenda] Aviso ao criar índices (normal se já existem): {e}")
 
+    def _is_dia_bloqueado_admin(self, dt: datetime) -> bool:
+        try:
+            inicio_dia = datetime.combine(dt.date(), dt_time.min)
+            fim_dia = datetime.combine(dt.date(), dt_time.max)
+            
+            # Procura por qualquer agendamento nesse dia que seja "Folga" ou status "bloqueado"
+            bloqueio = self.collection.find_one({
+                "inicio": {"$gte": inicio_dia, "$lte": fim_dia},
+                "$or": [
+                    {"servico": "Folga"}, 
+                    {"status": "bloqueado"}
+                ]
+            })
+            return bloqueio is not None
+        except Exception as e:
+            log_info(f"Erro ao checar bloqueio administrativo: {e}")
+            return False
+        
     def _checar_dia_de_folga(self, dt: datetime) -> Optional[str]:
+        # 1. Checa folga fixa (Domingos)
         dia_semana_num = dt.weekday()
         if dia_semana_num in FOLGAS_DIAS_SEMANA:
             return MAPA_DIAS_SEMANA_PT.get(dia_semana_num, "dia de folga")
+            
+        # 2. Checa folga administrativa (Banco de Dados) - A MÁGICA ACONTECE AQUI
+        if self._is_dia_bloqueado_admin(dt):
+            return "dia de folga administrativa (feriado ou recesso)"
+
         return None
 
     def _get_duracao_servico(self, servico_str: str) -> Optional[int]:
@@ -2492,44 +2516,53 @@ def api_criar_agendamento():
 def api_gerenciar_folga():
     data = request.json
     data_str = data.get('data')
-    acao = data.get('acao')
+    acao = data.get('acao') # 'criar' ou 'remover'
 
     if not agenda_instance: return jsonify({"erro": "Agenda offline"}), 500
+    
     dt = parse_data(data_str)
     if not dt: return jsonify({"erro": "Data inválida"}), 400
     
+    # Define o dia inteiro (00:00 até 23:59)
     inicio_dia = datetime.combine(dt.date(), dt_time.min)
     fim_dia = datetime.combine(dt.date(), dt_time.max)
 
     if acao == 'criar':
+        # Verifica se já tem clientes REAIS agendados (ignorando folgas antigas ou cancelados)
         conflitos = agenda_instance.collection.count_documents({
             "inicio": {"$gte": inicio_dia, "$lte": fim_dia},
-            "servico": {"$ne": "Folga"},
+            "servico": {"$ne": "Folga"}, 
             "status": {"$nin": ["cancelado", "ausencia", "bloqueado"]}
         })
 
         if conflitos > 0:
-            return jsonify({"erro": f"Dia com {conflitos} agendamentos. Cancele-os antes."}), 400
+            return jsonify({"erro": f"Ops! Já existem {conflitos} clientes agendados neste dia. Cancele-os ou remarqueles antes de bloquear o dia."}), 400
 
-        # SALVANDO DE FORMA SIMPLIFICADA
+        # Cria o bloqueio
         agenda_instance.collection.insert_one({
             "nome": "BLOQUEIO ADMINISTRATIVO",
-            "servico": "Folga",
+            "servico": "Folga",  # Importante ser "Folga" com F maiúsculo para bater com a busca
+            "status": "bloqueado",
             "inicio": inicio_dia,
             "fim": fim_dia,
-            "status": "bloqueado", # Status simples
             "created_at": datetime.now(timezone.utc),
-            "owner_whatsapp_id": "admin" 
-            # Removemos telefone, cpf, duracao, etc.
+            "owner_whatsapp_id": "admin",
+            "cliente_telefone": "",
+            "cpf": ""
         })
         return jsonify({"sucesso": True}), 200
 
     elif acao == 'remover':
-        agenda_instance.collection.delete_many({
+        # Remove APENAS o bloqueio de folga
+        resultado = agenda_instance.collection.delete_many({
             "inicio": {"$gte": inicio_dia, "$lte": fim_dia},
-            "servico": "Folga"
+            "$or": [{"servico": "Folga"}, {"status": "bloqueado"}]
         })
-        return jsonify({"sucesso": True}), 200
+        
+        if resultado.deleted_count > 0:
+            return jsonify({"sucesso": True, "msg": "Folga removida. Agenda aberta!"}), 200
+        else:
+            return jsonify({"erro": "Nenhuma folga encontrada para remover neste dia."}), 400
 
     return jsonify({"erro": "Ação inválida"}), 400
 
