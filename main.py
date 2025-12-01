@@ -2368,52 +2368,51 @@ def api_meus_agendamentos():
         if agenda_instance is None:
             return jsonify([]), 500
 
-        # Buscamos tudo
         agendamentos_db = agenda_instance.collection.find({}).sort("inicio", 1)
-
         lista_formatada = []
-        agora = datetime.now()
+        agora_utc = datetime.now(timezone.utc)
 
         for ag in agendamentos_db:
-            inicio_dt = ag.get("inicio")
-            fim_dt = ag.get("fim")
-            created_at_dt = ag.get("created_at")
+            inicio_utc = ag.get("inicio")
+            fim_utc = ag.get("fim")
             
-            if not isinstance(inicio_dt, datetime): continue
+            if not isinstance(inicio_utc, datetime): continue
             
-            # --- LÓGICA NOVA DO STATUS ---
-            # Lê o status gravado no banco. Se não tiver, assume 'agendado'.
+            # --- CORREÇÃO DE LEITURA (UTC -> BRASIL) ---
+            # Garante que o datetime tenha timezone UTC
+            if inicio_utc.tzinfo is None:
+                inicio_utc = inicio_utc.replace(tzinfo=timezone.utc)
+            
+            # Converte para Brasil antes de formatar a string do dia
+            inicio_br = inicio_utc.astimezone(FUSO_HORARIO)
+            fim_br = fim_utc.replace(tzinfo=timezone.utc).astimezone(FUSO_HORARIO) if isinstance(fim_utc, datetime) else None
+            # -------------------------------------------
+
             status_db = ag.get("status", "agendado")
             
-            # Se o horário já passou E ainda está como 'agendado', 
-            # enviamos um status visual para o app saber que está pendente de ação
-            status_final = status_db
-            if inicio_dt < agora and status_db == "agendado":
-                status_final = "pendente_acao" # O App vai pintar de Roxo/Cinza
+            # Compara UTC com UTC para ver se já passou
+            if inicio_utc < agora_utc and status_db == "agendado":
+                status_final = "pendente_acao"
+            else:
+                status_final = status_db
 
+            # Pega o Created At
+            created_at_dt = ag.get("created_at")
             created_at_str = ""
             if isinstance(created_at_dt, datetime):
-                # Se a data vier do Mongo sem fuso (naive), assumimos que é UTC
-                if created_at_dt.tzinfo is None:
-                    created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
-                
-                # Converte para o horário de Brasília/São Paulo
-                fuso_br = pytz.timezone('America/Sao_Paulo')
-                data_br = created_at_dt.astimezone(fuso_br)
-                
-                # Formata para string
-                created_at_str = data_br.strftime("%d/%m/%Y %H:%M")
+                if created_at_dt.tzinfo is None: created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
+                created_at_str = created_at_dt.astimezone(FUSO_HORARIO).strftime("%d/%m/%Y %H:%M")
 
             item = {
                 "id": str(ag.get("_id")), 
-                "dia": inicio_dt.strftime("%Y-%m-%d"),
-                "dia_visual": inicio_dt.strftime("%d/%m"),
-                "hora_inicio": inicio_dt.strftime("%H:%M"),
-                "hora_fim": fim_dt.strftime("%H:%M") if fim_dt else "",
+                "dia": inicio_br.strftime("%Y-%m-%d"), # <-- AQUI ESTAVA O ERRO! Agora usa inicio_br
+                "dia_visual": inicio_br.strftime("%d/%m"),
+                "hora_inicio": inicio_br.strftime("%H:%M"),
+                "hora_fim": fim_br.strftime("%H:%M") if fim_br else "",
                 "servico": ag.get("servico", "Atendimento").capitalize(),
-                "status": status_final, # <-- Enviamos o status calculado
+                "status": status_final,
                 "cliente_nome": ag.get("nome", "Sem Nome").title(),
-                "cliente_telefone": ag.get("telefone", ""),
+                "cliente_telefone": ag.get("cliente_telefone") or ag.get("telefone", ""),
                 "cpf": ag.get("cpf", ""),
                 "owner_whatsapp_id": ag.get("owner_whatsapp_id", ""),
                 "created_at": created_at_str
@@ -2425,8 +2424,6 @@ def api_meus_agendamentos():
     except Exception as e:
         print(f"❌ Erro na API Admin: {e}")
         return jsonify({"erro": str(e)}), 500
-
-# 2. ADICIONE ESTAS NOVAS ROTAS (Para o App chamar)
 
 @app.route('/api/agendamento/atualizar-status', methods=['POST'])
 def api_atualizar_status():
@@ -2520,31 +2517,41 @@ def api_gerenciar_folga():
 
     if not agenda_instance: return jsonify({"erro": "Agenda offline"}), 500
     
+    # Parse da data
     dt = parse_data(data_str)
     if not dt: return jsonify({"erro": "Data inválida"}), 400
     
-    # Define o dia inteiro (00:00 até 23:59)
-    inicio_dia = datetime.combine(dt.date(), dt_time.min)
-    fim_dia = datetime.combine(dt.date(), dt_time.max)
+    # --- CORREÇÃO DE FUSO HORÁRIO AQUI ---
+    # 1. Cria a data "Ingênua" (Naive)
+    inicio_naive = datetime.combine(dt.date(), dt_time.min) # 00:00
+    fim_naive = datetime.combine(dt.date(), dt_time.max)    # 23:59
+    
+    # 2. Localiza para o Brasil (Diz: "Isso é 00:00 no Brasil")
+    inicio_br = FUSO_HORARIO.localize(inicio_naive)
+    fim_br = FUSO_HORARIO.localize(fim_naive)
+    
+    # 3. Converte para UTC para salvar no Mongo corretamente
+    inicio_utc = inicio_br.astimezone(timezone.utc)
+    fim_utc = fim_br.astimezone(timezone.utc)
+    # -------------------------------------
 
     if acao == 'criar':
-        # Verifica se já tem clientes REAIS agendados (ignorando folgas antigas ou cancelados)
+        # Verifica conflitos usando as datas UTC
         conflitos = agenda_instance.collection.count_documents({
-            "inicio": {"$gte": inicio_dia, "$lte": fim_dia},
+            "inicio": {"$gte": inicio_utc, "$lte": fim_utc},
             "servico": {"$ne": "Folga"}, 
             "status": {"$nin": ["cancelado", "ausencia", "bloqueado"]}
         })
 
         if conflitos > 0:
-            return jsonify({"erro": f"Ops! Já existem {conflitos} clientes agendados neste dia. Cancele-os ou remarqueles antes de bloquear o dia."}), 400
+            return jsonify({"erro": f"Dia com {conflitos} atendimentos. Cancele-os antes."}), 400
 
-        # Cria o bloqueio
         agenda_instance.collection.insert_one({
             "nome": "BLOQUEIO ADMINISTRATIVO",
-            "servico": "Folga",  # Importante ser "Folga" com F maiúsculo para bater com a busca
+            "servico": "Folga",
             "status": "bloqueado",
-            "inicio": inicio_dia,
-            "fim": fim_dia,
+            "inicio": inicio_utc, # Salva em UTC
+            "fim": fim_utc,       # Salva em UTC
             "created_at": datetime.now(timezone.utc),
             "owner_whatsapp_id": "admin",
             "cliente_telefone": "",
@@ -2553,16 +2560,11 @@ def api_gerenciar_folga():
         return jsonify({"sucesso": True}), 200
 
     elif acao == 'remover':
-        # Remove APENAS o bloqueio de folga
         resultado = agenda_instance.collection.delete_many({
-            "inicio": {"$gte": inicio_dia, "$lte": fim_dia},
+            "inicio": {"$gte": inicio_utc, "$lte": fim_utc},
             "$or": [{"servico": "Folga"}, {"status": "bloqueado"}]
         })
-        
-        if resultado.deleted_count > 0:
-            return jsonify({"sucesso": True, "msg": "Folga removida. Agenda aberta!"}), 200
-        else:
-            return jsonify({"erro": "Nenhuma folga encontrada para remover neste dia."}), 400
+        return jsonify({"sucesso": True}), 200
 
     return jsonify({"erro": "Ação inválida"}), 400
 
