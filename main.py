@@ -2488,6 +2488,62 @@ def api_criar_agendamento():
         
     return jsonify(resultado), 200
 
+@app.route('/api/folga/gerenciar', methods=['POST'])
+def api_gerenciar_folga():
+    """
+    Cria ou Remove um bloqueio total (Folga) no dia.
+    Regra: Só cria folga se não houver agendamentos ativos.
+    """
+    data = request.json
+    data_str = data.get('data') # Espera "YYYY-MM-DD" ou "DD/MM/YYYY"
+    acao = data.get('acao') # 'criar' ou 'remover'
+
+    if not agenda_instance:
+        return jsonify({"erro": "Agenda offline"}), 500
+
+    dt = parse_data(data_str)
+    if not dt: return jsonify({"erro": "Data inválida"}), 400
+    
+    # Define o intervalo do dia inteiro (00:00:00 até 23:59:59)
+    inicio_dia = datetime.combine(dt.date(), dt_time.min)
+    fim_dia = datetime.combine(dt.date(), dt_time.max)
+
+    if acao == 'criar':
+        # 1. Regra de Ouro: Verificar se tem agendamentos REAIS (ignora cancelados)
+        conflitos = agenda_instance.collection.count_documents({
+            "inicio": {"$gte": inicio_dia, "$lte": fim_dia},
+            "servico": {"$ne": "Folga"}, # Ignora se já tiver block de folga duplicado
+            "status": {"$nin": ["cancelado", "ausencia"]} # Ignora cancelados e ausências
+        })
+
+        if conflitos > 0:
+            return jsonify({"erro": f"Impossível bloquear. Existem {conflitos} clientes agendados neste dia. Cancele-os antes de definir folga."}), 400
+
+        # 2. Criar o bloqueio (Ocupa o dia todo para a IA não vender)
+        agenda_instance.collection.insert_one({
+            "nome": "BLOQUEIO ADMINISTRATIVO",
+            "servico": "Folga", # Essa palavra chave diz pro App que é feriado
+            "duracao_minutos": 1440, # 24 horas
+            "inicio": inicio_dia,
+            "fim": fim_dia,
+            "status": "bloqueado",
+            "created_at": datetime.now(timezone.utc),
+            "owner_whatsapp_id": "admin",
+            "telefone": "",
+            "cpf": ""
+        })
+        return jsonify({"sucesso": True, "msg": "Dia bloqueado (Folga) com sucesso."}), 200
+
+    elif acao == 'remover':
+        # Remove apenas os bloqueios de folga desse dia
+        result = agenda_instance.collection.delete_many({
+            "inicio": {"$gte": inicio_dia, "$lte": fim_dia},
+            "servico": "Folga"
+        })
+        return jsonify({"sucesso": True, "msg": "Folga removida. Agenda aberta."}), 200
+
+    return jsonify({"erro": "Ação inválida"}), 400
+
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))
