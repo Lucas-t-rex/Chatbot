@@ -1378,7 +1378,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         O QUE FAZER (FLUIDEZ):
         - Seja breve, simpática e leve.
-        - Use variações amigáveis: "Como posso te chamar?", "Com quem eu falo?", "Qual seu nome?".
+        - Use variações amigáveis: "Como posso te chamar?", "Qual seu nome?".
 
         === FILTRO DE VALIDAÇÃO DE NOME (CRÍTICO) ===
         Antes de chamar `fn_capturar_nome`, analise o texto do usuário:
@@ -2316,7 +2316,7 @@ def process_message_logic(message_data, buffered_message_text=None):
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
                 conversation_collection.update_one({'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True)
-                send_whatsapp_message(sender_number_full, "Um momento, estou chamando o Lucas! 🏃‍♂️", delay_ms=2000)
+                send_whatsapp_message(sender_number_full, "Já avisei o Lucas, um momento por favor!", delay_ms=2000)
                 
                 if RESPONSIBLE_NUMBER:
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
