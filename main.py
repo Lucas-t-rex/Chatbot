@@ -2368,47 +2368,61 @@ def api_meus_agendamentos():
         if agenda_instance is None:
             return jsonify([]), 500
 
+        # Busca agendamentos ordenados
         agendamentos_db = agenda_instance.collection.find({}).sort("inicio", 1)
         lista_formatada = []
+        
+        # Hora atual para saber se o agendamento já passou (para status pendente)
         agora_utc = datetime.now(timezone.utc)
 
         for ag in agendamentos_db:
-            inicio_utc = ag.get("inicio")
-            fim_utc = ag.get("fim")
+            inicio_dt = ag.get("inicio")
+            fim_dt = ag.get("fim")
             
-            if not isinstance(inicio_utc, datetime): continue
+            if not isinstance(inicio_dt, datetime): continue
             
-            # --- CORREÇÃO DE LEITURA (UTC -> BRASIL) ---
-            # Garante que o datetime tenha timezone UTC
-            if inicio_utc.tzinfo is None:
-                inicio_utc = inicio_utc.replace(tzinfo=timezone.utc)
+            # --- CORREÇÃO DEFINITIVA (MODO ESPELHO) ---
+            # Não fazemos mais conversão de fuso (.astimezone).
+            # Pegamos a hora exata que está salva no banco e transformamos em texto.
             
-            # Converte para Brasil antes de formatar a string do dia
-            inicio_br = inicio_utc.astimezone(FUSO_HORARIO)
-            fim_br = fim_utc.replace(tzinfo=timezone.utc).astimezone(FUSO_HORARIO) if isinstance(fim_utc, datetime) else None
-            # -------------------------------------------
+            dia_str = inicio_dt.strftime("%Y-%m-%d")   # Ex: 2025-12-04
+            dia_visual = inicio_dt.strftime("%d/%m")   # Ex: 04/12
+            hora_inicio_str = inicio_dt.strftime("%H:%M") # Ex: "11:00" (Pega o número puro)
+            
+            hora_fim_str = ""
+            if isinstance(fim_dt, datetime):
+                hora_fim_str = fim_dt.strftime("%H:%M")
+            # ------------------------------------------
 
+            # Lógica de Status (Visual)
             status_db = ag.get("status", "agendado")
             
-            # Compara UTC com UTC para ver se já passou
-            if inicio_utc < agora_utc and status_db == "agendado":
+            # Pequena garantia técnica para comparar datas se uma tiver fuso e a outra não
+            check_time = inicio_dt
+            if check_time.tzinfo is None:
+                check_time = check_time.replace(tzinfo=timezone.utc)
+            
+            # Se o horário já passou e ainda tá "agendado", vira "pendente" (roxo)
+            if check_time < agora_utc and status_db == "agendado":
                 status_final = "pendente_acao"
             else:
                 status_final = status_db
 
-            # Pega o Created At
+            # Created At (Data de criação do agendamento)
+            # Aqui mantemos a conversão apenas para saber quando o cliente chamou no Brasil
             created_at_dt = ag.get("created_at")
             created_at_str = ""
             if isinstance(created_at_dt, datetime):
                 if created_at_dt.tzinfo is None: created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
+                # Converte para Brasil só para exibir "Criado em: dd/mm às HH:mm"
                 created_at_str = created_at_dt.astimezone(FUSO_HORARIO).strftime("%d/%m/%Y %H:%M")
 
             item = {
                 "id": str(ag.get("_id")), 
-                "dia": inicio_br.strftime("%Y-%m-%d"), # <-- AQUI ESTAVA O ERRO! Agora usa inicio_br
-                "dia_visual": inicio_br.strftime("%d/%m"),
-                "hora_inicio": inicio_br.strftime("%H:%M"),
-                "hora_fim": fim_br.strftime("%H:%M") if fim_br else "",
+                "dia": dia_str,
+                "dia_visual": dia_visual,
+                "hora_inicio": hora_inicio_str, # Vai exatamente o que está no banco (11:00)
+                "hora_fim": hora_fim_str,
                 "servico": ag.get("servico", "Atendimento").capitalize(),
                 "status": status_final,
                 "cliente_nome": ag.get("nome", "Sem Nome").title(),
