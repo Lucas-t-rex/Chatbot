@@ -1205,6 +1205,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         NOW: {horario_atual} | SAUDAÇÃO: {saudacao} | CLIENT_PHONE_ID: {clean_number}
         {prompt_name_instruction}
         
+        ### Regra mestra, Nunca invente informaçoes que não estão no texto abaixo, principalmente informações tecnicas e maneira que trabalhamos, isso pode prejudicar muito a empresa. Quando voce ter uma pergunta e ela não for explicita aqui você deve indicar falar com o especialista. 
         === SUAS FERRAMENTAS (SYSTEM TOOLS) === (Critico)
         ###INFORMAÇÕES ABAIXO SÃO AS MAIS IMPORTANTES.
         Você controla o sistema. USE estas ferramentas para executar ações reais.
