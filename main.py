@@ -249,9 +249,14 @@ class Agenda:
 
     def _checar_horario_passado(self, dt_agendamento: datetime, hora_str: str) -> bool:
         try:
+           
             agendamento_dt = datetime.combine(dt_agendamento.date(), str_to_time(hora_str))
-            agora = datetime.now()
-            return agendamento_dt < agora
+            
+            agora_sp_com_fuso = datetime.now(FUSO_HORARIO)
+            
+            agora_sp_naive = agora_sp_com_fuso.replace(tzinfo=None)
+            
+            return agendamento_dt < agora_sp_naive
         except Exception:
             return False
 
@@ -295,8 +300,8 @@ class Agenda:
             return {"erro": f"CPF inválido. Identifiquei {len(apenas_numeros)} números. Digite os 11 números do CPF."}
         
         try:
-            agora = datetime.now()
-            query = {"cpf": cpf, "inicio": {"$gte": agora}}
+            agora_sp = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
+            query = {"cpf": cpf, "inicio": {"$gte": agora_sp}}
             resultados_db = self.collection.find(query).sort("inicio", 1)
             
             resultados = []
@@ -1206,10 +1211,19 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         NÃO simule que fez algo, CHAME a função correspondente:
 
         1. `fn_listar_horarios_disponiveis`: 
-           - QUANDO USAR: OBRIGATÓRIO chamar assim que o cliente demonstra interesse em agendar ou pede horários ("Tem vaga sexta?", "Pode ser dia 10?").
-           - REGRA CRÍTICA DE EXECUÇÃO: JAMAIS responda "Vou verificar" ou "Deixa eu ver". ISSO É PROIBIDO.
-           - AÇÃO IMEDIATA: Sua única reação deve ser CHAMAR A TOOL. O texto de resposta só deve ser gerado DEPOIS que a tool devolver os horários.
-           - CÁLCULO DE DATA: Use o `NOW` ({horario_atual}) como base absoluta. Se hoje é dia X, conte corretamente os dias. Não chute datas.
+           - QUANDO USAR: Acione IMEDIATAMENTE se o cliente demonstrar intenção de agendar ou perguntar sobre disponibilidade ("Tem vaga?", "Pode ser dia X?").
+           - PROTOCOLO DE EXECUÇÃO: É PROIBIDO narrar a ação (ex: "Vou verificar no sistema..."). Apenas CHAME A TOOL e responda com os dados já processados.
+           
+           - ÂNCORA TEMPORAL (CRÍTICO - LEIA COM ATENÇÃO): 
+             1. O servidor opera em UTC, mas o cliente está no BRASIL (GMT-3).
+             2. Ignore seu relógio interno. Sua ÚNICA verdade absoluta é a variável `NOW: {horario_atual}`.
+             3. REGRA DA VIRADA: Se `NOW` indica Sexta-feira 22:00, considere que AINDA É SEXTA-FEIRA. Não pule para Sábado.
+             4. Cálculos de "amanhã" ou "próxima semana" devem ser feitos matematicamente a partir do `NOW` fornecido.
+
+           - UX (VISUALIZAÇÃO INTELIGENTE):
+             - Se a ferramenta retornar poucos horários (até 4): Liste todos (ex: 08:00, 09:00, 14:00).
+             - Se retornar MUITOS horários (+4): É OBRIGATÓRIO AGRUPAR em faixas para não poluir o chat.
+             - Exemplo Correto: "Tenho horários livres na manhã (das 08:00 às 10:30) e à tarde (das 13:00 às 16:00). Qual turno prefere?"
 
         2. `fn_salvar_agendamento`: 
            - QUANDO USAR: É o "Salvar Jogo". Use APENAS no final, quando tiver Nome, CPF, Telefone, Serviço, Data e Hora confirmados pelo cliente.
