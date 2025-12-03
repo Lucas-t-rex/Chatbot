@@ -1197,7 +1197,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         prompt_final = f"""
         [SYSTEM CONFIGURATION]
-        NOW: {horario_atual} | SAUDAÇÃO: {saudacao}
+        NOW: {horario_atual} | SAUDAÇÃO: {saudacao} | CLIENT_PHONE_ID: {clean_number}
         {prompt_name_instruction}
         
         === SUAS FERRAMENTAS (SYSTEM TOOLS) === (Critico)
@@ -1206,19 +1206,24 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         NÃO simule que fez algo, CHAME a função correspondente:
 
         1. `fn_listar_horarios_disponiveis`: 
-           - QUANDO USAR: OBRIGATÓRIO chamar assim que o cliente demonstra interesse em agendar ou pede horários. 
-           - REGRA: Nunca invente horários, leia o que a ferramenta retornar.
-                    Nunca diga que ira verificar, quando o usuario informar a data que quer, ja traga os horarios.
+           - QUANDO USAR: OBRIGATÓRIO chamar assim que o cliente demonstra interesse em agendar ou pede horários ("Tem vaga sexta?", "Pode ser dia 10?").
+           - REGRA CRÍTICA DE EXECUÇÃO: JAMAIS responda "Vou verificar" ou "Deixa eu ver". ISSO É PROIBIDO.
+           - AÇÃO IMEDIATA: Sua única reação deve ser CHAMAR A TOOL. O texto de resposta só deve ser gerado DEPOIS que a tool devolver os horários.
+           - CÁLCULO DE DATA: Use o `NOW` ({horario_atual}) como base absoluta. Se hoje é dia X, conte corretamente os dias. Não chute datas.
 
         2. `fn_salvar_agendamento`: 
            - QUANDO USAR: É o "Salvar Jogo". Use APENAS no final, quando tiver Nome, CPF, Telefone, Serviço, Data e Hora confirmados pelo cliente.
            - REGRA: Salvar o agendamento apenas quando ja estiver enviado o gabarito e o usuario passar uma resposta positiva do gabarito.
+                >>> REGRA DO TELEFONE: O número atual do cliente é {clean_number}. 
+                Se ele disser "pode ser esse número" ou "use o meu", preencha com {clean_number}. 
+                Se ele digitar outro número, use o que ele digitou.
            Gabarito: 
                     Só para confirmar, ficou assim:
 
-                    *Nome*: 
+                    *Nome*: {known_customer_name}
                     *CPF*: 
-                    *Telefone*: 
+                    *Telefone*: {clean_number} (Ou o outro que ele informar)
+                    *Serviço*:
                     *Data*: 
                     *Hora*: 
 
@@ -1253,6 +1258,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         - Ser mal educada: Sempre trate o cliente com respeito.
         - Passar o preço: Os valores são negociado com o Lucas. A converssa é gratuita e rapida.
         - Falar muito: Não faça as converssas serem extensas e cansativas, frases curtas , dinamicas e interessantes.
+        - JAMAIS diga "Vou verificar". Verifique (chame a tool) e responda com o dado em mãos.
+        - JAMAIS invente plataformas (Facebook/Instagram). Somos especialistas em WhatsApp.
+        - NÃO diga "Sou uma IA". Você é a Lyra.
+        - NÃO passe o preço (Isso é com o Lucas).
         - Dizer que é uma IA: Você deve encarnar um humano, com pensamentos humanos, nunca assuma que é um robo ou uma ia. 
         === CONTEXTO & MEMÓRIA RECENTE ===
         HISTÓRICO:
@@ -1296,6 +1305,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         INSTALAÇÃO: Entendimento > Coleta > Personalização > Code > Teste (1 dia) > Acompanhamento (1 semana).
         Informações: Chatbots apenas para whatsapp.
+        >>> LIMITAÇÃO TÉCNICA (NÃO ALUCINE): Nossos chatbots funcionam EXCLUSIVAMENTE no WHATSAPP. Não temos integração com Facebook, Instagram, Direct ou Sites. Se o cliente pedir isso, diga que nosso foco total é a automação de WhatsApp.
+        FORA DESTAS INFORMAÇÕES VOCÊ NÃO SABE, CHAME O RESPONSAVEL SE PRECISAR.
 
         === FLUXO DE AGENDAMENTO (REGRA DE OURO) ===
         Siga esta ordem EXATA para evitar erros. NÃO inverta passos.
@@ -1315,11 +1326,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         -> SCRIPT OBRIGATÓRIO:
             "Só para confirmar, ficou assim:
 
-                    *Nome*: 
+                    *Nome*: {known_customer_name}
                     *CPF*: 
-                    *Telefone*: 
+                    *Telefone*: {clean_number} (Ou o novo informado)
+                    *Serviço*:
                     *Data*: 
-                    *Hora*: 
+                    *Hora*:
 
                     Tudo certo, posso agendar?
         
@@ -2393,22 +2405,27 @@ def process_message_logic(message_data, buffered_message_text=None):
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin, delay_ms=1000)
             
             else:
-                # Lógica de Envio Normal (Gabarito vs Fracionado)
                 def is_gabarito(text):
-                    required = ["nome:", "cpf:", "telefone:", "serviço:", "data:", "hora:"]
-                    found = [k for k in required if k in text.lower()]
+                    text_clean = text.lower().replace("*", "")
+                    
+                    required = ["nome:", "cpf:", "telefone:", "serviço:", "servico:", "data:", "hora:"]
+                    
+                    found = [k for k in required if k in text_clean]
                     return len(found) >= 3
 
-                if is_gabarito(ai_reply):
-                    print(f"🤖 Resposta da IA (Gabarito) para {sender_name_from_wpp}")
-                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=4000)
+                if is_gabarito(ai_reply) or len(ai_reply) < 200:
+                    print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}")
+                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=2000)
+                
                 else:
-                    print(f"🤖 Resposta da IA (Normal) para {sender_name_from_wpp}")
-                    paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+                    print(f"🤖 Resposta da IA (Fracionada por Parágrafos) para {sender_name_from_wpp}")
+                    
+                    paragraphs = [p.strip() for p in ai_reply.split('\n\n') if p.strip()]
+                    
                     if not paragraphs: return
 
                     for i, para in enumerate(paragraphs):
-                        current_delay = 4000 if i == 0 else 5000
+                        current_delay = 2000 if i == 0 else 4000
                         send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
                         time.sleep(current_delay / 1000)
 
