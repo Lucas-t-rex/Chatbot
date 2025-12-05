@@ -1189,25 +1189,62 @@ def verificar_lembretes_agendados():
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
 
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "") -> str:
-    # --- 1. PREPARAÇÃO DAS VARIÁVEIS DE TEMPO (PYTHON) ---
     try:
         agora = datetime.now(FUSO_HORARIO)
-        
-        # Listas manuais para garantir PT-BR sem depender da configuração do servidor
         dias_semana = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
         meses = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
         
+        # Variáveis do Agora
         dia_sem_str = dias_semana[agora.weekday()]
-        dia_num = agora.day
-        mes_nome = meses[agora.month]
-        ano_atual = agora.year
         hora_fmt = agora.strftime("%H:%M")
-
-        # Variável MESTRA de Tempo (Compacta e Completa)
-        info_tempo_real = f"HOJE É: {dia_sem_str}, dia {dia_num} de {mes_nome} de {ano_atual} | HORA AGORA: {hora_fmt} (Fuso SP/Brasil)"
+        data_hoje_fmt = agora.strftime("%d/%m/%Y")
         
-    except Exception:
-        info_tempo_real = f"DATA: {horario_atual} (Fuso SP/Brasil)"
+        dia_num = agora.day
+        ano_atual = agora.year # Isso muda automaticamente para 2026 quando o servidor virar
+
+        # --- A MÁGICA: MAPA DOS PRÓXIMOS 45 DIAS (ZERO CÁLCULO PRA IA) ---
+        # A IA não vai precisar calcular nada. Ela só vai LER.
+        lista_dias = []
+        
+        # 1. Gera os próximos 45 dias detalhados
+        for i in range(45): 
+            d = agora + timedelta(days=i)
+            nome_dia = dias_semana[d.weekday()] # <--- CORRIGIDO AQUI (era nome_sem)
+            data_str = d.strftime("%d/%m")
+            
+            marcador = ""
+            if i == 0: marcador = " (HOJE)"
+            elif i == 1: marcador = " (AMANHÃ)"
+            
+            lista_dias.append(f"- {data_str} é {nome_dia}{marcador}")
+
+        # 2. Gera âncoras longas (apenas 1º dia dos meses seguintes)
+        lista_meses_futuros = []
+        for i in range(1, 7): # Próximos 6 meses
+            mes_futuro = agora.replace(day=1) + timedelta(days=i*30)
+            data_mes = mes_futuro.strftime("%m/%Y")
+            try:
+                nome_dia_mes = dias_semana[mes_futuro.replace(day=1).weekday()]
+                lista_meses_futuros.append(f"(Ref: 01/{data_mes} cai numa {nome_dia_mes})")
+            except: pass
+
+        calendario_completo = "\n".join(lista_dias) + "\n\nReferência Futura:\n" + "\n".join(lista_meses_futuros)
+        
+        # Variável MESTRA para o Prompt
+        info_tempo_real = (
+            f"HOJE É: {dia_sem_str}, {data_hoje_fmt} | HORA: {hora_fmt}\n"
+            f"=== MAPA DE DATAS (NÃO CALCULE, APENAS LEIA AQUI) ===\n"
+            f"{calendario_completo}\n"
+            f"======================================================"
+        )
+        
+    except Exception as e:
+        # Fallback de segurança (Só acontece se o servidor estiver sem relógio)
+        info_tempo_real = f"DATA: {horario_atual} (Erro ao gerar calendário: {e})"
+        dia_sem_str = "Dia desconhecido"
+        dia_num = "X"
+        ano_atual = datetime.now().year #
+
     if known_customer_name:
 
         palavras = known_customer_name.strip().split()
@@ -1231,6 +1268,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         TIME_CONTEXT: Use as variáveis de 'HOJE É' e 'HORA AGORA' acima para calcular mentalmente qualquer referência de tempo (amanhã, sexta-feira, semana que vem, tarde, noite).
             1. REGRA DO "ÀS 6": Se o cliente disser número solto (1 a 7), assuma Tarde/Noite (13h às 19h). Ex: "às 6" = 18:00. "Meio dia" = 12:00. (IMPORTANTE: DENTRO OS HORARIOS DE FUNCIONAMENTO DA EMPRESA CITADOS A BAIXO, NA FAZ SENTIDO AGENDAR UM HORARIO FORA DO QUE ATENDEMOS.)
             2. REGRA DE DATA: Se hoje é {dia_sem_str} ({dia_num}), calcule o dia correto quando ele disser "Sexta" ou "Amanhã".
+            3. REGRA DO FUTURO: Estamos em {ano_atual}. Se o cliente pedir um mês que já passou (ex: estamos em Dezembro e ele pede "Agosto"), SIGNIFICA ANO QUE VEM ({ano_atual + 1}). JAMAIS agende para o passado.
+            4. REGRA DE CÁLCULO: Para achar "Quarta dia 6", olhe nas ÂNCORAS acima. Ex: Se 01/05 é Sexta -> 02(Sáb), 03(Dom), 04(Seg), 05(Ter), 06(Qua). BINGO! É Maio.
 
         === SUAS FERRAMENTAS (SYSTEM TOOLS) === (Critico)
         ###INFORMAÇÕES ABAIXO SÃO AS MAIS IMPORTANTES.
@@ -1240,17 +1279,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         1. `fn_listar_horarios_disponiveis`: 
            - QUANDO USAR: Acione IMEDIATAMENTE se o cliente demonstrar intenção de agendar ou perguntar sobre disponibilidade ("Tem vaga?", "Pode ser dia X?").
            - PROTOCOLO DE EXECUÇÃO: É PROIBIDO narrar a ação (ex: "Vou verificar no sistema..."). Apenas CHAME A TOOL e responda com os dados já processados.
-           
-           - ÂNCORA TEMPORAL (CRÍTICO - LEIA COM ATENÇÃO): 
-             1. O servidor opera em UTC, mas o cliente está no BRASIL (GMT-3).
-             2. Ignore seu relógio interno. Sua ÚNICA verdade absoluta é a variável `NOW: {horario_atual}`.
-             3. REGRA DA VIRADA: Se `NOW` indica Sexta-feira 22:00, considere que AINDA É SEXTA-FEIRA. Não pule para Sábado.
-             4. Cálculos de "amanhã" ou "próxima semana" devem ser feitos matematicamente a partir do `NOW` fornecido.
-
-           - UX (VISUALIZAÇÃO INTELIGENTE):
-             - Se a ferramenta retornar poucos horários (até 4): Liste todos (ex: 08:00, 09:00, 14:00).
-             - Se retornar MUITOS horários (+4): É OBRIGATÓRIO AGRUPAR em faixas para não poluir o chat.
-             - Exemplo Correto: "Tenho horários livres na manhã (das 08:00 às 10:30) e à tarde (das 13:00 às 16:00). Qual turno prefere?"
+                >>> REGRA CRÍTICA DE APRESENTAÇÃO (UX HUMANIZADA) <<<
+                    Se a ferramenta retornar UMA LISTA LONGA (mais de 4 horários), É PROIBIDO LISTAR UM POR UM com vírgulas (ex: 08:00, 08:30, 09:00...).
+                    - O QUE FAZER: Agrupe visualmente e fale como gente.
+                    - EXEMPLO ROBÓTICO (ERRADO): "Tenho 08:00, 08:30, 09:00, 09:30, 10:00..."
+                    - EXEMPLO HUMANO (CERTO): "Tenho a manhã toda livre, das 08h às 11h30, e à tarde das 13h às 17h30. O que prefere?"
+                    - Se sobrar poucos horários: "Só me restaram o das 09h e o das 15h30. Algum desses te ajuda?"
 
         2. `fn_salvar_agendamento`: 
            - QUANDO USAR: É o "Salvar Jogo". Use APENAS no final, quando tiver Nome, CPF, Telefone, Serviço, Data e Hora confirmados pelo cliente.
@@ -1286,7 +1320,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         Para realizar a missão seja fluida, para realizar um contexto ate nossa real intenção.
         Você pode usar o [HISTÓRICO] para criar uma contrução de como fazer o agendamento ou a venda dessa maneira.
         Use o {info_tempo_real} para validar se a data que o cliente pediu faz sentido.
-        
+        Sempre termine com uma pergunta aberta, a não ser que seja uma despedida.
+
         >>> REGRA DE OURO (PING-PONG): FALE MENOS, OUÇA MAIS. <<<
         1. PROIBIDO PERGUNTAS DUPLAS: Jamais faça duas perguntas na mesma mensagem. (Ex: "Qual seu ramo? E quantos clientes?"). ISSO É PROIBIDO.
         2. ESCUTA GENUÍNA: Se o cliente responder algo (Ex: "Tenho uma Pizzaria"), NÃO pule para a próxima pergunta do script. PRIMEIRO, valide o que ele disse.
