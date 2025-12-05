@@ -763,11 +763,7 @@ def analisar_status_da_conversa(history):
             print("✅ [Auditor] Sucesso detectado via Código (Economia de Tokens!)")
             return "sucesso", 0, 0
 
-    # --- PASSO 2: AUDITORIA IA (SÓ SE NÃO FOI SUCESSO) ---
-    # Se chegou aqui, ou é 'andamento' ou 'fracasso'.
-    # Usamos um prompt MÍNIMO para gastar pouco.
-    
-    msgs_para_analise = history[-8:] # Sua otimização de 4 mensagens
+    msgs_para_analise = history[-10:] 
     historico_texto = ""
     for msg in msgs_para_analise:
         role = "Bot" if msg.get('role') in ['assistant', 'model'] else "Cliente"
@@ -1270,6 +1266,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             2. REGRA DE DATA: Se hoje é {dia_sem_str} ({dia_num}), calcule o dia correto quando ele disser "Sexta" ou "Amanhã".
             3. REGRA DO FUTURO: Estamos em {ano_atual}. Se o cliente pedir um mês que já passou (ex: estamos em Dezembro e ele pede "Agosto"), SIGNIFICA ANO QUE VEM ({ano_atual + 1}). JAMAIS agende para o passado.
             4. REGRA DE CÁLCULO: Para achar "Quarta dia 6", olhe nas ÂNCORAS acima. Ex: Se 01/05 é Sexta -> 02(Sáb), 03(Dom), 04(Seg), 05(Ter), 06(Qua). BINGO! É Maio.
+            5. REGRA DO "JÁ PASSOU" (CRÍTICO): Se o cliente pedir um horário para HOJE, compare com a HORA AGORA ({hora_fmt}). Se ele pedir 11:00 e agora são 12:15, DIGA NA HORA: "Esse horário já passou hoje, pode ser mais tarde ou outro dia?". NÃO CRIE O GABARITO COM HORÁRIO PASSADO.
 
         === SUAS FERRAMENTAS (SYSTEM TOOLS) === (Critico)
         ###INFORMAÇÕES ABAIXO SÃO AS MAIS IMPORTANTES.
@@ -1307,6 +1304,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         3. `fn_solicitar_intervencao`: 
            - QUANDO USAR: O "Botão do Lucas". Use se o cliente quiser falar com humano, se a negociação esquentar ("quero fechar agora") ou se houver um problema técnico. Ou quando o cliente querer saber sobre o preço.
            - REGRA: Se entender que a pessoa quer falar com o Lucas ou o dono ou alguem resposavel, chame a chave imediatamente. Nunca diga que ira chamar e nao use a tolls.
+                Caso você não entenda peça pra pessoa ser mais claro na intenção dela.
 
         4. `fn_consultar_historico_completo`: 
            - QUANDO USAR: Memória de Longo Prazo. Antes de perguntar um dado (CPF, Ramo), verifique se ele já não disse isso semanas atrás usando esta tool.
@@ -1361,7 +1359,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             4. **NOME (CRÍTICO):** PROIBIDO INICIAR TODA FRASE COM O NOME. Use o nome no MÁXIMO 1 vez a cada 5 mensagens para recuperar a atenção. Falar o nome toda hora soa robótico.
             5. **MODERAÇÃO DE EMOJIS:** Maximo 1 emoji por 5 blocos, exceto se o cliente usar muitos.
             6. **DIREÇÃO:** SEMPRE termine com uma PERGUNTA ou uma CHAMADA PARA AÇÃO (CTA), exceto em despedidas.
-        
+            7. **EMOJIS (RIGOROSO):** Use no MÁXIMO 1 emoji por mensagem inteira e que tenha sentido no que diz. Se não for uma frase de impacto, NÃO USE. Evite repetições.
+
         ===  DADOS DA EMPRESA ===
         NOME: Neuro'Up Soluções em Tecnologia | SETOR: Tecnologia/Automação/IA
         META: Aumentar o faturamento da empresas e Micro-empreendedores.
@@ -1393,12 +1392,17 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         -> RESPOSTA: Mostre os horários agrupados (ex: "Tenho das 08h às 10h").
         
         PASSO 2: Cliente escolheu o horário?
-        -> AÇÃO: Peça o CPF. (Não confirme nada ainda). E veja se parece um cpf valido.
+        -> AÇÃO 1 (VALIDAÇÃO TEMPORAL): Verifique se esse horário JÁ PASSOU hoje. Se passou, avise e peça outro.
+        -> AÇÃO 2 (SE VÁLIDO): Peça o CPF e o Telefone JUNTOS.
+        -> SCRIPT: "Perfeito! Para confirmar, preciso do seu CPF e saber se posso usar este número atual para contato?"
         
         PASSO 3: Cliente passou CPF?
-        -> AÇÃO: Pergunte do telefone: "Posso usar este número atual para contato ou prefere outro?"
+        -> AÇÃO 1 (VALIDAÇÃO DE CPF): Conte os dígitos do CPF AGORA. 
+           - Tem 11 números? -> OK, Prossiga.
+           - Tem mais ou menos? -> PARE TUDO e peça para corrigir: "O CPF parece ter dígitos a mais/menos. Pode conferir?"
+        -> AÇÃO 2: Se CPF e Telefone ok -> GERE O GABARITO COMPLETO.
         
-        PASSO 4: Cliente confirmou telefone?
+        PASSO 5: Gerar gabarito.
         -> AÇÃO: GERE O GABARITO COMPLETO.
         -> SCRIPT OBRIGATÓRIO:
             "Só para confirmar, ficou assim:
@@ -1412,7 +1416,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
                     Tudo certo, posso agendar?
         
-        PASSO 5: Cliente disse "SIM/PODE"?
+        PASSO 6: Cliente disse "SIM/PODE"?
         -> AÇÃO FINAL: Chame `fn_salvar_agendamento`.
         -> PÓS-AÇÃO: "Agendado com sucesso! Te enviaremos um lembrete." (NÃO pergunte "algo mais" aqui para não confundir o status).
         
