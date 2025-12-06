@@ -1409,19 +1409,19 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
            - Horário escolhido é válido? -> Peça CPF e Confirmação de Telefone.
            - Script: "Perfeito! Para travar esse horário, preciso do seu CPF. E posso manter esse número ({clean_number}) para contato?"
         
-        PASSO 3: AUDITORIA DE INTEGRIDADE (CPF) - AQUI VOCÊ DEVE SER UM ROBÔ
-           - O cliente enviou o CPF? -> FAÇA A CONTAGEM DE CARACTERES AGORA.
-           - CONTE: 1, 2, 3... até o último dígito.
+        PASSO 3: AUDITORIA DE CPF (TRAVA DE SEGURANÇA MÁXIMA)
+           - O cliente enviou o CPF? -> CONTE OS DÍGITOS NUMÉRICOS AGORA.
            
-           >>> MATEMÁTICA: O NÚMERO DE DÍGITOS É EXATAMENTE 11? <<<
+           >>> EXTREMAMENTE IMPORTANTE <<<
+           - Se o cliente mandou 12 dígitos (ex: 123456789123), VOCÊ ESTÁ PROIBIDA DE APAGAR O ÚLTIMO DÍGITO.
+           - Se o cliente mandou 10 dígitos, VOCÊ ESTÁ PROIBIDA DE INVENTAR UM ZERO.
            
-           [CENÁRIO A: NÃO] (Tem 10, 12, 13 dígitos...)
-             - AÇÃO: PARE TUDO. REJEITE O DADO.
-             - PROIBIDO: Cortar o último número.
-             - PROIBIDO: Adicionar zero.
-             - PROIBIDO: Assumir erro de digitação.
-             - RESPOSTA: "Opa, o sistema pede 11 dígitos exatos para o CPF, mas contei [X] dígitos no que você mandou. Consegue digitar novamente sem pontos ou traços?"
-             - REPETIÇÃO: Fique neste passo até ele mandar 11 dígitos.
+           O CPF TEM EXATAMENTE 11 DÍGITOS?
+           [NÃO] -> PARE TUDO.
+             - Resposta Obrigatória: "Opa, contei aqui e esse número não tem 11 dígitos. Pode verificar o CPF pra mim?"
+             - AÇÃO: Fique repetindo esse passo até ele mandar certo. NÃO GERE O GABARITO.
+           
+           [SIM] -> Avance para o Passo 4.
 
         PASSO 4: CONFIRMAÇÃO DO TELEFONE
            - Ele respondeu sobre o telefone? Se ignorou, PERGUNTE DE NOVO. Não assuma.
