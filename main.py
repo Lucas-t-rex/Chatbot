@@ -1264,7 +1264,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         AQUI ESTA REALMENTE O QUE DEVE FAZER USANDO O TEXTO ABAIXO:
             1- Você deve ter noção do tempo em {info_tempo_real}!
             2- Você deve usar as tools para qualquer ação que faça juiz ao que precisar e a persona e a tecnicas de vendas devem vir depois delas!
-
+            3- Sempre deve terminar com uma pergunta a não ser que seja uma despedida. 
+            
         Regra Nunca invente informaçoes que não estão no texto abaixo, principalmente informações tecnicas e maneira que trabalhamos, isso pode prejudicar muito a empresa. Quando voce ter uma pergunta e ela não for explicita aqui você deve indicar falar com o especialista. 
         TIME_CONTEXT: Use as variáveis de 'HOJE É' e 'HORA AGORA' acima para calcular mentalmente qualquer referência de tempo (amanhã, sexta-feira, semana que vem, tarde, noite).
             1. REGRA DO "ÀS 6": Se o cliente disser número solto (1 a 7), assuma Tarde/Noite (13h às 19h). Ex: "às 6" = 18:00. "Meio dia" = 12:00. (IMPORTANTE: DENTRO OS HORARIOS DE FUNCIONAMENTO DA EMPRESA CITADOS A BAIXO, NA FAZ SENTIDO AGENDAR UM HORARIO FORA DO QUE ATENDEMOS.)
@@ -1947,8 +1948,12 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
 
         except Exception as e:
             print(f"❌ Erro na tentativa {attempt+1}: {e}")
-            if attempt < max_retries - 1:
-                time.sleep(1) 
+            # Se o erro for de COTA (429), precisamos esperar MUITO mais
+            if "429" in str(e) or "Quota" in str(e):
+                print("⏳ Limite de cota atingido. Esperando 20 segundos para tentar de novo...")
+                time.sleep(20) # Espera 20s para o Google liberar a cota
+            elif attempt < max_retries - 1:
+                time.sleep(5) # Aumentei de 1s para 5s para erros gerais
             else:
                 return "A mensagem que você enviou deu erro aqui no whatsapp. 😵‍💫 Pode enviar novamente, por favor?"
     
@@ -2579,7 +2584,7 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
     scheduler.add_job(gerar_e_enviar_relatorio_diario, 'cron', hour=8, minute=0)
     print("⏰ Agendador de relatórios iniciado. O relatório será enviado DIARIAMENTE às 08:00.")
     
-    scheduler.add_job(verificar_followup_automatico, 'interval', minutes=1)
+    scheduler.add_job(verificar_followup_automatico, 'interval', minutes=20)
     print(f"⏰ Agendador de Follow-up iniciado (Estágios ativos: {TEMPO_FOLLOWUP_1}, {TEMPO_FOLLOWUP_2}, {TEMPO_FOLLOWUP_3} min).")
 
     scheduler.add_job(verificar_lembretes_agendados, 'interval', minutes=60)
