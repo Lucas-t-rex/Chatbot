@@ -2584,7 +2584,7 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
     scheduler.add_job(gerar_e_enviar_relatorio_diario, 'cron', hour=8, minute=0)
     print("⏰ Agendador de relatórios iniciado. O relatório será enviado DIARIAMENTE às 08:00.")
     
-    scheduler.add_job(verificar_followup_automatico, 'interval', minutes=20)
+    scheduler.add_job(verificar_followup_automatico, 'interval', minutes=1)
     print(f"⏰ Agendador de Follow-up iniciado (Estágios ativos: {TEMPO_FOLLOWUP_1}, {TEMPO_FOLLOWUP_2}, {TEMPO_FOLLOWUP_3} min).")
 
     scheduler.add_job(verificar_lembretes_agendados, 'interval', minutes=60)
