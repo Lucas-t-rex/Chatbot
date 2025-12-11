@@ -19,13 +19,13 @@ CONFIG = {
     "INSTANCE_NAME": "chatbot",
     
     # --- CONFIGURAÇÕES DE NEGÓCIO ---
-    "RESPONSIBLE_NUMBER": "554898389781", 
+    "RESPONSIBLE_NUMBER": "554498716404", 
     "ARQUIVO_ALVO": "lista.xlsx",
     
     # --- TEMPOS (HUMANIZAÇÃO) ---
     "TEMPO_DIGITANDO": 5000,      # 5 Segundos de "digitando..." (Balaozinho)
     "DELAY_ENTRE_MSG": (4, 7),    # Tempo de pausa entre uma mensagem e outra da sequência
-    "DELAY_ENTRE_CLIENTES": (15, 30) # Tempo de descanso entre clientes
+    "DELAY_ENTRE_CLIENTES": (80, 120) # Tempo de descanso entre clientes
 }
 
 # ==============================================================================
@@ -199,13 +199,13 @@ def loop_disparo():
         if nome_raw:
             # Pega o primeiro nome e deixa a primeira letra maiúscula
             primeiro_nome = nome_raw.split()[0].title() 
-            msg1 = f"Oi {primeiro_nome}, aqui é o Lucas da Grupar auto peças tudo certo?"
+            msg1 = f"Bom dia, {primeiro_nome}! Tudo bem? Aqui é o Gabriel da Grupar."
         else:
-            msg1 = "Oi, aqui é o Lucas da Grupar auto peças tudo certo?"
+            msg1 = "Bom dia! Tudo bem? Aqui é o Gabriel da Grupar."
 
         # --- SEQUÊNCIA FIXA ---
-        msg2 = "Eu notei que ja faz um tempo que nao pede nada,"
-        msg3 = "e como vamos entrar de ferias agora to com umas promoçoes bem bacana , voce quer ver ?"
+        msg2 = "Notei que faz um tempinho que o senhor não compra com a gente e passei só pra avisar que no dia 18 entramos em férias coletivas."
+        msg3 = "Estamos com algumas ofertas bem boas antes disso. Você quer que eu te envie o que vale a pena aproveitar hoje?"
 
         fila_mensagens = [msg1, msg2, msg3]
 
