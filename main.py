@@ -131,7 +131,7 @@ class EvolutionSender:
         try:
             response = requests.post(final_url, json=payload, headers=self.headers, timeout=25) # Timeout maior pq o delay é longo
             if response.status_code < 400:
-                print(f"      ✅ Enviado: \"{mensagem[:30]}...\" (Delay: {delay_digitacao}ms)")
+                print(f"      ✅ Enviado: \"{mensagem[:30]}...")
                 return True
             else:
                 print(f"      ❌ Falha API: {response.status_code}")
@@ -199,9 +199,9 @@ def loop_disparo():
         if nome_raw:
             # Pega o primeiro nome e deixa a primeira letra maiúscula
             primeiro_nome = nome_raw.split()[0].title() 
-            msg1 = f"Oi {primeiro_nome}, é o Lucas da Grupar auto peças tudo certo?"
+            msg1 = f"Oi {primeiro_nome}, aqui é o Lucas da Grupar auto peças tudo certo?"
         else:
-            msg1 = "Oi, é o Lucas da Grupar auto peças tudo certo?"
+            msg1 = "Oi, aqui é o Lucas da Grupar auto peças tudo certo?"
 
         # --- SEQUÊNCIA FIXA ---
         msg2 = "Eu notei que ja faz um tempo que nao pede nada,"
