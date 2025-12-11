@@ -1,22 +1,29 @@
 import google.generativeai as genai
 import requests
 import os
+import sys
 from flask import Flask, request, jsonify
 
 # ==============================================================================
-# ⚙️ CONFIGURAÇÕES
+# ⚙️ CONFIGURAÇÕES SEGURAS
 # ==============================================================================
 # Dados fornecidos por você
 RESPONSIBLE_NUMBER = "554898389781"
-GEMINI_API_KEY = "AIzaSyB24rmQDo_NyAAH3Dtwzsd_CvzPbyX-kYo"
+
+# --- MUDANÇA AQUI: PEGAR DO AMBIENTE (SEGREDO) ---
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 # Sua API no Fly.io
 EVOLUTION_API_URL = "https://evolution-api-lucas.fly.dev"
 EVOLUTION_API_KEY = "1234"
 INSTANCE_NAME = "chatbot"
 
-# Configuração da IA
-genai.configure(api_key=GEMINI_API_KEY)
+# Verificação de segurança
+if not GEMINI_API_KEY:
+    print("❌ ERRO CRÍTICO: A chave GEMINI_API_KEY não foi configurada nos Secrets do Fly!", flush=True)
+else:
+    # Configuração da IA
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # ==============================================================================
 # 🧠 CÉREBRO DA IA (FERRAMENTAS & PROMPT)
@@ -47,7 +54,10 @@ SE E SOMENTE SE o cliente pedir para falar com o dono, humano ou suporte, CHAME 
 Não invente números de telefone.
 """
 
-model = genai.GenerativeModel('gemini-2.5-flash-lite', tools=tools, system_instruction=SYSTEM_PROMPT)
+# Só inicia o modelo se tiver chave
+model = None
+if GEMINI_API_KEY:
+    model = genai.GenerativeModel('gemini-2.5-flash-lite', tools=tools, system_instruction=SYSTEM_PROMPT)
 
 # Memória Simples (RAM)
 memory = {} 
@@ -61,7 +71,7 @@ def log(msg):
     print(msg, flush=True)
 
 def send_whatsapp_message(number, text):
-    """Envia mensagem usando a estrutura estável do seu código de exemplo"""
+    """Envia mensagem usando a estrutura estável"""
     url = f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}"
     
     payload = {
@@ -90,33 +100,34 @@ def send_whatsapp_message(number, text):
 # ==============================================================================
 @app.route('/', methods=['GET'])
 def health():
-    return "Bot Online e Estável", 200
+    return "Bot Online e Protegido", 200
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # 1. RESPOSTA RÁPIDA (CRÍTICO PARA NÃO CAIR A CONEXÃO)
-    # O Flask precisa responder 200 OK imediatamente para a Evolution não achar que travou.
-    # Por isso, vamos processar os dados mas garantir o retorno rápido.
-    
+    # Proteção: Se não tiver chave, nem tenta processar
+    if not model:
+        log("❌ [ERRO] Tentativa de uso sem chave de API configurada.")
+        return jsonify({"status": "error_no_key"}), 200
+
     try:
         data = request.json
         if not data: return jsonify({"status": "no data"}), 200
 
-        # Filtro de Evento (Só processa mensagens novas)
+        # Filtro de Evento
         if data.get('event') != 'messages.upsert':
             return jsonify({"status": "ignored"}), 200
 
         msg_data = data.get('data', {})
         key = msg_data.get('key', {})
         
-        # Filtro de Origem (Ignora eu mesmo e grupos)
+        # Filtro de Origem
         if key.get('fromMe') or 'g.us' in key.get('remoteJid', ''):
             return jsonify({"status": "ignored"}), 200
 
         remote_jid = key.get('remoteJid')
         clean_number = remote_jid.split('@')[0]
         
-        # Extração de Texto Segura
+        # Extração de Texto
         user_msg = msg_data.get('message', {}).get('conversation') or \
                    msg_data.get('message', {}).get('extendedTextMessage', {}).get('text')
 
@@ -126,7 +137,6 @@ def webhook():
         log(f"📩 [RECEBIDO] De: {clean_number} | Msg: {user_msg}")
 
         # --- PROCESSAMENTO DA IA ---
-        # (Aqui está a lógica simplificada para não sobrecarregar)
         if clean_number not in memory:
             memory[clean_number] = []
 
@@ -167,9 +177,8 @@ def webhook():
 
     except Exception as e:
         log(f"❌ [ERRO GERAL] {e}")
-        return jsonify({"status": "error"}), 500
+        return jsonify({"status": "error"}), 200
 
 if __name__ == '__main__':
-    # Porta 8080 é padrão do Fly/Koyeb geralmente, mas deixei configurável
     port = int(os.environ.get("PORT", 8080)) 
     app.run(host='0.0.0.0', port=port)
