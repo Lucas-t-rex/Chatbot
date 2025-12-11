@@ -144,5 +144,10 @@ def webhook():
 
     return jsonify({"status": "ok"}), 200
 
+# --- ROTA DE SAÚDE (OBRIGATÓRIA PARA O FLY.IO) ---
+@app.route('/', methods=['GET'])
+def health_check():
+    return "Bot está rodando!", 200
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=8000)
