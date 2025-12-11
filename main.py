@@ -55,23 +55,26 @@ def receive_webhook():
         msg_data = data.get('data', {})
         key = msg_data.get('key', {})
         from_me = key.get('fromMe', False)
-        remote_jid = key.get('remoteJid', '')
+        
+        # --- LÓGICA DE EXTRAÇÃO DE NÚMERO (IGUAL AO SEU CHATBOT) ---
+        # Tenta pegar na ordem: senderPn -> participant -> remoteJid
+        raw_number = key.get('senderPn') or key.get('participant') or key.get('remoteJid')
+        
+        if not raw_number:
+            return jsonify({"status": "no_number_found"}), 200
 
         # Ignora mensagens do próprio bot ou grupos
-        if from_me or '@g.us' in remote_jid: return jsonify({"status": "ignored"}), 200
+        if from_me or '@g.us' in raw_number: return jsonify({"status": "ignored"}), 200
 
-        clean_number = remote_jid.split('@')[0]
+        # Limpeza final (remove o @s.whatsapp.net e caracteres estranhos)
+        clean_number = raw_number.split('@')[0].split(':')[0] 
         
-        # LÓGICA DE TRAVAMENTO INDIVIDUAL
-        # Se quem mandou mensagem NÃO é o dono e NÃO está travado ainda:
+        # LÓGICA DE TRAVAMENTO
         if clean_number != CONFIG["RESPONSIBLE_NUMBER"] and clean_number not in CLIENTES_EM_INTERVENCAO:
-            print(f"\n🚨 [INTERVENÇÃO] Cliente {clean_number} respondeu! Pausando campanha APENAS para ele.")
+            print(f"\n🚨 [INTERVENÇÃO] Cliente {clean_number} respondeu! Pausando campanha.")
             
-            # 1. Adiciona na lista negra temporária
             CLIENTES_EM_INTERVENCAO.add(clean_number)
             
-            # 2. Avisa o Lucas
-            nome_cliente = f"Cliente {clean_number}" # Poderia buscar na lista, mas aqui é rapidez
             msg_aviso = (
                 f"🔔 *INTERVENÇÃO HUMANA*\n"
                 f"O número *{clean_number}* respondeu à campanha.\n"
