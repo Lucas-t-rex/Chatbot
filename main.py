@@ -5,7 +5,7 @@ from flask import Flask, request, jsonify
 # --- CONFIGURAÇÕES ---
 # Chaves fornecidas por você
 RESPONSIBLE_NUMBER = "554898389781"
-GEMINI_API_KEY = "AIzaSyAhaTl7JDg_vzEteDSAIJwvGAhYAE95F24"
+GEMINI_API_KEY = "AIzaSyB24rmQDo_NyAAH3Dtwzsd_CvzPbyX-kYo"
 
 # Configure aqui os dados da sua Evolution API (Instância 'chatbot')
 EVOLUTION_API_URL = "https://evolution-api-lucas.fly.dev" # <--- SUBSTITUA PELO SEU URL
