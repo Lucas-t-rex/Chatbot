@@ -86,7 +86,7 @@ EMPRESA:
             Local: Maringá-PR — Av. Joaquim Duarte Moleirinho, 4304 - Jardim Cidade Monções (CEP 87060-350). 
             Site:gruparautopecas.com.br
             Sobre nós:Atua no comércio atacadista e varejista de autopeças para linha pesada (caminhões) e implementos: Volvo, Scania, Mercedes-Benz, Iveco, MAN, DAF, entre outras. 
-            Seguimento: Acabamentos, filtros, eletrica, suspenção e acessorios.
+            Seguimento: Acabamentos, filtros, eletrica, suspenção e acessoarios.
             Catálogo: amplo (milhares de SKUs) e seções de lançamentos, ofertas e produtos em destaque; aceita cotações via site e WhatsApp. 
             Estrutura logística: matriz no Paraná e filial em Santa Catarina, ~2.500 m² de armazenagem e mais de 50.000 clientes atendidos em todo o Brasil.
         Planos e produtos:
@@ -103,7 +103,7 @@ FLUXO:
 # Só inicia o modelo se tiver chave
 model = None
 if GEMINI_API_KEY:
-    model = genai.GenerativeModel('gemini-2.5-flash-lite', tools=tools, system_instruction=SYSTEM_PROMPT)
+    model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=SYSTEM_PROMPT)
 
 # ==============================================================================
 # 🗄️ MEMÓRIA & BUFFER (VOLÁTIL)
