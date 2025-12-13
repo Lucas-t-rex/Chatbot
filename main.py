@@ -137,6 +137,34 @@ def get_maringa_time():
     """Retorna o timestamp atual no fuso de Maringá."""
     return datetime.now(FUSO_HORARIO)
 
+def get_time_context():
+    """
+    Gera um contexto temporal robusto.
+    ATUALIZADO: Agora instrui explicitamente sobre saudações.
+    """
+    agora = datetime.now(FUSO_HORARIO)
+    
+    dias_semana = {
+        0: "Segunda-feira", 1: "Terça-feira", 2: "Quarta-feira", 
+        3: "Quinta-feira", 4: "Sexta-feira", 5: "Sábado", 6: "Domingo"
+    }
+    meses = {
+        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
+        5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
+        9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
+    }
+
+    dia_sem = dias_semana[agora.weekday()]
+    mes_nome = meses[agora.month]
+    
+    # A Mágica acontece aqui nestas 3 linhas:
+    contexto = (
+        f"DATA DE HOJE: {dia_sem}, {agora.day} de {mes_nome} de {agora.year}.\n"
+        f"HORÁRIO AGORA: {agora.strftime('%H:%M')}.\n"
+        f"DIRETRIZ DE TEMPO: Use o horário acima para definir a saudação (Bom dia/tarde/noite) e para entender referências como 'ontem', 'hoje' ou 'amanhã'."
+    )
+    return contexto
+
 def db_save_message(phone_number, role, text):
     """Salva mensagens de forma atômica no MongoDB."""
     if conversation_collection is None: return
@@ -209,41 +237,30 @@ def send_whatsapp_message(number, text, delay_extra=0):
 # ==============================================================================
 def processar_mensagem_ia(clean_number):
     """
-    Processamento Robusto: 
-    1. Lê Buffer -> 2. Salva User no Banco -> 3. Lê Histórico do Banco -> 4. Gera Resposta -> 5. Salva Bot no Banco
+    Fluxo Profissional: Buffer -> Banco -> Contexto Temporal -> IA -> Banco
     """
     try:
-        # 1. Recupera mensagens do buffer
+        # 1. Validação do Buffer
         if clean_number not in message_buffer or not message_buffer[clean_number]: return
         
         full_user_msg = " ".join(message_buffer[clean_number])
         del message_buffer[clean_number]
         if clean_number in message_timers: del message_timers[clean_number]
 
-        log(f"🧠 [PROCESSANDO] Cliente: {clean_number} | Msg: {full_user_msg}")
+        log(f"🧠 [PROCESSANDO] {clean_number}: {full_user_msg}")
 
-        # 2. Persistência da mensagem do usuário (Antes de gerar resposta)
         db_save_message(clean_number, "user", full_user_msg)
 
-        # 3. Carregamento de Contexto (State Recovery)
-        # Recupera as últimas 25 mensagens reais do banco para dar contexto à IA
         history_context = db_load_history(clean_number, limit=25)
-
-        # 4. Inicia Chat com IA (Com Contexto Real)
-        # Injetamos a hora atual de Maringá no contexto do sistema antes de chamar
-        current_time_str = get_maringa_time().strftime("%d/%m/%Y às %H:%M")
-        system_instruction_updated = f"HORÁRIO ATUAL (MARINGÁ-PR): {current_time_str}\n" + SYSTEM_PROMPT
         
-        # Reinicia o modelo para garantir prompt atualizado
-        current_model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=system_instruction_updated)
+        time_context = get_time_context()
+        prompt_atualizado = f"{time_context}\n\n{SYSTEM_PROMPT}"
+
+        current_model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=prompt_atualizado)
         
         chat = current_model.start_chat(history=history_context)
-        
-        # Enviamos a mensagem atual. O histórico já foi carregado no 'start_chat'
-        # Nota: Não precisamos reenviar o histórico manual, o Gemini gerencia isso na sessão
         response = chat.send_message(full_user_msg)
         
-        # 5. Verifica Tool Call (Intervenção)
         tool_call = None
         if response.candidates and response.candidates[0].content.parts:
             for part in response.candidates[0].content.parts:
@@ -252,38 +269,33 @@ def processar_mensagem_ia(clean_number):
                     break
         
         if tool_call and tool_call.name == "fn_solicitar_intervencao":
-            motivo = tool_call.args.get("motivo", "Não especificado")
-            log(f"🚨 [INTERVENÇÃO] Cliente: {clean_number}")
+            motivo = tool_call.args.get("motivo", "Geral")
+            log(f"🚨 Intervenção: {motivo}")
             
-            # Notifica responsável
-            send_whatsapp_message(RESPONSIBLE_NUMBER, f"🚨 CHAMADO DE INTERVENÇÃO!\nCliente: {clean_number}\nMotivo: {motivo}")
+            send_whatsapp_message(RESPONSIBLE_NUMBER, f"🚨 AJUDA VENDAS!\nCli: {clean_number}\nQuer: {motivo}")
             
-            # Feedback ao cliente
-            feedback_text = "Entendi. Vou chamar o Vitão (Humano) para ver essa questão de valores com você. Só um instante..."
-            send_whatsapp_message(clean_number, feedback_text)
-            db_save_message(clean_number, "model", feedback_text)
+            msg_bot = "Entendi! Vou chamar o Vitão aqui pra ver esse valor especial pra você. Só um minuto..."
+            send_whatsapp_message(clean_number, msg_bot)
+            db_save_message(clean_number, "model", msg_bot)
 
         else:
-            # 6. Tratamento de Resposta (Texto)
+            # 6. Resposta Normal
             raw_text = response.text
             blocos = [b.strip() for b in raw_text.split('\n') if b.strip()]
             if not blocos: blocos = [raw_text]
 
-            full_bot_response = ""
-
+            full_bot_text = ""
             for i, bloco in enumerate(blocos):
                 send_whatsapp_message(clean_number, bloco)
-                full_bot_response += bloco + " "
-                
-                if i < len(blocos) - 1:
-                    time.sleep(3) # Pausa natural de leitura
+                full_bot_text += bloco + " "
+                if i < len(blocos) - 1: time.sleep(3)
 
-            # 7. Persistência da resposta do Bot
-            db_save_message(clean_number, "model", full_bot_response.strip())
+            # Persistência (Bot)
+            db_save_message(clean_number, "model", full_bot_text.strip())
 
     except Exception as e:
-        log(f"❌ [ERRO PROCESSAMENTO] {e}")
-        
+        log(f"❌ Erro Processamento: {e}")
+
 # ==============================================================================
 # 📡 ROTA PRINCIPAL (WEBHOOK)
 # ==============================================================================
