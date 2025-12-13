@@ -1,26 +1,42 @@
-import google.generativeai as genai
-import requests
 import os
 import sys
-import threading
+import pytz
 import time
+import requests
+import threading
+from datetime import datetime
+from pymongo import MongoClient
+import google.generativeai as genai
 from flask import Flask, request, jsonify
+
 
 # ==============================================================================
 # ⚙️ CONFIGURAÇÕES SEGURAS
 # ==============================================================================
 # Dados fornecidos por você
 RESPONSIBLE_NUMBER = "554898389781"
-
-# --- MUDANÇA AQUI: PEGAR DO AMBIENTE (SEGREDO) ---
+FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-# Sua API no Fly.io
+MONGO_URI = os.environ.get("MONGO_URI")
 EVOLUTION_API_URL = "https://evolution-api-lucas.fly.dev"
 EVOLUTION_API_KEY = "1234"
 INSTANCE_NAME = "chatbot"
+DB_NAME = "chatgrupar_db"
 
-# Verificação de segurança
+mongo_client = None
+conversation_collection = None
+
+try:
+    if MONGO_URI:
+        mongo_client = MongoClient(MONGO_URI)
+        db = mongo_client[DB_NAME]
+        conversation_collection = db['conversations']
+        print("✅ [MONGODB] Conexão com banco de dados estabelecida.", flush=True)
+    else:
+        print("⚠️ [MONGODB] Aviso: MONGO_URI não definida. O bot não salvará histórico.", flush=True)
+except Exception as e:
+    print(f"❌ [MONGODB] Erro crítico de conexão: {e}", flush=True)
+
 if not GEMINI_API_KEY:
     print("❌ ERRO CRÍTICO: A chave GEMINI_API_KEY não foi configurada nos Secrets do Fly!", flush=True)
 else:
@@ -117,6 +133,46 @@ app = Flask(__name__)
 # ==============================================================================
 # 🛠️ FUNÇÕES AUXILIARES
 # ==============================================================================
+def get_maringa_time():
+    """Retorna o timestamp atual no fuso de Maringá."""
+    return datetime.now(FUSO_HORARIO)
+
+def db_save_message(phone_number, role, text):
+    """Salva mensagens de forma atômica no MongoDB."""
+    if conversation_collection is None: return
+    
+    timestamp = get_maringa_time()
+    msg_entry = {
+        "role": role, # 'user' ou 'model'
+        "text": text,
+        "ts": timestamp.isoformat()
+    }
+    
+    conversation_collection.update_one(
+        {"_id": phone_number},
+        {
+            "$push": {"history": msg_entry},
+            "$set": {"last_interaction": timestamp},
+            "$setOnInsert": {"created_at": timestamp}
+        },
+        upsert=True
+    )
+
+def db_load_history(phone_number, limit=25):
+    """Recupera o contexto histórico (últimas N mensagens)."""
+    if conversation_collection is None: return []
+    
+    doc = conversation_collection.find_one({"_id": phone_number}, {"history": {"$slice": -limit}})
+    if not doc: return []
+    
+    gemini_history = []
+    for msg in doc.get("history", []):
+        gemini_history.append({
+            "role": msg.get("role"),
+            "parts": [msg.get("text")]
+        })
+    return gemini_history
+
 def log(msg):
     print(msg, flush=True)
 
@@ -153,28 +209,41 @@ def send_whatsapp_message(number, text, delay_extra=0):
 # ==============================================================================
 def processar_mensagem_ia(clean_number):
     """
-    Função executada após o tempo de buffer (8s) acabar.
-    Ela processa o texto acumulado, chama a IA e envia a resposta em blocos.
+    Processamento Robusto: 
+    1. Lê Buffer -> 2. Salva User no Banco -> 3. Lê Histórico do Banco -> 4. Gera Resposta -> 5. Salva Bot no Banco
     """
     try:
-        # 1. Recupera todas as mensagens do buffer e junta
-        if clean_number not in message_buffer or not message_buffer[clean_number]:
-            return
-            
+        # 1. Recupera mensagens do buffer
+        if clean_number not in message_buffer or not message_buffer[clean_number]: return
+        
         full_user_msg = " ".join(message_buffer[clean_number])
-        del message_buffer[clean_number] # Limpa o buffer
+        del message_buffer[clean_number]
         if clean_number in message_timers: del message_timers[clean_number]
 
-        log(f"🧠 [IA INICIADA] Processando para {clean_number}: {full_user_msg}")
+        log(f"🧠 [PROCESSANDO] Cliente: {clean_number} | Msg: {full_user_msg}")
 
-        # 2. Inicia Chat com IA
-        if clean_number not in memory:
-            memory[clean_number] = []
+        # 2. Persistência da mensagem do usuário (Antes de gerar resposta)
+        db_save_message(clean_number, "user", full_user_msg)
 
-        chat = model.start_chat(history=memory[clean_number])
+        # 3. Carregamento de Contexto (State Recovery)
+        # Recupera as últimas 25 mensagens reais do banco para dar contexto à IA
+        history_context = db_load_history(clean_number, limit=25)
+
+        # 4. Inicia Chat com IA (Com Contexto Real)
+        # Injetamos a hora atual de Maringá no contexto do sistema antes de chamar
+        current_time_str = get_maringa_time().strftime("%d/%m/%Y às %H:%M")
+        system_instruction_updated = f"HORÁRIO ATUAL (MARINGÁ-PR): {current_time_str}\n" + SYSTEM_PROMPT
+        
+        # Reinicia o modelo para garantir prompt atualizado
+        current_model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=system_instruction_updated)
+        
+        chat = current_model.start_chat(history=history_context)
+        
+        # Enviamos a mensagem atual. O histórico já foi carregado no 'start_chat'
+        # Nota: Não precisamos reenviar o histórico manual, o Gemini gerencia isso na sessão
         response = chat.send_message(full_user_msg)
         
-        # 3. Verifica Tool Call (Intervenção)
+        # 5. Verifica Tool Call (Intervenção)
         tool_call = None
         if response.candidates and response.candidates[0].content.parts:
             for part in response.candidates[0].content.parts:
@@ -186,41 +255,35 @@ def processar_mensagem_ia(clean_number):
             motivo = tool_call.args.get("motivo", "Não especificado")
             log(f"🚨 [INTERVENÇÃO] Cliente: {clean_number}")
             
-            # Avisa Dono
-            send_whatsapp_message(RESPONSIBLE_NUMBER, f"🚨 CHAMADO!\nNumero: {clean_number}\nMotivo: {motivo}")
-            # Não envia nada pro cliente, pois o humano vai assumir (ou envia msg de espera se quiser)
+            # Notifica responsável
+            send_whatsapp_message(RESPONSIBLE_NUMBER, f"🚨 CHAMADO DE INTERVENÇÃO!\nCliente: {clean_number}\nMotivo: {motivo}")
             
-        else:
-            # 4. TRATAMENTO DE BLOCOS (PARÁGRAFOS)
-            raw_text = response.text
-            
-            # Divide o texto onde houver quebra de linha
-            # Remove linhas vazias ou apenas com espaço
-            blocos = [b.strip() for b in raw_text.split('\n') if b.strip()]
-            
-            # Se a IA mandou tudo junto, vira um bloco só
-            if not blocos: 
-                blocos = [raw_text]
+            # Feedback ao cliente
+            feedback_text = "Entendi. Vou chamar o Vitão (Humano) para ver essa questão de valores com você. Só um instante..."
+            send_whatsapp_message(clean_number, feedback_text)
+            db_save_message(clean_number, "model", feedback_text)
 
-            # 5. ENVIO SEQUENCIAL COM PAUSA
+        else:
+            # 6. Tratamento de Resposta (Texto)
+            raw_text = response.text
+            blocos = [b.strip() for b in raw_text.split('\n') if b.strip()]
+            if not blocos: blocos = [raw_text]
+
+            full_bot_response = ""
+
             for i, bloco in enumerate(blocos):
                 send_whatsapp_message(clean_number, bloco)
+                full_bot_response += bloco + " "
                 
-                # Salva no histórico (parte por parte)
-                memory[clean_number].append({'role': 'model', 'parts': [bloco]})
-                
-                # Se ainda tiver blocos para enviar, espera 4 segundos
                 if i < len(blocos) - 1:
-                    log(f"⏳ [PAUSA] Esperando 4s para enviar o próximo bloco...")
-                    time.sleep(4) 
+                    time.sleep(3) # Pausa natural de leitura
 
-            # Salva a mensagem do usuário no histórico no final
-            memory[clean_number].append({'role': 'user', 'parts': [full_user_msg]})
+            # 7. Persistência da resposta do Bot
+            db_save_message(clean_number, "model", full_bot_response.strip())
 
     except Exception as e:
         log(f"❌ [ERRO PROCESSAMENTO] {e}")
-
-
+        
 # ==============================================================================
 # 📡 ROTA PRINCIPAL (WEBHOOK)
 # ==============================================================================
