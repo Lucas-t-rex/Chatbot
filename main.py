@@ -139,29 +139,35 @@ def get_maringa_time():
 
 def get_time_context():
     """
-    Gera um contexto temporal robusto.
-    ATUALIZADO: Agora instrui explicitamente sobre saudações.
+    Gera contexto temporal e define a SAUDAÇÃO MANDATÓRIA baseada na hora real.
     """
     agora = datetime.now(FUSO_HORARIO)
     
+    # 1. Definição Python da Saudação (Infalível)
+    hora = agora.hour
+    if 5 <= hora < 12:
+        saudacao_real = "Bom dia"
+    elif 12 <= hora < 18:
+        saudacao_real = "Boa tarde"
+    else:
+        saudacao_real = "Boa noite"
+
     dias_semana = {
         0: "Segunda-feira", 1: "Terça-feira", 2: "Quarta-feira", 
         3: "Quinta-feira", 4: "Sexta-feira", 5: "Sábado", 6: "Domingo"
     }
-    meses = {
-        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
-        5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
-        9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
-    }
-
     dia_sem = dias_semana[agora.weekday()]
-    mes_nome = meses[agora.month]
-    
-    # A Mágica acontece aqui nestas 3 linhas:
+
+    # 2. Texto de Contexto Reforçado
     contexto = (
-        f"DATA DE HOJE: {dia_sem}, {agora.day} de {mes_nome} de {agora.year}.\n"
-        f"HORÁRIO AGORA: {agora.strftime('%H:%M')}.\n"
-        f"DIRETRIZ DE TEMPO: Use o horário acima para definir a saudação (Bom dia/tarde/noite) e para entender referências como 'ontem', 'hoje' ou 'amanhã'."
+        f""" CONTEXTO TEMPORAL (VERDADE ABSOLUTA)
+        DATA: {dia_sem}, {agora.day}/{agora.month}/{agora.year}
+        HORA: {agora.strftime('%H:%M')}
+        SAUDAÇÃO OFICIAL DO MOMENTO: '{saudacao_real}'
+        REGRA DE OURO (ANTI-ALUCINAÇÃO):
+        1. Se o cliente disser '{'Bom dia' if saudacao_real != 'Bom dia' else 'Boa noite'}' mas o horário for {agora.strftime('%H:%M')}, IGNORE o erro dele.\n"
+        2. Responda SEMPRE usando a SAUDAÇÃO OFICIAL ({saudacao_real}).
+        3. Exemplo: Se ele disser 'Bom dia' às 23h, responda: 'Opa, boa noite! Tudo certo?'. Não corrija ele de forma rude, apenas use o tempo certo."""
     )
     return contexto
 
