@@ -290,7 +290,7 @@ def loop_disparo():
 
         # --- 2. ENVIO DAS 3 IMAGENS ---
         # Certifique-se que estas imagens estão na pasta do projeto no Git
-        lista_imagens = ["promo1.jpg", "promo2.jpg", "promo3.jpg"] 
+        lista_imagens = ["promo1.jpeg", "promo2.jpeg", "promo3.jpeg"]
         
         abortar = False
         for imagem in lista_imagens:
