@@ -199,7 +199,7 @@ def loop_disparo():
         if nome_raw:
             # Pega o primeiro nome e deixa a primeira letra maiúscula
             primeiro_nome = nome_raw.split()[0].title() 
-            msg1 = f"Boooom diiiaa, {primeiro_nome}! Beleza?.\nFalamos uns dias atrás sobre sua frota, lembra?"
+            msg1 = f"Boooom diiiaa, {primeiro_nome}! Beleza?\nFalamos uns dias atrás sobre sua frota, lembra?"
         else:
             msg1 = "Boooom diiiaa! Beleza?."
 
