@@ -1,380 +1,247 @@
+import pandas as pd
+import requests
+import time
+import random
+import re
 import os
 import sys
-import pytz
-import time
-import requests
 import threading
-from datetime import datetime
-from pymongo import MongoClient
-import google.generativeai as genai
 from flask import Flask, request, jsonify
-
-
-# ==============================================================================
-# ⚙️ CONFIGURAÇÕES SEGURAS
-# ==============================================================================
-# Dados fornecidos por você
-RESPONSIBLE_NUMBER = "554898389781"
-FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-MONGO_URI = os.environ.get("MONGO_URI")
-EVOLUTION_API_URL = "https://evolution-api-lucas.fly.dev"
-EVOLUTION_API_KEY = "1234"
-INSTANCE_NAME = "chatbot"
-DB_NAME = "chatgrupar_db"
-
-mongo_client = None
-conversation_collection = None
-
-try:
-    if MONGO_URI:
-        mongo_client = MongoClient(MONGO_URI)
-        db = mongo_client[DB_NAME]
-        conversation_collection = db['conversations']
-        print("✅ [MONGODB] Conexão com banco de dados estabelecida.", flush=True)
-    else:
-        print("⚠️ [MONGODB] Aviso: MONGO_URI não definida. O bot não salvará histórico.", flush=True)
-except Exception as e:
-    print(f"❌ [MONGODB] Erro crítico de conexão: {e}", flush=True)
-
-if not GEMINI_API_KEY:
-    print("❌ ERRO CRÍTICO: A chave GEMINI_API_KEY não foi configurada nos Secrets do Fly!", flush=True)
-else:
-    # Configuração da IA
-    genai.configure(api_key=GEMINI_API_KEY)
+from typing import Optional, List
 
 # ==============================================================================
-# 🧠 CÉREBRO DA IA (FERRAMENTAS & PROMPT)
+# ⚙️ CONFIGURAÇÕES
 # ==============================================================================
-tools = [
-    {
-        "function_declarations": [
-            {
-                "name": "fn_solicitar_intervencao",
-                "description": "Use esta função quando o cliente pedir para falar com o dono, humano ou suporte.",
-                "parameters": {
-                    "type_": "OBJECT",
-                    "properties": {
-                        "motivo": {"type_": "STRING", "description": "O motivo do chamado."}
-                    },
-                    "required": ["motivo"]
-                }
-            }
-        ]
-    }
-]
-
-def get_system_prompt():
-    tempo = get_tempo_real() 
-
-    prompt = f"""
-        CONFIGURAÇÕES:
-            REGRA: Você deve sempre utilizar as funções no exato momento em que detectar, não deve fazer mais nada a nao ser chamar a tool.
-            1. Sempre que notar que um cliente falar sobre valores, cotações, promoções chame a função ´fn_solicitar_intervencao´ IMEDIATAMENTE.
-            2. CONTEXTO TEMPORAL: 
-                {tempo['dia_semana']}, {tempo['dia']} de {tempo['mes_nome']} às {tempo['hora_fmt']}.
-                SAUDAÇÃO "{tempo['saudacao_real']}".
-                Mesmo que o usuario erre (diga Bom dia à noite), ignore o erro dele e responda naturalmente usando APENAS "{tempo['saudacao_real']}".
-        PERSONALIDADE: 
-            REGRA:
-                ROLE: Atendente, Vendedor e Especialista em peças de caminhão linha pesada. Você trabalha na empresa citada abaixo!
-                NOME: Vitor (apelido Vitão). (Você deve encarnar um humano, nunca assuma que é um robô/IA).
-                TOM: Humano, Educado, Profissional, Objetivo e Empático. Você deve tratar a pessoa como alguém da família — de forma acolhedora, próxima e natural, mas sem ser forçado.
-                
-                [REGRAS VISUAIS E DE ESTILO]
-                    1. QUEBRA DE LINHA: Pule uma linha entre sua reação e a próxima pergunta.
-                    2. EFEITO CAMALEÃO: Adapte o tom ao cliente (sério → formal; brincalhão → leve) e responda a piadas com “kkkkk” de forma natural.
-                    3. ANTI-REPETIÇÃO: Não fale o nome varias vezes na converssa, apenas em perguntas.
-                    4. ANTI-VALIDAÇÃO: Não use validações ("Entendi", "Interessante", "Compreendo") o cliente nao precisa saber que voce entendeu.
-                    4. NOME: Use no MÁXIMO 1 vez a cada 5 mensagens.
-                    5. EMOJIS: Máximo 1 a cada 3 mensagens inteiras. Use com moderação e sentido.
-                    6. DIREÇÃO: Sempre termine com PERGUNTA ou CTA (exceto despedidas).
-                    7. PING-PONG: Fale menos, ouça mais. Proibido perguntas duplas.
-                        ESCUTA GENUÍNA: 
-                            Preste atenção no que o cliente disse, sempre tenha um interesse genuino sobre ele. 
-                            Busque fazer amizade.
-                            Não seja chato.
-                        DIREÇÃO DA CONVERSA: 
-                            Não explique "para entender suas necessidades". O cliente não quer ser analisado, ele quer ser ajudado.
-                            Faça UMA pergunta, espere a resposta, COMENTE a resposta dele com interesse genuíno, e só depois avance.
-                            Não tenha pressa. Se o cliente quiser conversar, converse.
-                            Não se explique ou explique uma ação ou pensamento pro cliente, você é humano. 
-        EMPRESA: 
-            REGRA: Nunca invente informações desta empresa, se alguem perguntar algo sobre a empresa e não estiver aqui em baixo diga que não sabe.
-                Informações:
-                    Empresa: Grupar
-                    Razão social: Parise Comércio e Distribuição de Peças Automotivas LTDA.
-                    Fundação: 12/03/2019.
-                    Local: Maringá-PR — Av. Joaquim Duarte Moleirinho, 4304 - Jardim Cidade Monções (CEP 87060-350). 
-                    Site:gruparautopecas.com.br
-                    Sobre nós:Atua no comércio atacadista e varejista de autopeças para linha pesada (caminhões) e implementos: Volvo, Scania, Mercedes-Benz, Iveco, MAN, DAF, entre outras. 
-                    Seguimento: Acabamentos, filtros, eletrica, suspenção e acessoarios.
-                    Catálogo: amplo (milhares de SKUs) e seções de lançamentos, ofertas e produtos em destaque; aceita cotações via site e WhatsApp. 
-                    Estrutura logística: matriz no Paraná e filial em Santa Catarina, ~2.500 m² de armazenagem e mais de 50.000 clientes atendidos em todo o Brasil.
-                Planos e produtos:
-                    Seguimento: Acabamentos, filtros, eletrica, suspenção e acessorios.
-                    Formas de pagamento: Pix, Boleto, Dinheiro, Cartão.
-                    Despacho: Envio para todo Brasil, parcerias com transportadoras.
-        FLUXO:
-            REGRA:
-                Você pode converssar a vontade com o cliente e fazer amizade, 
-                Sempre termine com uma pergunta.
-
-"""
-    return prompt
-
-# Só inicia o modelo se tiver chave
-model = None
-if GEMINI_API_KEY:
-    model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=get_system_prompt)
+CONFIG = {
+    # --- EVOLUTION API ---
+    "EVOLUTION_API_URL": "https://evolution-api-lucas.fly.dev",
+    "EVOLUTION_API_KEY": "1234",
+    "INSTANCE_NAME": "chatbot",
+    
+    # --- CONFIGURAÇÕES DE NEGÓCIO ---
+    "RESPONSIBLE_NUMBER": "554498716404", 
+    "ARQUIVO_ALVO": "lista.xlsx",
+    
+    # --- TEMPOS (HUMANIZAÇÃO) ---
+    "TEMPO_DIGITANDO": 5000,      # 5 Segundos de "digitando..." (Balaozinho)
+    "DELAY_ENTRE_MSG": (4, 7),    # Tempo de pausa entre uma mensagem e outra da sequência
+    "DELAY_ENTRE_CLIENTES": (80, 120) # Tempo de descanso entre clientes
+}
 
 # ==============================================================================
-# 🗄️ MEMÓRIA & BUFFER (VOLÁTIL)
+# 🚨 MEMÓRIA DE INTERVENÇÃO (VOLÁTIL)
 # ==============================================================================
-memory = {} 
-message_buffer = {}  # Armazena as mensagens temporárias
-message_timers = {}  # Armazena os timers ativos
+CLIENTES_EM_INTERVENCAO = set()
 
 app = Flask(__name__)
 
 # ==============================================================================
-# 🛠️ FUNÇÕES AUXILIARES
+# 📡 SERVIDOR WEBHOOK (INTERVENÇÃO)
 # ==============================================================================
-def get_maringa_time():
-    """Retorna o timestamp atual no fuso de Maringá."""
-    return datetime.now(FUSO_HORARIO)
-
-def get_tempo_real():
-    """
-    Calcula o tempo, data e saudação correta baseada em Maringá.
-    Retorna um dicionário com tudo pronto para uso.
-    """
-    agora = datetime.now(FUSO_HORARIO)
-    
-    # 1. Lógica da Saudação
-    hora = agora.hour
-    if 5 <= hora < 12:
-        saudacao = "Bom dia"
-    elif 12 <= hora < 18:
-        saudacao = "Boa tarde"
-    else:
-        saudacao = "Boa noite"
-
-    # 2. Mapas de Texto
-    dias_semana = {
-        0: "Segunda-feira", 1: "Terça-feira", 2: "Quarta-feira", 
-        3: "Quinta-feira", 4: "Sexta-feira", 5: "Sábado", 6: "Domingo"
-    }
-    meses = {
-        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
-        5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
-        9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
-    }
-
-    return {
-        "saudacao_real": saudacao,
-        "dia_semana": dias_semana[agora.weekday()],
-        "dia": agora.day,
-        "mes_nome": meses[agora.month],
-        "ano": agora.year,
-        "hora_fmt": agora.strftime('%H:%M')
-    }
-
-def db_save_message(phone_number, role, text):
-    """Salva mensagens de forma atômica no MongoDB."""
-    if conversation_collection is None: return
-    
-    timestamp = get_maringa_time()
-    msg_entry = {
-        "role": role, # 'user' ou 'model'
-        "text": text,
-        "ts": timestamp.isoformat()
-    }
-    
-    conversation_collection.update_one(
-        {"_id": phone_number},
-        {
-            "$push": {"history": msg_entry},
-            "$set": {"last_interaction": timestamp},
-            "$setOnInsert": {"created_at": timestamp}
-        },
-        upsert=True
-    )
-
-def db_load_history(phone_number, limit=25):
-    """Recupera o contexto histórico (últimas N mensagens)."""
-    if conversation_collection is None: return []
-    
-    doc = conversation_collection.find_one({"_id": phone_number}, {"history": {"$slice": -limit}})
-    if not doc: return []
-    
-    gemini_history = []
-    for msg in doc.get("history", []):
-        gemini_history.append({
-            "role": msg.get("role"),
-            "parts": [msg.get("text")]
-        })
-    return gemini_history
-
-def log(msg):
-    print(msg, flush=True)
-
-def send_whatsapp_message(number, text, delay_extra=0):
-    """Envia mensagem usando a estrutura estável"""
-    url = f"{EVOLUTION_API_URL}/message/sendText/{INSTANCE_NAME}"
-    
-    # O delay aqui é o tempo que aparece "digitando..." no WhatsApp
-    delay_digitando = 3000  # 3 segundos digitando para cada bloco
-    
-    payload = {
-        "number": number,
-        "textMessage": {"text": text},
-        "options": {
-            "delay": delay_digitando, 
-            "presence": "composing", 
-            "linkPreview": True
-        }
-    }
-    headers = {
-        "apikey": EVOLUTION_API_KEY,
-        "Content-Type": "application/json"
-    }
-    
-    try:
-        # Timeout curto para não travar o servidor se a API demorar
-        requests.post(url, json=payload, headers=headers, timeout=10)
-        log(f"📤 [ENVIO] Enviado para {number}: {text[:30]}...")
-    except Exception as e:
-        log(f"❌ [ERRO] Falha envio: {e}")
-
-# ==============================================================================
-# 🧠 LÓGICA DE PROCESSAMENTO (THREAD)
-# ==============================================================================
-def processar_mensagem_ia(clean_number):
-    """
-    Fluxo Profissional: Buffer -> Banco -> Contexto Temporal -> IA -> Banco
-    """
-    try:
-        # 1. Validação do Buffer
-        if clean_number not in message_buffer or not message_buffer[clean_number]: return
-        
-        full_user_msg = " ".join(message_buffer[clean_number])
-        del message_buffer[clean_number]
-        if clean_number in message_timers: del message_timers[clean_number]
-
-        log(f"🧠 [PROCESSANDO] {clean_number}: {full_user_msg}")
-
-        db_save_message(clean_number, "user", full_user_msg)
-
-        history_context = db_load_history(clean_number, limit=25)
-        
-        prompt_completo = get_system_prompt()
-
-        current_model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=prompt_completo)
-        
-        chat = current_model.start_chat(history=history_context)
-        response = chat.send_message(full_user_msg)
-        
-        tool_call = None
-        if response.candidates and response.candidates[0].content.parts:
-            for part in response.candidates[0].content.parts:
-                if part.function_call:
-                    tool_call = part.function_call
-                    break
-        
-        if tool_call and tool_call.name == "fn_solicitar_intervencao":
-            motivo = tool_call.args.get("motivo", "Geral")
-            log(f"🚨 Intervenção: {motivo}")
-            
-            send_whatsapp_message(RESPONSIBLE_NUMBER, f"🚨 AJUDA VENDAS!\nCli: {clean_number}\nQuer: {motivo}")
-            
-            msg_bot = "Entendi! Vou chamar o Vitão aqui pra ver esse valor especial pra você. Só um minuto..."
-            send_whatsapp_message(clean_number, msg_bot)
-            db_save_message(clean_number, "model", msg_bot)
-
-        else:
-            # 6. Resposta Normal
-            raw_text = response.text
-            blocos = [b.strip() for b in raw_text.split('\n') if b.strip()]
-            if not blocos: blocos = [raw_text]
-
-            full_bot_text = ""
-            for i, bloco in enumerate(blocos):
-                send_whatsapp_message(clean_number, bloco)
-                full_bot_text += bloco + " "
-                if i < len(blocos) - 1: time.sleep(3)
-
-            # Persistência (Bot)
-            db_save_message(clean_number, "model", full_bot_text.strip())
-
-    except Exception as e:
-        log(f"❌ Erro Processamento: {e}")
-
-# ==============================================================================
-# 📡 ROTA PRINCIPAL (WEBHOOK)
-# ==============================================================================
-@app.route('/', methods=['GET'])
-def health():
-    return "Bot Online e Protegido", 200
-
 @app.route('/webhook', methods=['POST'])
-def webhook():
-    # Proteção: Se não tiver chave, nem tenta processar
-    if not model:
-        log("❌ [ERRO] Tentativa de uso sem chave de API configurada.")
-        return jsonify({"status": "error_no_key"}), 200
-
+def receive_webhook():
     try:
         data = request.json
         if not data: return jsonify({"status": "no data"}), 200
 
-        # Filtro de Evento
-        if data.get('event') != 'messages.upsert':
-            return jsonify({"status": "ignored"}), 200
+        event_type = data.get('event')
+        if event_type != 'messages.upsert': return jsonify({"status": "ignored"}), 200
 
         msg_data = data.get('data', {})
         key = msg_data.get('key', {})
+        from_me = key.get('fromMe', False)
         
-        # Filtro de Origem
-        if key.get('fromMe') or 'g.us' in key.get('remoteJid', ''):
-            return jsonify({"status": "ignored"}), 200
-
-        remote_jid = key.get('remoteJid')
-        clean_number = remote_jid.split('@')[0]
+        # --- LÓGICA DE EXTRAÇÃO DE NÚMERO (CAÇA AO NÚMERO REAL) ---
+        raw_number = key.get('senderPn') or key.get('participant') or key.get('remoteJid')
         
-        # Extração de Texto
-        user_msg = msg_data.get('message', {}).get('conversation') or \
-                   msg_data.get('message', {}).get('extendedTextMessage', {}).get('text')
+        if not raw_number: return jsonify({"status": "no_number"}), 200
 
-        if not user_msg:
-            return jsonify({"status": "no_text"}), 200
+        # Ignora mensagens do próprio bot ou grupos
+        if from_me or '@g.us' in raw_number: return jsonify({"status": "ignored"}), 200
 
-        log(f"📩 [BUFFER] Recebido de {clean_number}: {user_msg}")
-
-        # --- LÓGICA DE BUFFER (ESPERA 8 SEGUNDOS) ---
+        # Limpeza final
+        clean_number = raw_number.split('@')[0].split(':')[0]
         
-        # 1. Adiciona mensagem na lista temporária
-        if clean_number not in message_buffer:
-            message_buffer[clean_number] = []
-        message_buffer[clean_number].append(user_msg)
-        
-        # 2. Se já tinha um timer rodando, cancela (o cliente digitou mais coisa)
-        if clean_number in message_timers:
-            message_timers[clean_number].cancel()
+        # TRAVAMENTO
+        if clean_number != CONFIG["RESPONSIBLE_NUMBER"] and clean_number not in CLIENTES_EM_INTERVENCAO:
+            print(f"\n🚨 [INTERVENÇÃO] Cliente {clean_number} respondeu! Pausando campanha.")
             
-        # 3. Cria um novo timer de 8 segundos
-        # Se passar 8s sem novas mensagens, ele roda a função 'processar_mensagem_ia'
-        timer = threading.Timer(8.0, processar_mensagem_ia, args=[clean_number])
-        timer.start()
-        message_timers[clean_number] = timer
+            CLIENTES_EM_INTERVENCAO.add(clean_number)
+            
+            msg_aviso = (
+                f"🔔 *INTERVENÇÃO HUMANA*\n"
+                f"O número *{clean_number}* respondeu.\n"
+                f"⏸️ Robô pausado para ele."
+            )
+            sender_global.enviar_mensagem(CONFIG["RESPONSIBLE_NUMBER"], msg_aviso, delay_digitacao=0)
 
-        # Retorna OK na hora para a Evolution não travar
-        return jsonify({"status": "buffered"}), 200
+        return jsonify({"status": "processed"}), 200
 
     except Exception as e:
-        log(f"❌ [ERRO GERAL] {e}")
-        return jsonify({"status": "error"}), 200
+        print(f"❌ Erro no Webhook: {e}")
+        return jsonify({"status": "error"}), 500
 
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 8080)) 
+@app.route('/', methods=['GET'])
+def health():
+    return "Disparador Manual Online", 200
+
+# ==============================================================================
+# 🛠️ DISPARADOR
+# ==============================================================================
+class EvolutionSender:
+    def __init__(self):
+        self.base_url = CONFIG["EVOLUTION_API_URL"]
+        self.api_key = CONFIG["EVOLUTION_API_KEY"]
+        self.instance = CONFIG["INSTANCE_NAME"]
+        self.headers = {"apikey": self.api_key, "Content-Type": "application/json"}
+
+    def limpar_telefone(self, telefone: str) -> Optional[str]:
+        if not telefone: return None
+        nums = re.sub(r'\D', '', str(telefone))
+        if len(nums) < 10: return None
+        return nums
+
+    def enviar_mensagem(self, numero: str, mensagem: str, delay_digitacao=None) -> bool:
+        clean_number = self.limpar_telefone(numero)
+        if not clean_number: return False
+
+        # Verifica Intervenção
+        if clean_number in CLIENTES_EM_INTERVENCAO and clean_number != CONFIG["RESPONSIBLE_NUMBER"]:
+            print(f"      ⛔ [BLOQUEADO] Cliente {clean_number} em intervenção.")
+            return False
+
+        # Se não passar delay específico, usa o padrão de 5s da config
+        if delay_digitacao is None:
+            delay_digitacao = CONFIG["TEMPO_DIGITANDO"]
+
+        api_path = f"/message/sendText/{self.instance}"
+        final_url = self.base_url if self.base_url.endswith(api_path) else \
+                    (self.base_url[:-1] + api_path if self.base_url.endswith('/') else self.base_url + api_path)
+
+        payload = {
+            "number": clean_number, 
+            "textMessage": {"text": mensagem},
+            "options": {
+                "delay": delay_digitacao,   # <--- AQUI ESTÁ O SEGREDO DO 5 SEGUNDOS
+                "presence": "composing",    # <--- ISSO FAZ APARECER O "DIGITANDO..."
+                "linkPreview": True
+            }
+        }
+
+        try:
+            response = requests.post(final_url, json=payload, headers=self.headers, timeout=25) # Timeout maior pq o delay é longo
+            if response.status_code < 400:
+                print(f"      ✅ Enviado: \"{mensagem[:30]}...")
+                return True
+            else:
+                print(f"      ❌ Falha API: {response.status_code}")
+                return False
+        except:
+            return False
+
+sender_global = EvolutionSender()
+
+class ProcessadorLista:
+    def __init__(self, caminho_arquivo: str):
+        self.caminho_arquivo = caminho_arquivo
+
+    def carregar_dados(self):
+        if not os.path.exists(self.caminho_arquivo):
+            print(f"❌ Arquivo '{self.caminho_arquivo}' não encontrado.")
+            return pd.DataFrame()
+        try:
+            ext = os.path.splitext(self.caminho_arquivo)[1].lower()
+            if ext == '.csv': df = pd.read_csv(self.caminho_arquivo, dtype=str, keep_default_na=False)
+            else: df = pd.read_excel(self.caminho_arquivo, dtype=str, keep_default_na=False)
+            df.columns = df.columns.str.strip().str.lower()
+            return df
+        except Exception as e:
+            print(f"❌ Erro leitura: {e}")
+            return pd.DataFrame()
+
+# ==============================================================================
+# 🧵 LOOP PRINCIPAL (AGORA COM MENSAGENS FIXAS)
+# ==============================================================================
+def loop_disparo():
+    print("⏳ Aguardando servidor iniciar (10s)...")
+    time.sleep(10)
+    
+    print("\n🤖 DISPARADOR PROGRAMADO (SEM IA)")
+    print(f"🕒 Tempo de Digitação Configurado: {CONFIG['TEMPO_DIGITANDO']}ms")
+    print("=" * 60)
+
+    leitor = ProcessadorLista(CONFIG["ARQUIVO_ALVO"])
+    df = leitor.carregar_dados()
+    
+    if df.empty:
+        print("⚠️ Nenhuma lista encontrada.")
+        return
+
+    for col in ['nome', 'empresa', 'telefone']:
+        if col not in df.columns: df[col] = ""
+
+    total = len(df)
+    print(f"📋 Lista Carregada: {total} contatos. Iniciando...")
+
+    for index, row in df.iterrows():
+        # --- VERIFICAÇÃO INICIAL ---
+        telefone = str(row.get('telefone', '')).strip()
+        if not telefone: continue
+        
+        clean_tel = sender_global.limpar_telefone(telefone)
+        if clean_tel in CLIENTES_EM_INTERVENCAO:
+            print(f"🔹 [{index + 1}/{total}] Pular {clean_tel}: Já está em intervenção.")
+            continue
+
+        nome_raw = str(row.get('nome', '')).strip()
+        
+        # --- LÓGICA DE NOME (PROGRAMADA) ---
+        if nome_raw:
+            # Pega o primeiro nome e deixa a primeira letra maiúscula
+            primeiro_nome = nome_raw.split()[0].title() 
+            msg1 = f"Boooom diiiaa, {primeiro_nome}! Beleza?.\nFalamos uns dias atrás sobre sua frota, lembra?"
+        else:
+            msg1 = "Boooom diiiaa! Beleza?."
+
+        # --- SEQUÊNCIA FIXA ---
+        msg2 = "A Grupar entra de férias dia 18 e tem condição especial pra clientes que estão inativos!"
+        msg3 = "Quer que eu te mande o que dá pra aproveitar antes das férias?"
+
+        fila_mensagens = [msg1, msg2, msg3]
+
+        print(f"🔹 [{index + 1}/{total}] Enviando para: {nome_raw or 'Sem Nome'}...")
+
+        # 2. DISPARO EM CASCATA
+        for i, msg in enumerate(fila_mensagens):
+            # Checagem de intervenção no meio
+            if clean_tel in CLIENTES_EM_INTERVENCAO:
+                print(f"      🛑 PARE! Cliente {clean_tel} respondeu. Abortando sequência.")
+                break 
+
+            enviou = sender_global.enviar_mensagem(telefone, msg)
+            if not enviou: break
+            
+            # Pausa entre mensagens (simulando pensar na próxima)
+            if i < len(fila_mensagens) - 1:
+                tempo = random.randint(CONFIG["DELAY_ENTRE_MSG"][0], CONFIG["DELAY_ENTRE_MSG"][1])
+                time.sleep(tempo)
+
+        # Delay entre clientes
+        delay_cliente = random.randint(CONFIG["DELAY_ENTRE_CLIENTES"][0], CONFIG["DELAY_ENTRE_CLIENTES"][1])
+        print(f"   ⏳ Aguardando {delay_cliente}s para o próximo cliente...\n")
+        time.sleep(delay_cliente)
+
+    print("=" * 60)
+    print("🏁 LISTA FINALIZADA. O bot continua online ouvindo intervenções.")
+
+# ==============================================================================
+# 🚀 START
+# ==============================================================================
+if not os.environ.get("WERKZEUG_RUN_MAIN"):
+    t = threading.Thread(target=loop_disparo)
+    t.daemon = True
+    t.start()
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
