@@ -57,12 +57,13 @@ def receive_webhook():
         from_me = key.get('fromMe', False)
         
         # --- LÓGICA DE EXTRAÇÃO DE NÚMERO ---
-        raw_number = key.get('senderPn') or key.get('participant') or key.get('remoteJid')
+        raw_number = key.get('remoteJid') or key.get('participant')
         
         if not raw_number: return jsonify({"status": "no_number"}), 200
 
-        # Limpeza final
-        clean_number = raw_number.split('@')[0].split(':')[0]
+        # Limpeza final: Remove @..., :... e garante que só fiquem NÚMEROS
+        base_number = raw_number.split('@')[0].split(':')[0]
+        clean_number = re.sub(r'\D', '', base_number)
 
         # --- 👑 COMANDOS DO ADMINISTRADOR (Seu Número) ---
         if clean_number == CONFIG["RESPONSIBLE_NUMBER"]:
