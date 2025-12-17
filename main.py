@@ -26,8 +26,8 @@ CONFIG = {
     
     # --- TEMPOS (HUMANIZAÇÃO) ---
     "TEMPO_DIGITANDO": 5000,      # 5 Segundos de "digitando..." (Balaozinho)
-    "DELAY_ENTRE_MSG": (4, 7),    # Tempo de pausa entre uma mensagem e outra da sequência
-    "DELAY_ENTRE_CLIENTES": (120, 180) # Tempo de descanso entre clientes
+    "DELAY_ENTRE_MSG": (7, 14),    # Tempo de pausa entre uma mensagem e outra da sequência
+    "DELAY_ENTRE_CLIENTES": (300, 420) # Tempo de descanso entre clientes
 }
 
 # ==============================================================================
@@ -123,18 +123,49 @@ class EvolutionSender:
         if len(nums) < 10: return None
         return nums
 
+    def tratar_erro_api(self, response):
+        """🛡️ FREIO DE SEGURANÇA: Se a API cair, avisa admin e dorme."""
+        
+        # --- SE O ERRO FOR 500 (ERRO NO SERVIDOR) ---
+        if response.status_code >= 500:
+            print(f"      🚨 ERRO CRÍTICO API ({response.status_code}). Servidor instável.")
+
+            # >>>> NOVA PARTE: AVISA O DONO <<<<
+            try:
+                print("      📣 Tentando enviar alerta para o número responsável...")
+                aviso_url = f"{self.base_url}/message/sendText/{self.instance}"
+                aviso_payload = {
+                    "number": CONFIG["RESPONSIBLE_NUMBER"],
+                    "textMessage": {"text": f"🚨 *ALERTA CRÍTICO DO BOT*\n\nA API retornou erro *{response.status_code}*.\nO sistema entrará em pausa de segurança por 2 minutos."},
+                    "options": {"delay": 1000, "presence": "composing"}
+                }
+                # Fazemos um request direto aqui para não gerar loop infinito
+                requests.post(aviso_url, json=aviso_payload, headers=self.headers, timeout=10)
+            except Exception as e_aviso:
+                print(f"      ❌ Falha ao tentar avisar o admin (A API deve estar muito ruim): {e_aviso}")
+            # >>>> FIM DA NOVA PARTE <<<<
+
+            print("      ⏳ Pausando por 120 segundos para evitar bloqueio...")
+            time.sleep(120) # <--- AQUI ESTÁ A PROTEÇÃO
+            return False
+
+        elif response.status_code == 429:
+            print("      ⚠️ Rate Limit. Esperando 30s...")
+            time.sleep(30)
+            return False
+        else:
+            print(f"      ❌ Falha API: {response.status_code}")
+            return False
+
     def enviar_mensagem(self, numero: str, mensagem: str, delay_digitacao=None) -> bool:
         clean_number = self.limpar_telefone(numero)
         if not clean_number: return False
 
-        # Verifica Intervenção
         if clean_number in CLIENTES_EM_INTERVENCAO and clean_number != CONFIG["RESPONSIBLE_NUMBER"]:
             print(f"      ⛔ [BLOQUEADO] Cliente {clean_number} em intervenção.")
             return False
 
-        # Se não passar delay específico, usa o padrão da config
-        if delay_digitacao is None:
-            delay_digitacao = CONFIG["TEMPO_DIGITANDO"]
+        if delay_digitacao is None: delay_digitacao = CONFIG["TEMPO_DIGITANDO"]
 
         api_path = f"/message/sendText/{self.instance}"
         final_url = self.base_url if self.base_url.endswith(api_path) else \
@@ -143,43 +174,36 @@ class EvolutionSender:
         payload = {
             "number": clean_number, 
             "textMessage": {"text": mensagem},
-            "options": {
-                "delay": delay_digitacao,
-                "presence": "composing",
-                "linkPreview": True
-            }
+            "options": {"delay": delay_digitacao, "presence": "composing", "linkPreview": True}
         }
 
         try:
-            response = requests.post(final_url, json=payload, headers=self.headers, timeout=25)
+            response = requests.post(final_url, json=payload, headers=self.headers, timeout=30)
             if response.status_code < 400:
-                print(f"      ✅ Enviado Texto: \"{mensagem[:30]}...")
+                print(f"      ✅ Enviado Texto: \"{mensagem[:20]}...\"")
                 return True
             else:
-                print(f"      ❌ Falha API Texto: {response.status_code}")
-                return False
-        except:
+                return self.tratar_erro_api(response)
+        except Exception as e:
+            print(f"      ❌ Erro Conexão: {e}")
+            time.sleep(10)
             return False
 
     def enviar_imagem_local(self, numero: str, caminho_imagem: str, caption: str = "") -> bool:
         clean_number = self.limpar_telefone(numero)
         if not clean_number: return False
 
-        # Verifica arquivo
         if not os.path.exists(caminho_imagem):
             print(f"      ❌ Erro: Imagem '{caminho_imagem}' não encontrada.")
             return False
 
-        # Verifica Intervenção
         if clean_number in CLIENTES_EM_INTERVENCAO and clean_number != CONFIG["RESPONSIBLE_NUMBER"]:
             return False
 
         try:
-            # Converte imagem para Base64
             with open(caminho_imagem, "rb") as image_file:
                 encoded_string = base64.b64encode(image_file.read()).decode('utf-8')
             
-            # Detecta tipo (jpg, png, etc)
             mime_type, _ = mimetypes.guess_type(caminho_imagem)
             if not mime_type: mime_type = "image/jpeg"
 
@@ -189,25 +213,17 @@ class EvolutionSender:
 
             payload = {
                 "number": clean_number,
-                "mediaMessage": {
-                    "mediatype": "image",
-                    "caption": caption,
-                    "media": encoded_string
-                },
-                "options": {
-                    "delay": CONFIG["TEMPO_DIGITANDO"],
-                    "presence": "composing"
-                }
+                "mediaMessage": {"mediatype": "image", "caption": caption, "media": encoded_string},
+                "options": {"delay": CONFIG["TEMPO_DIGITANDO"], "presence": "composing"}
             }
             
-            # Timeout maior (60s) para upload de imagem
-            response = requests.post(final_url, json=payload, headers=self.headers, timeout=60)
+            response = requests.post(final_url, json=payload, headers=self.headers, timeout=90)
+            
             if response.status_code < 400:
                 print(f"      📸 Enviado Imagem: {os.path.basename(caminho_imagem)}")
                 return True
             else:
-                print(f"      ❌ Falha API Imagem: {response.text}")
-                return False
+                return self.tratar_erro_api(response)
         except Exception as e:
             print(f"      ❌ Erro processamento imagem: {e}")
             return False
@@ -239,8 +255,8 @@ def loop_disparo():
     print("⏳ Aguardando servidor iniciar (10s)...")
     time.sleep(10)
     
-    print("\n🤖 DISPARADOR OTIMIZADO (COM PAUSE E IMAGENS)")
-    print(f"🕒 Tempo de Digitação Configurado: {CONFIG['TEMPO_DIGITANDO']}ms")
+    print("\n🤖 DISPARADOR OTIMIZADO (Variação + Segurança)")
+    print(f"🕒 Intervalo entre Clientes: {CONFIG['DELAY_ENTRE_CLIENTES'][0]}-{CONFIG['DELAY_ENTRE_CLIENTES'][1]}s")
     print("=" * 60)
 
     leitor = ProcessadorLista(CONFIG["ARQUIVO_ALVO"])
@@ -258,12 +274,10 @@ def loop_disparo():
 
     for index, row in df.iterrows():
         
-        # --- ⏸️ CHECK DE PAUSA ---
         while PAUSA_DO_SISTEMA:
-            print("💤 ... Sistema PAUSADO pelo Admin (Aguardando 'bot play') ...")
+            print("💤 ... Sistema PAUSADO (Aguardando 'bot play') ...")
             time.sleep(10)
 
-        # --- VERIFICAÇÃO INICIAL ---
         telefone = str(row.get('telefone', '')).strip()
         if not telefone: continue
         
@@ -277,38 +291,38 @@ def loop_disparo():
         
         print(f"🔹 [{index + 1}/{total}] Iniciando sequência para: {nome_raw or 'Sem Nome'}...")
 
-        # --- 1. MENSAGEM DE ABERTURA ---
+        # --- 1. MENSAGEM DE ABERTURA COM VARIAÇÃO ---
         if primeiro_nome:
-            msg1 = f"Boooom diiiaa, {primeiro_nome}! Beleza?\nFalamos uns dias atrás sobre sua frota, lembra?"
+            opcoes_saudacao = [
+                f"Boooom diiiaa, {primeiro_nome}! Beleza?\nFalamos uns dias atrás sobre sua frota, lembra?",
+                f"Boooom diiiaa, Beleza {primeiro_nome}!? \nFalamos alguns dias atrás sobre sua frota, certo?"
+            ]
+            msg1 = random.choice(opcoes_saudacao)
         else:
             msg1 = "Boooom diiiaa! Beleza?."
 
-        if not sender_global.enviar_mensagem(telefone, msg1): continue # Se falhar ou estiver em intervenção, pula
+        if not sender_global.enviar_mensagem(telefone, msg1): continue 
         
-        # Pausa para "escolher" as fotos
         time.sleep(random.randint(4, 6))
 
-        # --- 2. ENVIO DAS 3 IMAGENS ---
-        # Certifique-se que estas imagens estão na pasta do projeto no Git
-        lista_imagens = ["promo1.jpeg", "promo2.jpeg", "promo3.jpeg"]
+        # --- 2. ENVIO DAS 3 IMAGENS (JPEG) ---
+        lista_imagens = ["promo1.jpeg", "promo2.jpeg"] 
         
         abortar = False
         for imagem in lista_imagens:
-            # Checa intervenção antes de cada imagem
             if clean_tel in CLIENTES_EM_INTERVENCAO:
-                print(f"      🛑 PARE! Cliente {clean_tel} respondeu durante as fotos.")
+                print(f"      🛑 PARE! Cliente {clean_tel} respondeu.")
                 abortar = True
                 break
             
             sucesso_img = sender_global.enviar_imagem_local(telefone, imagem)
             if sucesso_img:
-                time.sleep(random.randint(2, 4)) # Pausa entre fotos
+                time.sleep(random.randint(6, 12))
             else:
                 pass 
 
-        if abortar: continue # Pula pro próximo cliente
+        if abortar: continue
 
-        # --- 3. MENSAGEM FINAL (DIVIDIDA EM 3 PARTES) ---
         msgs_finais = [
             "Escolhi umas promoções pra você bem top!",
             "Pra clientes inativos, a gente tá com condição especial de pagamento até o dia 18, antes das férias coletivas.",
@@ -316,27 +330,19 @@ def loop_disparo():
         ]
         
         for msg_parte in msgs_finais:
-            # Checagem de segurança antes de cada balão de mensagem
             if clean_tel in CLIENTES_EM_INTERVENCAO:
-                print(f"      🛑 PARE! Cliente {clean_tel} respondeu durante a finalização.")
+                print(f"      🛑 PARE! Cliente {clean_tel} respondeu.")
                 break
-            
-            # Envia a parte atual
             sender_global.enviar_mensagem(telefone, msg_parte)
-            
-            # Pequena pausa para simular que está digitando a próxima frase (2 a 4 segundos)
-            time.sleep(random.randint(2, 4))
+            time.sleep(random.randint(4, 8))
 
-        # --- FIM DO CLIENTE ATUAL ---
-        # (Removi o bloco errado que tentava enviar 'msgs_finais' de novo aqui)
-
-        # Delay entre clientes
+        # --- DELAY ALEATÓRIO DE 3 A 5 MINUTOS ---
         delay_cliente = random.randint(CONFIG["DELAY_ENTRE_CLIENTES"][0], CONFIG["DELAY_ENTRE_CLIENTES"][1])
         print(f"   ⏳ Aguardando {delay_cliente}s para o próximo cliente...\n")
         time.sleep(delay_cliente)
 
     print("=" * 60)
-    print("🏁 LISTA FINALIZADA. O bot continua online ouvindo intervenções.")
+    print("🏁 LISTA FINALIZADA.")
 # ==============================================================================
 # 🚀 START
 # ==============================================================================
