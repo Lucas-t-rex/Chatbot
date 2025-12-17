@@ -26,8 +26,8 @@ CONFIG = {
     
     # --- TEMPOS (HUMANIZAÇÃO) ---
     "TEMPO_DIGITANDO": 5000,      # 5 Segundos de "digitando..." (Balaozinho)
-    "DELAY_ENTRE_MSG": (7, 14),    # Tempo de pausa entre uma mensagem e outra da sequência
-    "DELAY_ENTRE_CLIENTES": (300, 420) # Tempo de descanso entre clientes
+    "DELAY_ENTRE_MSG": (5, 10),    # Tempo de pausa entre uma mensagem e outra da sequência
+    "DELAY_ENTRE_CLIENTES": (180, 360) # Tempo de descanso entre clientes
 }
 
 # ==============================================================================
@@ -317,7 +317,7 @@ def loop_disparo():
             
             sucesso_img = sender_global.enviar_imagem_local(telefone, imagem)
             if sucesso_img:
-                time.sleep(random.randint(6, 12))
+                time.sleep(random.randint(5, 11))
             else:
                 pass 
 
