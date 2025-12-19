@@ -1772,6 +1772,12 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
             motivo = args.get("motivo", "Motivo não especificado pela IA.")
             return json.dumps({"sucesso": True, "motivo": motivo, "tag_especial": "[HUMAN_INTERVENTION]"})
         
+        elif call_name == "fn_validar_cpf":
+            cpf = args.get("cpf_input", "")
+            # Chama a função lógica que já criamos lá em cima
+            resp = validar_cpf_logica(cpf) 
+            return json.dumps(resp, ensure_ascii=False)
+
         elif call_name == "fn_consultar_historico_completo":
             try:
                 print(f"🧠 [MEMÓRIA] IA solicitou busca no histórico antigo para: {contact_id}") # Log Limpo
