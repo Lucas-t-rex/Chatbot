@@ -106,6 +106,46 @@ def limpar_cpf(cpf_raw: Optional[str]) -> Optional[str]:
         s = s[:11]
     return s if len(s) == 11 else None
 
+def _calcular_digito(cpf_parcial):
+    """Função auxiliar interna para calcular os dígitos verificadores."""
+    soma = 0
+    peso = len(cpf_parcial) + 1
+    for n in cpf_parcial:
+        soma += int(n) * peso
+        peso -= 1
+    resto = soma % 11
+    return '0' if resto < 2 else str(11 - resto)
+
+def validar_cpf_logica(cpf_input: str):
+    """
+    Limpa, conta e valida matematicamente o CPF.
+    Retorna um dicionário com status e mensagem para o LLM.
+    """
+    # 1. Limpeza (Sanitização) - Remove tudo que não é número
+    cpf_limpo = re.sub(r'\D', '', str(cpf_input))
+
+    # 2. Verificação de Formato Básico
+    if len(cpf_limpo) != 11:
+        return {"valido": False, "msg": f"O CPF contém {len(cpf_limpo)} dígitos, mas deve ter 11."}
+    
+    # 3. Elimina CPFs com todos os dígitos iguais (ex: 111.111.111-11 é inválido matematicamente mas passa no cálculo)
+    if cpf_limpo == cpf_limpo[0] * 11:
+        return {"valido": False, "msg": "CPF inválido (todos os dígitos são iguais)."}
+
+    # 4. Validação Matemática (Dígitos Verificadores)
+    # Primeiro dígito
+    primeiro_digito = _calcular_digito(cpf_limpo[:9])
+    # Segundo dígito
+    segundo_digito = _calcular_digito(cpf_limpo[:9] + primeiro_digito)
+
+    cpf_calculado = cpf_limpo[:9] + primeiro_digito + segundo_digito
+
+    if cpf_limpo == cpf_calculado:
+        # Aqui podemos formatar para visualização se quiser: f"{cpf_limpo[:3]}.{cpf_limpo[3:6]}..."
+        return {"valido": True, "msg": "CPF Válido e verificado."}
+    else:
+        return {"valido": False, "msg": "CPF inválido (erro nos dígitos verificadores)."}
+    
 def parse_data(data_str: str) -> Optional[datetime]:
     if not data_str or not isinstance(data_str, str):
         return None
@@ -654,7 +694,6 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                         "required": ["cpf"]
                     }
                 },
-
                 {
                     "name": "fn_alterar_agendamento",
                     "description": "Altera um agendamento antigo para uma nova data/hora.",
@@ -692,6 +731,20 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                             "nome_extraido": {"type_": "STRING", "description": "O nome que o cliente acabou de informar (ex: 'Marcos', 'Ana')."}
                         },
                         "required": ["nome_extraido"]
+                    }
+                },
+                {
+                    "name": "fn_validar_cpf",
+                    "description": "Valida se um número de CPF fornecido pelo usuário é matematicamente real e válido. Use isso sempre que o usuário fornecer um número que pareça um CPF.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "cpf_input": {
+                                "type_": "STRING",
+                                "description": "O número do CPF fornecido pelo usuário (com ou sem pontos/traços)."
+                            }
+                        },
+                        "required": ["cpf_input"]
                     }
                 },
                 {
@@ -1329,7 +1382,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         5. `fn_buscar_por_cpf` / `fn_alterar_agendamento` / `fn_excluir_agendamento`:
            - QUANDO USAR: Gestão. Use para consultar, remarcar ou cancelar agendamentos existentes.
-
+        
+        6. `fn_validar_cpf`:
+            - QUANDO USAR: Sempre quando voce pedir o cpf do e ele cliente digitar um número de documento.
+           
         # ---------------------------------------------------------
         # 2. PERSONALIDADE & IDENTIDADE (LYRA)
         # ---------------------------------------------------------
@@ -1414,22 +1470,16 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
            - Horário escolhido é válido? -> Peça CPF e Confirmação de Telefone.
            - Script: "Perfeito! Para travar esse horário, preciso do seu CPF. E posso manter esse número ({clean_number}) para contato?"
         
-        PASSO 3: AUDITORIA DE CPF (TRAVA DE SEGURANÇA MÁXIMA)
-           - O cliente enviou o CPF? -> CONTE OS DÍGITOS NUMÉRICOS AGORA.
-           
-           >>> EXTREMAMENTE IMPORTANTE <<<
-           - Se o cliente mandou 12 dígitos (ex: 123456789123), VOCÊ ESTÁ PROIBIDA DE APAGAR O ÚLTIMO DÍGITO.
-           - Se o cliente mandou 10 dígitos, VOCÊ ESTÁ PROIBIDA DE INVENTAR UM ZERO.
-           
-           O CPF TEM EXATAMENTE 11 DÍGITOS?
-           [NÃO] -> PARE TUDO.
-             - Resposta Obrigatória: "Opa, contei aqui e esse número não tem 11 dígitos. Pode verificar o CPF pra mim?"
-             - AÇÃO: Fique repetindo esse passo até ele mandar certo. NÃO GERE O GABARITO.
-           
-           [SIM] -> Avance para o Passo 4.
+        PASSO 3: AUDITORIA DE CPF (SEGURANÇA VIA TOOL)
+            - O cliente enviou algo que parece um CPF?
+            - VOCÊ ESTÁ PROIBIDO DE CONTAR DÍGITOS OU VALIDAR.
+            - AÇÃO OBRIGATÓRIA: Chame imediatamente a função `fn_validar_cpf` passando o número.
+            - RESULTADO DA TOOL:
+                [SE RETORNAR INVÁLIDO]: Avise o cliente "O sistema não reconheceu esse CPF, parece que está incorreto. Pode verificar?" e aguarde novo número. NÃO AVANCE para o proximo passo.
+                [SE RETORNAR VÁLIDO]: Agradeça e avance para o Passo 4
 
         PASSO 4: CONFIRMAÇÃO DO TELEFONE
-           - Ele respondeu sobre o telefone? Se ignorou, PERGUNTE DE NOVO. Não assuma.
+           - Ele respondeu sobre o telefone quando falava sobre o cpf? Se ignorou ou nao mencionou, PERGUNTE DE NOVO de maneira educada. Não assuma.
 
         PASSO 5: Gerar gabarito APENAS COM TODAS AS INFORMAÇOES ACIMA CORRETAS! SEMPRE GERAR O GABARITO E ESPERAR ELE CONFIRMAR ENTES DE SALVAR!
         - ANTES DE GERAR: Chame `fn_listar_horarios_disponiveis` MAIS UMA VEZ para garantir que o horário ainda está livre. E se o cpf que voce esta escrevendo ai é realmente o que ele passou e se esta correto.
@@ -1557,11 +1607,11 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         O QUE FAZER (FLUIDEZ):
         - Se a pessoa ja disser o que quer avise que vai ja vai responder e pergunte o nome. Se a pessoa apenas comprimentar, comprimente e pergunte como ela esta?. Se a pessoa peguntar como voce esta responda e pergunte dela!
         - Seja breve, simpática e leve.
-        - Use variações amigáveis: "Como posso te chamar?", "Qual seu nome?".
+        - Use variações amigáveis: "Qual seu nome?".
         - Seja leve: "Oie! Tudo bem? Aqui é a Lyra. Qual seu nome?"
         - Variações: "Como posso te chamar?", "E você, é...?"
         - Se a pessoa já se apresentou (Ex: "Oi sou a Sabrina"), CHAME `fn_capturar_nome` IMEDIATAMENTE. Não responda nada, apenas chame a função.
-        - Se a pessoa apenas cumprimentar, cumprimente e pergunte o nome.
+        - Se a pessoa apenas cumprimentar, cumprimente.
 
         === FILTRO DE VALIDAÇÃO DE NOME (CRÍTICO) ===
         Antes de chamar `fn_capturar_nome`, analise o texto do usuário:
