@@ -1828,9 +1828,10 @@ safety_settings = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
-def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
+def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name, retry_depth=0): 
     """
-    (VERSÃO FINAL - BLINDADA COM RETRY GLOBAL, CONTABILIDADE E JANELA DESLIZANTE)
+    (VERSÃO FINAL - BLINDADA COM RETRY GLOBAL + VIDA EXTRA RECURSIVA)
+    Adicionado parametro 'retry_depth' para controlar o reinício total.
     """
     global modelo_ia 
 
@@ -1919,7 +1920,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 modelo_ia.model_name,
                 system_instruction=system_instruction,
                 tools=tools,
-                safety_settings=safety_settings # <--- ADICIONADO AQUI
+                safety_settings=safety_settings # <--- SAFETY SETTINGS AQUI
             )
             
             # Agora sim: Inicia o chat APENAS com as mensagens da janela
@@ -1928,7 +1929,11 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             if attempt > 0:
                 print(f"🔁 Tentativa {attempt+1} de gerar resposta para {log_display}...")
             else:
-                print(f"Enviando para a IA: '{user_message}' (De: {log_display})")
+                # Se for a Vida Extra (retry_depth > 0), avisa no log
+                if retry_depth > 0:
+                    print(f"🔥 [VIDA EXTRA] Tentando gerar resposta novamente do ZERO para {log_display}...")
+                else:
+                    print(f"Enviando para a IA: '{user_message}' (De: {log_display})")
             
             resposta_ia = chat_session.send_message(user_message)
             
@@ -1942,18 +1947,10 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
 
             while True:
                 # --- PROTEÇÃO INTELIGENTE CONTRA RESPOSTA VAZIA ---
-                # Se a lista de candidatos estiver vazia (erro do Google ou Safety Filter)
                 if not resposta_ia.candidates:
                     print(f"⚠️ AVISO: A IA retornou vazio (Safety/Bug) na tentativa {attempt+1}.")
-                    
-                    # Se ainda temos tentativas sobrando (attempt 0 ou 1),
-                    # lançamos um ERRO PROPOSITAL.
-                    # Isso faz o código pular para o 'except' lá embaixo, espera 5s e tenta de novo.
-                    if attempt < max_retries - 1:
-                        raise Exception("Resposta vazia da IA - Forçando Retry Inteligente para reler o contexto.")
-                    
-                    # Se já é a última tentativa (3), desistimos e mandamos algo seguro.
-                    return "Desculpe, a conexão oscilou rapidinho. Pode confirmar se está tudo certo?"
+                    # Força exceção para cair no bloco except e tentar de novo ou reiniciar
+                    raise Exception("Resposta vazia da IA (Candidates Empty).")
                 # -----------------------------------------------------------
 
                 cand = resposta_ia.candidates[0]
@@ -1987,7 +1984,8 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                                 contact_id, 
                                 sender_name, 
                                 user_message, 
-                                known_customer_name=nome_salvo 
+                                known_customer_name=nome_salvo,
+                                retry_depth=retry_depth # Mantém o nível de profundidade
                             )
                     except Exception as e:
                         print(f"⚠️ Erro ao tentar reiniciar fluxo (hot-swap): {e}")
@@ -2037,14 +2035,38 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
 
         except Exception as e:
             print(f"❌ Erro na tentativa {attempt+1}: {e}")
-            # Se o erro for de COTA (429), precisamos esperar MUITO mais
+            
+            # --- LÓGICA DE RETRY E VIDA EXTRA ---
+            
+            # 1. Se for erro de COTA (429), precisamos esperar MUITO mais
             if "429" in str(e) or "Quota" in str(e):
                 print("⏳ Limite de cota atingido. Esperando 20 segundos para tentar de novo...")
-                time.sleep(20) # Espera 20s para o Google liberar a cota
-            elif attempt < max_retries - 1:
-                time.sleep(5) # Aumentei de 1s para 5s para erros gerais
+                time.sleep(20) 
+            
+            # 2. Se ainda temos tentativas normais (0 ou 1), tenta de novo no loop
+            if attempt < max_retries - 1:
+                time.sleep(2) 
+                continue 
+            
+            # 3. SE CHEGOU AQUI, FALHOU 3 VEZES. AGORA VEM A MÁGICA.
             else:
-                return "A mensagem que você enviou deu erro aqui no whatsapp. 😵‍💫 Pode enviar novamente, por favor?"
+                # Se ainda não usamos a "Vida Extra" (retry_depth == 0)
+                if retry_depth == 0:
+                    print("🚨 Esgotou as 3 tentativas iniciais. REINICIANDO O PROCESSO DO ZERO (Vida Extra)...")
+                    time.sleep(3) # Respira fundo
+                    # CHAMA A FUNÇÃO DE NOVO, MAS AGORA COM retry_depth=1
+                    return gerar_resposta_ia_com_tools(
+                        contact_id, 
+                        sender_name, 
+                        user_message, 
+                        known_customer_name, 
+                        retry_depth=1 # Queimou a vida extra
+                    )
+                
+                # 4. Se já usamos a vida extra (retry_depth == 1) e falhou de novo (Total 6 tentativas)
+                else:
+                    print("💀 Falha total após Vida Extra. Enviando fallback silencioso.")
+                    return "Combinado! Qualquer coisa é só chamar. 😊"
     
     return "Erro crítico de comunicação."
 
