@@ -1475,7 +1475,7 @@ PASSO 2: COLETA E VALIDAÇÃO DE DADOS (CRÍTICO)
             - VOCÊ ESTÁ PROIBIDO DE CONTAR DÍGITOS OU VALIDAR.
             - AÇÃO OBRIGATÓRIA: Chame imediatamente a função `fn_validar_cpf` passando o número.
             - RESULTADO DA TOOL:
-                [SE RETORNAR INVÁLIDO]: Avise o cliente "O sistema não reconheceu esse CPF, parece que está incorreto. Pode verificar?" e aguarde novo número. NÃO AVANCE para o próximo passo.
+                [SE RETORNAR INVÁLIDO]: Avise o cliente "O CPF parece que está incorreto. Pode verificar?" e aguarde novo número. NÃO AVANCE para o próximo passo.
                 [SE RETORNAR VÁLIDO]: Agradeça e avance para o Passo 4.
 
         PASSO 4: CONFIRMAÇÃO DO TELEFONE
@@ -1486,7 +1486,7 @@ PASSO 2: COLETA E VALIDAÇÃO DE DADOS (CRÍTICO)
                 1. Se ele responder "Sim/Pode/É esse": Considere o número {clean_number} validado e siga para o Passo 5.
                 2. Se ele disser "Não/Use outro": Pergunte qual é o número.
                 3. Se ele informar outro número: "Anote" mentalmente esse novo número e siga para o Passo 5.
-                
+
         PASSO 5: Gerar gabarito APENAS COM TODAS AS INFORMAÇOES ACIMA CORRETAS! SEMPRE GERAR O GABARITO E ESPERAR ELE CONFIRMAR ENTES DE SALVAR!
         - ANTES DE GERAR: Chame `fn_listar_horarios_disponiveis` MAIS UMA VEZ para garantir que o horário ainda está livre. E se o cpf que voce esta escrevendo ai é realmente o que ele passou e se esta correto.
         -> AÇÃO: GERE O GABARITO COMPLETO.
@@ -1821,7 +1821,13 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
     except Exception as e:
         log_info(f"Erro fatal em handle_tool_call ({call_name}): {e}")
         return json.dumps({"erro": f"Exceção ao processar ferramenta: {e}"}, ensure_ascii=False)
-    
+
+safety_settings = [
+    {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_NONE"},
+    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+]
+
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name): 
     """
     (VERSÃO FINAL - BLINDADA COM RETRY GLOBAL, CONTABILIDADE E JANELA DESLIZANTE)
@@ -1867,7 +1873,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     if convo_data:
         history_from_db = convo_data.get('history', [])
         
-        # AQUI ESTÁ A CORREÇÃO: Pegamos as últimas 15 e usamos ESSA lista para TUDO
+        # JANELA DESLIZANTE: Pegamos as últimas 25
         janela_recente = history_from_db[-25:] 
         qtd_msg_enviadas = len(janela_recente)
         print(f"📉 [METRICA] Janela Deslizante: Enviando apenas as últimas {qtd_msg_enviadas} mensagens para o Prompt.")
@@ -1882,7 +1888,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             if not txt.startswith("Chamando função") and not txt.startswith("[HUMAN"):
                 historico_texto_para_prompt += f"- {role_name}: {txt}\n"
 
-        # Loop 2: Histórico Técnico para o Gemini (CRÍTICO: Usar janela_recente aqui também!)
+        # Loop 2: Histórico Técnico para o Gemini
         for msg in janela_recente:
             role = msg.get('role', 'user')
             if role == 'assistant': role = 'model'
@@ -1908,11 +1914,12 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     max_retries = 3 
     for attempt in range(max_retries):
         try:
-            # Reinicia o objeto de chat
+            # Reinicia o objeto de chat COM SAFETY SETTINGS
             modelo_com_sistema = genai.GenerativeModel(
                 modelo_ia.model_name,
                 system_instruction=system_instruction,
-                tools=tools
+                tools=tools,
+                safety_settings=safety_settings # <--- ADICIONADO AQUI
             )
             
             # Agora sim: Inicia o chat APENAS com as mensagens da janela
@@ -1934,7 +1941,23 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             turn_output += t_out
 
             while True:
+                # --- PROTEÇÃO INTELIGENTE CONTRA RESPOSTA VAZIA ---
+                # Se a lista de candidatos estiver vazia (erro do Google ou Safety Filter)
+                if not resposta_ia.candidates:
+                    print(f"⚠️ AVISO: A IA retornou vazio (Safety/Bug) na tentativa {attempt+1}.")
+                    
+                    # Se ainda temos tentativas sobrando (attempt 0 ou 1),
+                    # lançamos um ERRO PROPOSITAL.
+                    # Isso faz o código pular para o 'except' lá embaixo, espera 5s e tenta de novo.
+                    if attempt < max_retries - 1:
+                        raise Exception("Resposta vazia da IA - Forçando Retry Inteligente para reler o contexto.")
+                    
+                    # Se já é a última tentativa (3), desistimos e mandamos algo seguro.
+                    return "Desculpe, a conexão oscilou rapidinho. Pode confirmar se está tudo certo?"
+                # -----------------------------------------------------------
+
                 cand = resposta_ia.candidates[0]
+                
                 func_call = None
                 try:
                     func_call = cand.content.parts[0].function_call
