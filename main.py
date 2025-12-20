@@ -1946,12 +1946,11 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             turn_output += t_out
 
             while True:
-                # --- PROTEÇÃO INTELIGENTE CONTRA RESPOSTA VAZIA ---
+                # ### CORREÇÃO 1: Proteção contra lista vazia (list index out of range) ###
                 if not resposta_ia.candidates:
                     print(f"⚠️ AVISO: A IA retornou vazio (Safety/Bug) na tentativa {attempt+1}.")
                     # Força exceção para cair no bloco except e tentar de novo ou reiniciar
                     raise Exception("Resposta vazia da IA (Candidates Empty).")
-                # -----------------------------------------------------------
 
                 cand = resposta_ia.candidates[0]
                 
@@ -2029,6 +2028,30 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     else:
                         raise Exception("Todas as tentativas falharam e retornaram vazio.")
 
+            if "fn_capturar_nome" in ai_reply_text and "nome_extraido" in ai_reply_text:
+                print(f"🛡️ INTERCEPTOR ATIVADO: A IA tentou enviar código pro Zap: '{ai_reply_text}'")
+                
+                import re
+                match = re.search(r"nome_extraido=['\"]([^'\"]+)['\"]", ai_reply_text)
+                if match:
+                    nome_forçado = match.group(1)
+                    print(f"🔧 Extração manual de nome realizada: {nome_forçado}")
+                    
+                    # Simula a chamada da função para salvar no banco
+                    handle_tool_call("fn_capturar_nome", {"nome_extraido": nome_forçado}, contact_id)
+                    
+                    # Reinicia o fluxo como se nada tivesse acontecido
+                    return gerar_resposta_ia_com_tools(
+                        contact_id, 
+                        sender_name, 
+                        user_message, 
+                        known_customer_name=nome_forçado, 
+                        retry_depth=retry_depth
+                    )
+                else:
+                    # Se não deu pra ler o nome, troca o texto técnico por algo humano
+                    ai_reply_text = "Entendi! E como posso te ajudar agora?"
+
             save_conversation_to_db(contact_id, sender_name, known_customer_name, turn_input, turn_output, ai_reply_text)
 
             return ai_reply_text
@@ -2066,7 +2089,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 # 4. Se já usamos a vida extra (retry_depth == 1) e falhou de novo (Total 6 tentativas)
                 else:
                     print("💀 Falha total após Vida Extra. Enviando fallback silencioso.")
-                    return "Combinado! Qualquer coisa é só chamar. 😊"
+                    return "Teve algum problema na mensagem do whats, pode mandar de novo ?"
     
     return "Erro crítico de comunicação."
 
