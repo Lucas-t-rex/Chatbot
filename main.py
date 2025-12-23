@@ -951,21 +951,28 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
             nome_valido = True
         
         if nome_valido:
-            regra_tratamento = f"- Use o nome '{nome_cliente}' de forma natural e esporádica."
-            display_name = nome_cliente 
+            # Se tem nome: A regra permite usar, e o display_name é o próprio nome
+            regra_tratamento = f"- Use o nome '{nome_cliente}' para gerar conexão."
+            display_name = nome_cliente
+            # Variável que coloca o nome no início da frase (ex: "Dani, ")
+            inicio_fala = f"{nome_cliente}, " 
         else:
+            # Se NÃO tem nome: Regra de neutralidade total
             regra_tratamento = (
-                "- NOME DESCONHECIDO: NÃO invente um nome. NÃO chame de 'cliente'.\n"
-                "- USE TRATAMENTO NEUTRO: Comece com 'Olá', 'Você', 'Tudo bem?' ou vá direto ao assunto.\n"
-                "- Evite artigos de gênero (o/a) se não souber se é homem ou mulher."
+                "- NOME DESCONHECIDO (CRÍTICO): NÃO use 'Cliente', 'Amigo', 'Cara' ou invente nomes.\n"
+                "- PROIBIDO VOCATIVOS GENÉRICOS.\n"
+                "- Comece a frase DIRETAMENTE com o verbo ou o assunto.\n"
+                "- Exemplo CERTO: 'Parece que você está ocupado...'\n"
+                "- Exemplo ERRADO: 'Cliente, parece que você...'"
             )
-            display_name = "o cliente (nome não capturado)" # Nome genérico para o prompt interno
+            display_name = "o interlocutor" # Apenas para o contexto interno da IA (ela não vai falar isso)
+            inicio_fala = "" # Vazio: a frase começará direto, sem nome antes.
 
         instrucao = ""
 
         if status_alvo == "sucesso":
             instrucao = (
-                f"""O cliente ({display_name}) finalizou o processo com sucesso. 
+                f"""O cliente ({inicio_fala}) finalizou o processo com sucesso. 
                 OBJETIVO: Agradecer com classe, reforçar vínculo e estimular continuidade. 
                 ESTRATÉGIA PSICOLÓGICA: Gratidão genuína + Sensação de Parceria. 
                 1. Agradeça sem exageros (seja profissional mas calorosa). 
@@ -977,7 +984,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         
         elif status_alvo == "fracasso":
             instrucao = (
-            f"""O cliente ({display_name}) recusou ou desistiu.
+            f"""O cliente ({inicio_fala}) recusou ou desistiu.
             OBJETIVO: Tentar uma última reversão de forma leve, simpática e bem-humorada — sem pressão e sem agressividade.
             ESTILO DE COMUNICAÇÃO: Humor suave + elegância + tom acolhedor.
             Nada de ironia pesada ou intimidação. A ideia é brincar de forma gentil, como quem sorri enquanto fala.
@@ -994,47 +1001,79 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
             
             if estagio == 0:
                 instrucao = (
-                    f"""O cliente parou de responder há pouco tempo.
-                    OBJETIVO: Empatia pela falta de tempo. NÃO pareça cobrança.
+                    f"""O cliente parou de responder no meio de um raciocínio.
+                    OBJETIVO: Dar uma leve 'cutucada' para retomar o assunto pendente.
                     
-                    ESTRUTURA OBRIGATÓRIA DA RESPOSTA:
-                    "{display_name}, parece que você tá ocupado né? Só não esquece de nos dar um oi depois pra falarmos sobre [ASSUNTO_DA_CONVERSA]. 😉"
+                    ANÁLISE DE CONTEXTO (Baseado em {historico_texto}):
+                    1. Se a última mensagem do bot foi uma PERGUNTA (ex: "Qual horário?"):
+                    - A resposta deve reformular a pergunta de forma direta e casual.
+                    - Ex: "Então {inicio_fala} qual horário fica melhor pra você?"
                     
-                    REGRAS CRÍTICAS:
-                    1. NÃO diga "Oi", "Tudo bem" ou "Olá". Comece direto pelo nome ou pela frase.
-                    2. NÃO diga "Vi que você não agendou" (Isso é chato).
-                    3. Use {historico_texto} para dar contexto real do que estavam falando"""
+                    2. Se a última mensagem do bot foi uma EXPLICAÇÃO/AFIRMAÇÃO:
+                    - Pergunte se o cliente tem dúvida ou se podem prosseguir.
+                    - Ex: "E aí {inicio_fala} ficou alguma dúvida sobre isso ou posso continuar?"
+                    
+                    3. Se o cliente mostrou INTERESSE mas sumiu:
+                    - Dê o próximo passo lógico.
+                    - Ex: "{inicio_fala} só me confirma se quer seguir com o agendamento pra eu deixar reservado aqui."
+
+                    REGRAS DE OURO (HUMANIZAÇÃO):
+                    - USE CONECTIVOS DE CONTINUIDADE: Comece com "Então...", "E aí...", "Só pra gente fechar...", "Diz aí...".
+                    - PROIBIDO SAUDAÇÕES: NÃO use "Oi", "Olá", "Bom dia". Já estamos conversando.
+                    - ZERO COBRANÇA: Não fale "vi que está ocupado" ou "você sumiu". Apenas retome o assunto.
+                    - Mantenha curto (máximo 1 frase).
+                    """
                 )
-            
             elif estagio == 1:
                 instrucao = (
-                    f"""O cliente continua em silêncio.
-                    OBJETIVO: Provocação leve sobre oportunidade perdida.
+                    f"""O cliente ignorou o primeiro lembrete.
+                    OBJETIVO: Resgatar o interesse mostrando o BENEFÍCIO PRÁTICO de continuar, baseado no que ele mesmo disse antes.
                     
-                    ESTRUTURA OBRIGATÓRIA DA RESPOSTA:
-                    "{display_name}, você sumiu! De verdade, eu não quero que você perca as oportunidades que a tecnologia pode trazer pra sua empresa. Você quer saber o que eu tenho separado pra você?"
+                    ANÁLISE DO HISTÓRICO {historico_texto}:
+                    - Identifique: Qual era a 'dor' ou o 'desejo' do cliente? (Ex: agendar rápido, tirar dúvida, saber preço).
                     
+                    ESTRUTURA DA RESPOSTA:
+                    {inicio_fala} você nao chegou a responder. Tava pensando aqui: se a gente resolver essa questão do [ASSUNTO_QUE_FALAVAM], você já consegue [RESULTADO_POSITIVO/GANHO]. O que acha?"
+                    
+                    EXEMPLOS DE ADAPTAÇÃO:
+                    - Se era agendamento: "...se a gente resolver esse agendamento, você já garante seu horário sem estresse."
+                    - Se era sobre o bot: "...se a gente implementar isso, você para de perder tempo respondendo manual."
+                    - Se era dúvida: "...se eu te explicar isso, você já consegue decidir o melhor caminho."
+
                     REGRAS CRÍTICAS:
-                    1. NÃO use saudações (Oi/Olá).
-                    2. NÃO fale "imagino a correria" de novo.
-                    3. Seja direta e instigante."""
+                    1. NÃO use saudações (Oi/Olá/Bom dia).
+                    2. NÃO liste características do produto. Fale do RESULTADO para a vida dele.
+                    3. Tom de "Consultor Amigo": Você quer ajudar ele a resolver o problema dele, não apenas vender.
+                    4. Mantenha curto.
+                    """
                 )
             
             elif estagio == 2:
                 instrucao = (
-                    f"""Última tentativa. O cliente provavelmente não vai fechar.
-                    OBJETIVO: Validar a dúvida dele e sair de cena com classe.
+                    f"""Última tentativa após longo silêncio.
+                    OBJETIVO: Despedida leve, bem-humorada e educada. Deixar a porta aberta sem pressionar.
                     
-                    ESTRUTURA OBRIGATÓRIA DA RESPOSTA:
-                    "É, {display_name}... acho que você deve ter ficado em dúvida ou imaginado algo errado. Tenho certeza que se falasse com o Lucas ia mudar de ideia. De qualquer forma, pra não te incomodar, vou me despedir por aqui. Mas fico à disposição, é só chamar quando precisar!"
+                    ANÁLISE DE CONTEXTO ({historico_texto}):
+                    - Identifique sobre o que falavam (agendamento, automação, dúvidas) para citar na despedida.
+
+                    ESTRUTURA DA RESPOSTA (Siga esta lógica):
+                    1. Humor leve (Quebra de gelo): Comece brincando que talvez esteja falando sozinho. Use 'kkkkkk' ou 'rsrsrs'.
+                    Ex: "{inicio_fala} não sei se tô falando sozinho aqui kkkkkk..." ou "Acho que te perdi na correria por aí rsrsrs..."
                     
+                    2. Disponibilidade (Porta Aberta): Diga que se ele quiser retomar o assunto [ASSUNTO_DA_CONVERSA], você está por perto.
+                    Ex: "...mas ó, se quiser voltar a falar sobre a automação do seu negócio, é só me chamar."
+                    
+                    3. Fechamento (Gratidão + Bênção): Agradeça e encerre.
+                    Ex: "Obrigado pela atenção até aqui. Fico à disposição. Deus abençoe!"
+
                     REGRAS CRÍTICAS:
-                    1. NÃO invente motivos (não fale de finanças ou família).
-                    2. Cite o nome do LUCAS como autoridade.
-                    3. Encerre o papo sem fazer pergunta final."""
+                    1. NÃO faça perguntas no final. É uma afirmação de despedida.
+                    2. OBRIGATÓRIO usar a expressão 'Deus abençoe' no final.
+                    3. Adapte o meio da frase ao contexto (se era agendamento, fale de marcar; se era bot, fale do negócio).
+                    """
                 )
             else:
-                instrucao = f"O cliente ({display_name}) está inativo. Pergunte educadamente se ainda tem interesse."
+                instrucao = f"({display_name}) está inativo. Pergunte educadamente se ainda tem interesse."
 
         prompt = f"""
         Você é a Lyra. Analise o histórico abaixo e gere uma mensagem de retomada.
@@ -1398,7 +1437,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             2. EFEITO CAMALEÃO: Espelhe o cliente (Sério -> Formal; Brincalhão -> Descontraído). Se o cliente contar uma piada ou algo engraçado ria com kkkkk.
             3. ANTI-REPETIÇÃO: Varie suas validações ("Entendi", "Interessante", "Compreendo").
             4. NOME: Use no MÁXIMO 1 vez a cada 5 mensagens.
-            5. EMOJIS: Máximo 1 a cada 3 mensagens inteiras. Use com moderação e sentido.
+            5. EMOJIS: Não use emojis a não ser na saudação e na despedida.
             6. DIREÇÃO: Sempre termine com PERGUNTA ou CTA (exceto despedidas).
             7. PING-PONG: Fale menos, ouça mais. Proibido perguntas duplas.
                 ESCUTA GENUÍNA: Se o cliente responder algo (Ex: "Tenho uma Pizzaria"), NÃO pule para a próxima pergunta do script. PRIMEIRO, valide o que ele disse.
@@ -1452,12 +1491,13 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         FORA DESTAS INFORMAÇÕES VOCÊ NÃO SABE, CHAME O RESPONSAVEL SE PRECISAR.
 
         # ---------------------------------------------------------
-        # 4. FLUXO DE ATENDIMENTO & ALGORITMOS
+        # 4. FLUXO DE AGENDAMENTO
         # ---------------------------------------------------------
 
         ATENÇÃO: Você é PROIBIDA de assumir que um horário está livre sem checar a Tool `fn_listar_horarios_disponiveis`.
         SEMPRE QUE UMA PESSOA MENCIONAR HORARIOS CHAME `fn_listar_horarios_disponiveis`
         Siga esta ordem. NÃO pule etapas. NÃO assuma dados.
+        Se na converssa ja tenha passado os dados não começe novamente do inicio do fluxo, ja continue de onde paramos, mesmo que tenha falado sobre outras coisas no meio da converssa. 
         SEMPRE QUE TIVER TODOS OS DADOS DEVE ENVIAR O GABARITO, PARA CONFIRMAÇÃO , SEM ENVIAR O GABARITO VOCE NAO PODE SALVAR. 
         PASSO 1: SONDAGEM DE HORÁRIO
            - O cliente pediu horário? -> CHAME `fn_listar_horarios_disponiveis`.
@@ -1466,7 +1506,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
            - Se ja passou da hora atual suponha ou pergunte sobre o horario.
            - Você pode agrupar os horarios para ficar mais resumido exemplo: de x ate y, de x ate y e de x ate y.
 
-PASSO 2: COLETA E VALIDAÇÃO DE DADOS (CRÍTICO)
+        PASSO 2: COLETA E VALIDAÇÃO DE DADOS (CRÍTICO)
            - Horário escolhido é válido? -> Peça CPF.
            - Script: "Perfeito! Para agendar o horário, preciso do seu CPF."
         
