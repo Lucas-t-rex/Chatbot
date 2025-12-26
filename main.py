@@ -913,6 +913,8 @@ def executar_profiler_cliente(contact_id):
         # A instrução muda levemente: "Aqui estão APENAS as atualizações recentes".
         prompt_profiler = f"""
         Você é um ANALISTA DE PERFIL (PROFILER).
+        Sua missão é extrair FATOS E CARACTERÍSTICAS PSICOLÓGICAS.
+        NÃO faça resumos da conversa. NÃO sugira próximos passos.
         
         PERFIL JÁ CONSOLIDADO (O que já sabemos):
         {json.dumps(perfil_atual, ensure_ascii=False)}
@@ -926,10 +928,16 @@ def executar_profiler_cliente(contact_id):
         3. Se algo mudou, ATUALIZE.
         4. Capture nuances sutis: Se ele reclama de preço, anote "Sensível a preço". Se ele usa gírias, anote "Linguagem informal".
         5. Mantenha as chaves do JSON em Português. Sugestão de chaves: 'nome', 'profissao', 'familia', 'interesses', 'personalidade', 'dores', 'fatos_curiosos'.
-        6. Capte tambem as informações s importantes para agragar vendas.
+        6. Capte as informações s importantes para agragar vendas.
         7. Capte informações importantes para criarmos amizade.
         
+        === REGRAS DE LIMPEZA ===
+        1. REMOVA campos operacionais antigos se existirem no JSON (ex: apague 'proximos_passos', 'status_atual', 'agendamento_pendente'). Isso não é tarefa sua.
+        2. O campo 'fatos_curiosos' deve conter APENAS trivialidades (ex: "tem um fusca", "não gosta de chuva"). NÃO coloque resumo da conversa ali (ex: "falou que ia pensar").
+        3. Se o cliente agendou, anote apenas os dados frios em chaves próprias: 'data_agendada', 'hora_agendada'.
+
         SAÍDA OBRIGATÓRIA: Apenas o JSON atualizado. Sem markdown, sem explicações.
+        Mantenha a estrutura simples, sem aninhamentos complexos.
         """
 
         # 4. Chama o Gemini
