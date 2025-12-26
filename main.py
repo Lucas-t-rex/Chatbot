@@ -52,7 +52,8 @@ FOLGAS_DIAS_SEMANA = [ 6 ] # Folga Domingo
 MAPA_DIAS_SEMANA_PT = { 5: "sábado", 6: "domingo" }
 
 MAPA_SERVICOS_DURACAO = {
-    "reunião": 30 
+    "reunião": 60, 
+    "consultoria": 30
 }
 LISTA_SERVICOS_PROMPT = ", ".join(MAPA_SERVICOS_DURACAO.keys())
 SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
@@ -272,10 +273,13 @@ class Agenda:
         if servico_key in MAPA_SERVICOS_DURACAO:
              return MAPA_SERVICOS_DURACAO.get(servico_key)
         
-        if "reunião" in servico_key or "lucas" in servico_key:
-             return MAPA_SERVICOS_DURACAO.get("reunião") # Retorna o padrão
+        if "consultoria" in servico_key:
+            return MAPA_SERVICOS_DURACAO.get("consultoria")
 
-        return None 
+        if "reunião" in servico_key or "reuniao" in servico_key or "lucas" in servico_key:
+             return MAPA_SERVICOS_DURACAO.get("reunião")
+
+        return None
 
     def _cabe_no_bloco(self, data_base: datetime, inicio_str: str, duracao_min: int) -> bool:
         inicio_dt = datetime.combine(data_base.date(), str_to_time(inicio_str))
@@ -1465,6 +1469,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         # VARIÁVEIS DE SISTEMA
         {info_tempo_real} | SAUDAÇÃO: {saudacao} | CLIENT_PHONE_ID: {clean_number}
         {prompt_name_instruction}
+        >> LISTA DE SERVIÇOS E DURAÇÃO (EM MINUTOS):
+        {MAPA_SERVICOS_DURACAO}
         
         # CONTEXTO & MEMÓRIA (Use-as na converssa)
         HISTÓRICO RECENTE:
