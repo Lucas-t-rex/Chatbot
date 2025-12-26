@@ -859,6 +859,107 @@ def analisar_status_da_conversa(history):
 
     return "andamento", 0, 0
 
+def executar_profiler_cliente(contact_id):
+    """
+    AGENTE 'ESPIÃO' V2 (Otimizado): 
+    Analisa APENAS as mensagens novas desde a última verificação.
+    """
+    if conversation_collection is None or not GEMINI_API_KEY:
+        return
+
+    try:
+        # 1. Busca os dados atuais
+        doc = conversation_collection.find_one({'_id': contact_id})
+        if not doc: return
+
+        history_completo = doc.get('history', [])
+        perfil_atual = doc.get('client_profile', {})
+        
+        # --- LÓGICA DE CHECKPOINT (NOVO) ---
+        # Busca o carimbo de data da última vez que o profiler rodou
+        # Se não existir, pega uma data bem antiga para ler tudo (limitado aos ultimos 20 pra não estourar na primeira vez)
+        ultimo_ts_lido = doc.get('profiler_last_ts', "2000-01-01T00:00:00")
+        
+        # Filtra: Só queremos mensagens que chegaram DEPOIS do último processamento
+        mensagens_novas = [
+            m for m in history_completo 
+            if m.get('ts', '') > ultimo_ts_lido
+        ]
+
+        # Se não tem mensagem nova, NÃO GASTA DINHEIRO. Aborta.
+        if not mensagens_novas:
+            # print(f"🕵️ [Profiler] Nenhuma mensagem nova para {contact_id}. Dormindo.")
+            return
+
+        # Pega o TS da última mensagem desse lote para salvar depois como novo checkpoint
+        novo_checkpoint_ts = mensagens_novas[-1].get('ts')
+
+        # 2. Prepara o Texto APENAS das Novas
+        txt_conversa_nova = ""
+        for m in mensagens_novas:
+            role = "Cliente" if m.get('role') == 'user' else "Lyra"
+            texto = m.get('text', '')
+            # Ignora logs técnicos
+            if not texto.startswith("Chamando função") and not texto.startswith("[HUMAN"):
+                txt_conversa_nova += f"- {role}: {texto}\n"
+        
+        # Se após filtrar logs técnicos não sobrou texto (ex: só tinha log de função), aborta
+        if not txt_conversa_nova.strip():
+            # Atualiza só o checkpoint pra não ficar travado nessas mensagens técnicas
+            conversation_collection.update_one({'_id': contact_id}, {'$set': {'profiler_last_ts': novo_checkpoint_ts}})
+            return
+
+        # 3. O Prompt do Engenheiro de Dados (Profiler)
+        # A instrução muda levemente: "Aqui estão APENAS as atualizações recentes".
+        prompt_profiler = f"""
+        Você é um ANALISTA DE PERFIL (PROFILER).
+        
+        PERFIL JÁ CONSOLIDADO (O que já sabemos):
+        {json.dumps(perfil_atual, ensure_ascii=False)}
+
+        NOVAS MENSAGENS TROCADAS (O que acabou de acontecer):
+        {txt_conversa_nova}
+
+        === INSTRUÇÕES ===
+        1. Analise a conversa e ATUALIZE o JSON dos dados conhecidos.
+        2. Se descobrir algo novo (Nome, Filhos, Profissão, Hobby, Dores, Sonhos, Carro, Time), ADICIONE.
+        3. Se algo mudou, ATUALIZE.
+        4. Capture nuances sutis: Se ele reclama de preço, anote "Sensível a preço". Se ele usa gírias, anote "Linguagem informal".
+        5. Mantenha as chaves do JSON em Português. Sugestão de chaves: 'nome', 'profissao', 'familia', 'interesses', 'personalidade', 'dores', 'fatos_curiosos'.
+        
+        SAÍDA OBRIGATÓRIA: Apenas o JSON atualizado. Sem markdown, sem explicações.
+        """
+
+        # 4. Chama o Gemini
+        model_profiler = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
+        response = model_profiler.generate_content(prompt_profiler)
+
+        # 5. Processa o Resultado
+        novo_perfil_json = json.loads(response.text)
+        
+        # 6. Contabilidade
+        in_tok, out_tok = extrair_tokens_da_resposta(response)
+
+        # 7. Atualização no MongoDB (Salva o Perfil E o novo Checkpoint)
+        conversation_collection.update_one(
+            {'_id': contact_id},
+            {
+                '$set': {
+                    'client_profile': novo_perfil_json,
+                    'profiler_last_ts': novo_checkpoint_ts # <--- O SEGREDO ESTÁ AQUI
+                },
+                '$inc': {
+                    'total_tokens_consumed': in_tok + out_tok,
+                    'tokens_input': in_tok,
+                    'tokens_output': out_tok
+                }
+            }
+        )
+        print(f"🕵️ [Profiler] Atualizado com sucesso. Leu {len(mensagens_novas)} msg novas.")
+
+    except Exception as e:
+        print(f"⚠️ Erro no Agente Profiler: {e}")
+
 def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used_chat_in, tokens_used_chat_out, ultima_msg_gerada=None):
     if conversation_collection is None: return
     try:
@@ -2706,6 +2807,14 @@ def process_message_logic(message_data, buffered_message_text=None):
                         current_delay = 2000 if i == 0 else 4000
                         send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
                         time.sleep(current_delay / 1000)
+
+            try:
+                if ai_reply: # Só chama se teve conversa
+                    # print(f"🕵️ Iniciando espião de perfil para {clean_number}...")
+                    threading.Thread(target=executar_profiler_cliente, args=(clean_number,)).start()
+            except Exception as e:
+                print(f"❌ Erro ao disparar thread do Profiler: {e}")
+
 
         except Exception as e:
             print(f"❌ Erro no envio: {e}")
