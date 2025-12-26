@@ -861,8 +861,8 @@ def analisar_status_da_conversa(history):
 
 def executar_profiler_cliente(contact_id):
     """
-    AGENTE 'ESPIÃO' V2 (Otimizado): 
-    Analisa APENAS as mensagens novas desde a última verificação.
+    AGENTE 'ESPIÃO' V3 (Focado no Cliente): 
+    Ignora a fala da IA para traçar perfil e foca apenas no estilo e fatos do usuário.
     """
     if conversation_collection is None or not GEMINI_API_KEY:
         return
@@ -875,74 +875,59 @@ def executar_profiler_cliente(contact_id):
         history_completo = doc.get('history', [])
         perfil_atual = doc.get('client_profile', {})
         
-        # --- LÓGICA DE CHECKPOINT (NOVO) ---
-        # Busca o carimbo de data da última vez que o profiler rodou
-        # Se não existir, pega uma data bem antiga para ler tudo (limitado aos ultimos 20 pra não estourar na primeira vez)
+        # --- LÓGICA DE CHECKPOINT ---
         ultimo_ts_lido = doc.get('profiler_last_ts', "2000-01-01T00:00:00")
         
-        # Filtra: Só queremos mensagens que chegaram DEPOIS do último processamento
         mensagens_novas = [
             m for m in history_completo 
             if m.get('ts', '') > ultimo_ts_lido
         ]
 
-        # Se não tem mensagem nova, NÃO GASTA DINHEIRO. Aborta.
         if not mensagens_novas:
-            # print(f"🕵️ [Profiler] Nenhuma mensagem nova para {contact_id}. Dormindo.")
             return
 
-        # Pega o TS da última mensagem desse lote para salvar depois como novo checkpoint
         novo_checkpoint_ts = mensagens_novas[-1].get('ts')
 
-        # 2. Prepara o Texto APENAS das Novas
+        # 2. Prepara o Texto (Mantemos Lyra aqui APENAS para contexto, o filtro será no Prompt)
         txt_conversa_nova = ""
         for m in mensagens_novas:
-            role = "Cliente" if m.get('role') == 'user' else "Lyra"
+            role = "Cliente" if m.get('role') == 'user' else "Lyra (IA)"
             texto = m.get('text', '')
-            # Ignora logs técnicos
             if not texto.startswith("Chamando função") and not texto.startswith("[HUMAN"):
                 txt_conversa_nova += f"- {role}: {texto}\n"
         
-        # Se após filtrar logs técnicos não sobrou texto (ex: só tinha log de função), aborta
         if not txt_conversa_nova.strip():
-            # Atualiza só o checkpoint pra não ficar travado nessas mensagens técnicas
             conversation_collection.update_one({'_id': contact_id}, {'$set': {'profiler_last_ts': novo_checkpoint_ts}})
             return
 
-        # 3. O Prompt do Engenheiro de Dados (Profiler)
-        # A instrução muda levemente: "Aqui estão APENAS as atualizações recentes".
+        # 3. O Prompt do Engenheiro de Dados (Profiler) - REFINADO
         prompt_profiler = f"""
-        Você é um ANALISTA DE PERFIL (PROFILER).
-        Sua missão é extrair FATOS E CARACTERÍSTICAS PSICOLÓGICAS.
-        Você deve entender com quem falamos pois usaremos esta informação pra criar a identidade.
-        NÃO faça resumos da conversa. NÃO sugira próximos passos.
-        
+        Você é um ANALISTA COMPORTAMENTAL (PROFILER).
+        Sua missão é extrair a IDENTIDADE DO CLIENTE.
+
         PERFIL JÁ CONSOLIDADO (O que já sabemos):
         {json.dumps(perfil_atual, ensure_ascii=False)}
 
-        NOVAS MENSAGENS TROCADAS (O que acabou de acontecer):
+        NOVAS MENSAGENS (Para análise):
         {txt_conversa_nova}
-        Não invente informações.
 
-        === INSTRUÇÕES ===
-        1. Analise a conversa e ATUALIZE o JSON dos dados conhecidos.
-        2. Se descobrir algo novo (Nome, Filhos, Profissão, Hobby, Dores, Sonhos, Carro, Time), ADICIONE.
-        3. Se algo mudou, ATUALIZE.
-        4. Capture nuances sutis: Se ele reclama de preço, anote "Sensível a preço". Se ele usa gírias, anote "Linguagem informal".
-        5. Mantenha as chaves do JSON em Português. Sugestão de chaves: 'nome', 'profissao', 'familia', 'interesses', 'personalidade', 'dores', 'fatos_curiosos', 'gostos', 'falas'.
-        6. Capte as informações s importantes para agregar vendas.
-        7. Capte informações importantes para criarmos amizade.
-        8. Capte como a pessoa nos encontrou.
-        9. VALIDAÇÃO DE REALIDADE: Só adicione ao perfil se o cliente afirmou explicitamente. Se for uma suposição sua, marque como "possivel_interesse" e não como fato. Queremos fatos sólidos para criar confiança.
+        === DIRETRIZES DE FOCO (CRÍTICO) ===
+        1. FOCO TOTAL NO CLIENTE: Ignore as opiniões e o jeito de falar da 'Lyra (IA)'. Analise APENAS o comportamento do 'Cliente'.
+        2. CONTEXTO APENAS: Use as falas da IA apenas para entender o que o cliente respondeu (ex: se a IA perguntou 'tem filhos?' e ele disse 'sim', anote que tem filhos).
+        3. PROIBIDO TRANSCREVER: JAMAIS crie um campo com lista de mensagens (como 'falas', 'historico', 'mensagens'). O usuário já tem o histórico, não duplique isso.
+        
+        === O QUE EXTRAIR (OUTPUT JSON) ===
+        1. FATOS REAIS: Nome, Profissão, Filhos, Carro, Time, Cidade, Como nos encontrou.
+        2. ESTILO DE COMUNICAÇÃO (Substitui 'falas'): Descreva COMO ele fala em 3 ou 4 palavras. 
+           - Exemplos: "Usa gírias", "Formal e direto", "Usa muitos emojis", "Comete erros de português", "Fala picado".
+        3. PSICOLOGIA: Se é sensível a preço, ansioso, desconfiado ou amigável.
+        
+        === REGRAS DE HIGIENE ===
+        - REMOVA do JSON o campo 'falas' se ele existir antigamente.
+        - VALIDAÇÃO DE REALIDADE: Só adicione ao perfil fatos explícitos ditos pelo Cliente.
+        - Mantenha chaves em PT-BR sugeridas: 'nome', 'profissao', 'familia', 'interesses', 'personalidade', 'dores', 'estilo_comunicacao', 'origem_contato'.
 
-        === REGRAS DE LIMPEZA ===
-        1. REMOVA campos operacionais antigos se existirem no JSON (ex: apague 'proximos_passos', 'status_atual', 'agendamento_pendente'). Isso não é tarefa sua.
-        2. O campo 'fatos_curiosos' deve conter APENAS trivialidades (ex: "tem um fusca", "não gosta de chuva"). NÃO coloque resumo da conversa ali (ex: "falou que ia pensar").
-        3. Se o cliente agendou, anote apenas os dados frios em chaves próprias: 'data_agendada', 'hora_agendada'.
-        4. Poucas palavras. 
-
-        SAÍDA OBRIGATÓRIA: Apenas o JSON atualizado. Sem markdown, sem explicações.
-        Mantenha a estrutura simples, sem aninhamentos complexos.
+        SAÍDA OBRIGATÓRIA: Apenas o JSON atualizado.
         """
 
         # 4. Chama o Gemini
@@ -955,13 +940,13 @@ def executar_profiler_cliente(contact_id):
         # 6. Contabilidade
         in_tok, out_tok = extrair_tokens_da_resposta(response)
 
-        # 7. Atualização no MongoDB (Salva o Perfil E o novo Checkpoint)
+        # 7. Atualização no MongoDB
         conversation_collection.update_one(
             {'_id': contact_id},
             {
                 '$set': {
                     'client_profile': novo_perfil_json,
-                    'profiler_last_ts': novo_checkpoint_ts # <--- O SEGREDO ESTÁ AQUI
+                    'profiler_last_ts': novo_checkpoint_ts
                 },
                 '$inc': {
                     'total_tokens_consumed': in_tok + out_tok,
@@ -970,7 +955,7 @@ def executar_profiler_cliente(contact_id):
                 }
             }
         )
-        print(f"🕵️ [Profiler] Atualizado com sucesso. Leu {len(mensagens_novas)} msg novas.")
+        print(f"🕵️ [Profiler] Perfil atualizado (Foco no Cliente). Leu {len(mensagens_novas)} msg novas.")
 
     except Exception as e:
         print(f"⚠️ Erro no Agente Profiler: {e}")
