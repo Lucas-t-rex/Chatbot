@@ -918,9 +918,10 @@ def executar_profiler_cliente(contact_id):
         
         === O QUE EXTRAIR (OUTPUT JSON) ===
         1. FATOS REAIS: Nome, Profissão, Filhos, Carro, Time, Cidade, Como nos encontrou.
-        2. ESTILO DE COMUNICAÇÃO (Substitui 'falas'): Descreva COMO ele fala em 3 ou 4 palavras. 
+        2. ESTILO DE COMUNICAÇÃO (Substitui 'falas'): Descreva COMO ele fala .
            - Exemplos: "Usa gírias", "Formal e direto", "Usa muitos emojis", "Comete erros de português", "Fala picado".
         3. PSICOLOGIA: Se é sensível a preço, ansioso, desconfiado ou amigável.
+        4. Intimidade: Capte informações para criar intimidade com o cliente, de rotina e estilo de vida. 
         
         === REGRAS DE HIGIENE ===
         - REMOVA do JSON o campo 'falas' se ele existir antigamente.
@@ -1465,9 +1466,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         {info_tempo_real} | SAUDAÇÃO: {saudacao} | CLIENT_PHONE_ID: {clean_number}
         {prompt_name_instruction}
         
-        # CONTEXTO & MEMÓRIA
+        # CONTEXTO & MEMÓRIA (Use-as na converssa)
         HISTÓRICO RECENTE:
-        {historico_str}
+        {historico_str} estas são essas converssas com o cliente.
+        INFORMAÇÕES QUE TEMOS DESTE CLIENTE (Memória Afetiva):
+        {texto_perfil_cliente} estas são as informaçoes que temos deste cliente.
+
         1. Responda dúvidas pendentes no histórico usando APENAS dados abaixo.
         2. Você deve ter noção do tempo em {info_tempo_real}!
         3. Sempre deve terminar com uma pergunta a não ser que seja uma despedida. 
