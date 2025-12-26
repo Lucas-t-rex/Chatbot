@@ -926,6 +926,8 @@ def executar_profiler_cliente(contact_id):
         3. Se algo mudou, ATUALIZE.
         4. Capture nuances sutis: Se ele reclama de preço, anote "Sensível a preço". Se ele usa gírias, anote "Linguagem informal".
         5. Mantenha as chaves do JSON em Português. Sugestão de chaves: 'nome', 'profissao', 'familia', 'interesses', 'personalidade', 'dores', 'fatos_curiosos'.
+        6. Capte tambem as informações s importantes para agragar vendas.
+        7. Capte informações importantes para criarmos amizade.
         
         SAÍDA OBRIGATÓRIA: Apenas o JSON atualizado. Sem markdown, sem explicações.
         """
@@ -1377,7 +1379,7 @@ def verificar_lembretes_agendados():
     except Exception as e:
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
 
-def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "") -> str:
+def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None) -> str:
     try:
         agora = datetime.now(FUSO_HORARIO)
         dias_semana = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
@@ -1433,6 +1435,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         dia_sem_str = "Dia desconhecido"
         dia_num = "X"
         ano_atual = datetime.now().year #
+
+    texto_perfil_cliente = "Nenhum detalhe pessoal conhecido ainda."
+    if client_profile_json:
+        # Formata o JSON para um texto legível para a IA
+        import json
+        texto_perfil_cliente = json.dumps(client_profile_json, indent=2, ensure_ascii=False)
 
     if known_customer_name:
 
@@ -1572,6 +1580,19 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         - NÃO diga "Sou uma IA". Você é a Lyra.
         - NÃO passe o preço (Isso é com o Lucas).
         - Não deixar a pessoa sair da converssa sem agendar a reunião ou falar com o Lucas. Caso ela negue o serviço use o PROTOCOLO DE RESGATE E OBJEÇÕES abaixo.
+        
+        PERFIL E MEMÓRIA AFETIVA (USE COM SUTILEZA)
+        
+        O QUE SABEMOS SOBRE O CLIENTE (Base de Conhecimento):
+        {texto_perfil_cliente}
+
+        >>> REGRAS PARA USAR ESSES DADOS <<<
+        1. AFINIDADE: Importante, você deve usar estas informações apenas para saber sobre quem voce fala e ajudar a fazer a venda.
+        2. CONTEXTO, NÃO REPETIÇÃO: Use esses dados para calibrar seu TOM, não para ficar citando fatos. 
+           - Exemplo: Se ele é "Pintor", use metáforas visuais ou seja mais prático. Se ele tem "filhos pequenos", entenda se ele demorar a responder.
+        3. NÃO SEJA "STALKER": Nunca liste o que você sabe ("Vi aqui que você tem um fusca"). Isso assusta. Apenas USE a informação se o contexto pedir.
+        4. MEMÓRIA AFETIVA: Se ele citar uma dificuldade, lembre-se do contexto dele (ex: se ele reclamar de dinheiro e você sabe que ele tem 3 filhos, seja mais acolhedora com o valor).
+        5. NATURALIDADE: Aja como uma amiga que já conhece a pessoa. Não force a barra.
 
         # ---------------------------------------------------------
         # 3.DADOS DA EMPRESA
