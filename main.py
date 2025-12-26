@@ -2742,6 +2742,15 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
     scheduler.add_job(verificar_lembretes_agendados, 'interval', minutes=60)
     print("⏰ Agendador de Lembretes (24h antes) iniciado.")
     
+    if not scheduler.running:
+        scheduler.start()
+
+    print("⚡️ [Boot] Executando verificação de lembretes inicial...")
+    try:
+        verificar_lembretes_agendados()
+    except Exception as e:
+        print(f"⚠️ Erro na verificação inicial de boot: {e}")
+
     import atexit
     atexit.register(lambda: scheduler.shutdown())
     
