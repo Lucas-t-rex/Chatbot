@@ -2047,9 +2047,11 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     convo_data = load_conversation_from_db(contact_id)
     historico_texto_para_prompt = ""
     old_history_gemini_format = []
+    perfil_cliente_dados = {}
     
     if convo_data:
         history_from_db = convo_data.get('history', [])
+        perfil_cliente_dados = convo_data.get('client_profile', {})
         janela_recente = history_from_db[-25:] 
         qtd_msg_enviadas = len(janela_recente)
         print(f"📉 [METRICA] Janela Deslizante: Enviando apenas as últimas {qtd_msg_enviadas} mensagens para o Prompt.")
@@ -2075,7 +2077,8 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         horario_atual,
         known_customer_name,  
         contact_id,
-        historico_str=historico_texto_para_prompt
+        historico_str=historico_texto_para_prompt,
+        client_profile_json=perfil_cliente_dados
     )
 
     max_retries = 3 
