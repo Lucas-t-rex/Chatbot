@@ -209,6 +209,78 @@ def extrair_tokens_da_resposta(response):
         return (0, 0)
     except:
         return (0, 0)
+
+def agrupar_horarios_em_faixas(lista_horarios, intervalo_minutos=30):
+    """
+    Recebe: ["08:00", "08:30", "09:00", "10:30", "11:00"]
+    Retorna texto: "das 08:00 às 09:30 e das 10:30 às 11:30"
+    Regra: Só agrupa se tiver 3 ou mais horários seguidos. Se tiver 1 ou 2, lista solto.
+    """
+    if not lista_horarios:
+        return "Nenhum horário disponível."
+
+    # 1. Converte tudo para minutos para poder fazer matemática
+    minutos = []
+    for h in lista_horarios:
+        try:
+            dt_t = datetime.strptime(h, '%H:%M')
+            m = dt_t.hour * 60 + dt_t.minute
+            minutos.append(m)
+        except: continue
+
+    if not minutos: return ""
+
+    faixas = []
+    inicio_faixa = minutos[0]
+    anterior = minutos[0]
+    count_seq = 1
+
+    # 2. Varre a lista procurando sequências
+    for atual in minutos[1:]:
+        if atual == anterior + intervalo_minutos:
+            # É sequencial (ex: 8:00 -> 8:30)
+            anterior = atual
+            count_seq += 1
+        else:
+            # Quebrou a sequência. Vamos salvar o bloco anterior.
+            fim_faixa_real = anterior + intervalo_minutos # O fim é o início do último slot + 30min
+            
+            if count_seq >= 3:
+                # Agrupa (Ex: "das 08:00 às 11:30")
+                str_ini = f"{inicio_faixa // 60:02d}:{inicio_faixa % 60:02d}"
+                str_fim = f"{fim_faixa_real // 60:02d}:{fim_faixa_real % 60:02d}"
+                faixas.append(f"das {str_ini} às {str_fim}")
+            else:
+                # Eram poucos horários, lista um por um para não ficar estranho
+                # Recalcula os slots individuais desse pequeno bloco
+                temp_m = inicio_faixa
+                while temp_m <= anterior:
+                    faixas.append(f"{temp_m // 60:02d}:{temp_m % 60:02d}")
+                    temp_m += intervalo_minutos
+
+            # Reseta para o novo bloco
+            inicio_faixa = atual
+            anterior = atual
+            count_seq = 1
+
+    # 3. Processa o último bloco que sobrou no loop
+    fim_faixa_real = anterior + intervalo_minutos
+    if count_seq >= 3:
+        str_ini = f"{inicio_faixa // 60:02d}:{inicio_faixa % 60:02d}"
+        str_fim = f"{fim_faixa_real // 60:02d}:{fim_faixa_real % 60:02d}"
+        faixas.append(f"das {str_ini} às {str_fim}")
+    else:
+        temp_m = inicio_faixa
+        while temp_m <= anterior:
+            faixas.append(f"{temp_m // 60:02d}:{temp_m % 60:02d}")
+            temp_m += intervalo_minutos
+
+    # 4. Monta o texto final humanizado
+    if len(faixas) == 1:
+        return faixas[0]
+    else:
+        # Junta com vírgulas e um "e" no final
+        return ", ".join(faixas[:-1]) + " e " + faixas[-1]
     
 class Agenda:
     def __init__(self, uri: str, db_name: str, collection_name: str):
@@ -571,6 +643,7 @@ class Agenda:
 
         agora = datetime.now()
         duracao_minutos = self._get_duracao_servico(servico_str)
+
         if duracao_minutos is None:
             return {"erro": f"Serviço '{servico_str}' não reconhecido. Os serviços válidos são: {LISTA_SERVICOS_PROMPT}"}
 
@@ -578,6 +651,7 @@ class Agenda:
         horarios_disponiveis = []
         slots_de_inicio_validos = gerar_slots_de_trabalho(INTERVALO_SLOTS_MINUTOS)
 
+        # 1. Loop Matemático (Encontra os horários)
         for slot_hora_str in slots_de_inicio_validos:
             slot_dt_completo = datetime.combine(dt.date(), str_to_time(slot_hora_str))
 
@@ -595,15 +669,21 @@ class Agenda:
 
             if conflitos_atuais < NUM_ATENDENTES:
                 horarios_disponiveis.append(slot_hora_str)
-
+        
+        if not horarios_disponiveis:
+            resumo_humanizado = "Não há horários livres nesta data."
+        else:
+            texto_faixas = agrupar_horarios_em_faixas(horarios_disponiveis, INTERVALO_SLOTS_MINUTOS)
+            resumo_humanizado = f"Tenho estes horários livres: {texto_faixas}."
         return {
             "sucesso": True,
             "data": dt.strftime('%d/%m/%Y'),
             "servico_consultado": servico_str,
             "duracao_calculada_min": duracao_minutos,
+            "resumo_humanizado": resumo_humanizado,
             "horarios_disponiveis": horarios_disponiveis
         }
-
+    
 agenda_instance = None
 if MONGO_AGENDA_URI and GEMINI_API_KEY:
     try:
@@ -1503,12 +1583,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         1. `fn_listar_horarios_disponiveis`: 
            - QUANDO USAR: Acione IMEDIATAMENTE se o cliente demonstrar intenção de agendar ou perguntar sobre disponibilidade ("Tem vaga?", "Pode ser dia X?").
            - PROTOCOLO DE EXECUÇÃO: É PROIBIDO narrar a ação (ex: "Vou verificar no sistema..."). Apenas CHAME A TOOL e responda com os dados já processados.
-                >>> REGRA CRÍTICA DE APRESENTAÇÃO (UX HUMANIZADA) <<<
-                    Se a ferramenta retornar UMA LISTA LONGA (mais de 4 horários), É PROIBIDO LISTAR UM POR UM com vírgulas (ex: 08:00, 08:30, 09:00...).
-                    - O QUE FAZER: Agrupe visualmente e fale como gente.
-                    - EXEMPLO ROBÓTICO (ERRADO): "Tenho 08:00, 08:30, 09:00, 09:30, 10:00..."
-                    - EXEMPLO HUMANO (CERTO): Verifique os horarios e agrupe eles.
-                    - Se sobrar poucos horários: "Só me restaram o das 09h e o das 15h30. Algum desses te ajuda?"
+            - PROTOCOLO DE APRESENTAÇÃO (UX): 
+                A ferramenta retornará um campo chamado 'resumo_humanizado' (Ex: "das 08:00 às 11:30").
+                USE ESTE TEXTO NA SUA RESPOSTA. Não tente ler a lista bruta 'horarios_disponiveis' um por um, pois soa robótico. Confie no resumo humanizado.
 
         2. `fn_salvar_agendamento`: 
            - QUANDO USAR: É o "Salvar Jogo". Use APENAS no final, quando tiver Nome, CPF, Telefone, Serviço, Data e Hora confirmados pelo cliente.
