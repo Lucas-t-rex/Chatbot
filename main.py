@@ -805,27 +805,26 @@ def append_message_to_db(contact_id, role, text, message_id=None):
 def analisar_status_da_conversa(history):
     """
     Auditoria Híbrida:
-    1. Verifica SUCESSO via código (Custo Zero).
+    1. Verifica SUCESSO via código (Varre TODO o histórico).
     2. Se não for sucesso, usa IA com prompt MINIMALISTA para ver se é Fracasso ou Andamento.
     """
     if not history:
         return "andamento", 0, 0
 
-    # --- PASSO 1: VERIFICAÇÃO TÉCNICA (GRÁTIS) ---
-    # Olha as últimas mensagens para ver se houve chamada de função crítica
-    # Isso economiza milhares de tokens pois não chama o Gemini aqui.
-    for msg in history[-6:]: # Olha só as 6 últimas pra garantir
+    for msg in history: 
         text = msg.get('text', '')
+        
         if "fn_salvar_agendamento" in text or "fn_solicitar_intervencao" in text:
-            print("✅ [Auditor] Sucesso detectado via Código (Economia de Tokens!)")
+            print("✅ [Auditor] Sucesso Histórico Detectado (Conversão Garantida)")
             return "sucesso", 0, 0
-
+        
     msgs_para_analise = history[-8:] 
     historico_texto = ""
     for msg in msgs_para_analise:
         role = "Bot" if msg.get('role') in ['assistant', 'model'] else "Cliente"
         txt_limpo = msg.get('text', '').replace('\n', ' ')
-        if "Chamando função" not in txt_limpo: # Não envia log técnico pro auditor
+        
+        if "Chamando função" not in txt_limpo: 
             historico_texto += f"{role}: {txt_limpo}\n"
 
     if modelo_ia:
@@ -859,6 +858,7 @@ def analisar_status_da_conversa(history):
 
         except Exception as e:
             print(f"⚠️ Erro auditoria: {e}")
+            # Em caso de erro na IA, mantém em andamento para não perder leads
             return "andamento", 0, 0
 
     return "andamento", 0, 0
@@ -1826,6 +1826,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         - Variações: "Como posso te chamar?", "E você, é...?"
         - Se a pessoa já se apresentou (Ex: "Oi sou a Sabrina"), CHAME `fn_capturar_nome` IMEDIATAMENTE. Não responda nada, apenas chame a função.
         - Se a pessoa apenas cumprimentar, cumprimente.
+        - Se a pessoa erra o horario correto da saudação, nao imite ela , nem corrija apenas fale a {saudacao} correta no horario determinado.
 
         === FILTRO DE VALIDAÇÃO DE NOME (CRÍTICO) ===
         Antes de chamar `fn_capturar_nome`, analise o texto do usuário:
