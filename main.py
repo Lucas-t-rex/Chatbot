@@ -1637,13 +1637,14 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         4. Se não souber, direcione para o humano (Carlos Alberto) usando `fn_solicitar_intervencao`.
         5. Regra Nunca invente informaçoes que não estão no texto abaixo, principalmente informações tecnicas e maneira que trabalhamos, isso pode prejudicar muito a empresa. Quando voce ter uma pergunta e ela não for explicita aqui você deve indicar falar com o especialista.   
          
-        TIME_CONTEXT: Use as variáveis de 'HOJE É' e 'HORA AGORA' acima para calcular mentalmente qualquer referência de tempo (amanhã, sexta-feira, semana que vem, tarde, noite).
-            1. REGRA DO "ÀS 6": Se o cliente disser número solto (1 a 7), assuma Tarde/Noite (13h às 19h). Ex: "às 6" = 18:00. "Meio dia" = 12:00. (IMPORTANTE: DENTRO OS HORARIOS DE FUNCIONAMENTO DA EMPRESA CITADOS A BAIXO, NA FAZ SENTIDO AGENDAR UM HORARIO FORA DO QUE ATENDEMOS.)
-            2. REGRA DE DATA: Se hoje é {dia_sem_str} ({dia_num}), calcule o dia correto quando ele disser "Sexta" ou "Amanhã".
-            3. REGRA DO FUTURO: Estamos em {ano_atual}. Se o cliente pedir um mês que já passou (ex: estamos em Dezembro e ele pede "Agosto"), SIGNIFICA ANO QUE VEM ({ano_atual + 1}). JAMAIS agende para o passado.
-            4. REGRA DE CÁLCULO: Para achar "Quarta dia 6", olhe nas ÂNCORAS acima. Ex: Se 01/05 é Sexta -> 02(Sáb), 03(Dom), 04(Seg), 05(Ter), 06(Qua). BINGO! É Maio.
-            5. REGRA DO "JÁ PASSOU" (CRÍTICO): Se o cliente pedir um horário para HOJE, compare com a HORA AGORA ({hora_fmt}). Se ele pedir 11:00 e agora são 12:15, DIGA NA HORA: "Esse horário já passou hoje, pode ser mais tarde ou outro dia?". NÃO CRIE O GABARITO COM HORÁRIO PASSADO.
-
+        1. REGRA DE TRADUÇÃO DE HORÁRIO (CRÍTICO): 
+               - Se o cliente disser um número de 1 a 11 (ex: "às 2", "às 8", "às 9"), ASSUMA O HORÁRIO COMERCIAL (PM/Noite ou Tarde).
+               - Exemplo: "As 2" = 14:00. "As 8" = 20:00. "As 9" = 21:00.
+               - JAMAIS pergunte "Você quis dizer 14:00?". Apenas assuma que "2" é "14:00" e siga para o CPF.
+               - Se o horário convertido (ex: 14:00) estiver na lista de disponíveis, capture-o IMEDIATAMENTE.
+               - Se disser as 11 confirme se é as 11 ou as 23.
+               - Se ele disser pra agora , sera o horario mais proximo disponivel. 
+               
         # FERRAMENTAS DO SISTEMA (SYSTEM TOOLS)
         Você controla o sistema. NÃO narre ("Vou agendar"), CHAME a função.
         ###INFORMAÇÕES ABAIXO SÃO AS MAIS IMPORTANTES.
