@@ -457,7 +457,7 @@ class Agenda:
             log_info(f"Erro em buscar_por_cpf: {e}")
             return {"erro": f"Falha ao buscar CPF no banco de dados: {e}"}
 
-    def salvar(self, nome: str, cpf_raw: str, telefone: str, servico: str, data_str: str, hora_str: str, owner_id: str = None) -> Dict[str, Any]:
+    def salvar(self, nome: str, cpf_raw: str, telefone: str, servico: str, data_str: str, hora_str: str, owner_id: str = None, observacao: str = "") -> Dict[str, Any]:
         # --- TRATAMENTOS BÁSICOS ---
         apenas_numeros = re.sub(r'\D', '', str(cpf_raw)) if cpf_raw else ""
         cpf = limpar_cpf(cpf_raw)
@@ -505,12 +505,17 @@ class Agenda:
             if conflitos_atuais >= NUM_ATENDENTES:
                 return {"erro": f"Horário {hora} indisponível. O proprietário já está ocupado neste horário."}
             
+            obs_limpa = str(observacao).strip() if observacao else ""
+            if len(obs_limpa) > 200:
+                obs_limpa = obs_limpa[:200]
+
             novo_documento = {
                 "owner_whatsapp_id": owner_id,  
                 "nome": nome.strip(),
                 "cpf": cpf,
                 "telefone": telefone.strip(),
                 "servico": servico.strip(),
+                "observacao": obs_limpa,
                 "duracao_minutos": duracao_minutos,
                 "inicio": inicio_dt, 
                 "fim": fim_dt,
@@ -657,7 +662,8 @@ class Agenda:
         if folga:
             return {"erro": f"Desculpe, não trabalhamos aos {folga}s. O dia {data_str} está indisponível."}
 
-        agora = datetime.now()
+        agora_fuso = datetime.now(FUSO_HORARIO)
+        agora = agora_fuso.replace(tzinfo=None)
         duracao_minutos = self._get_duracao_servico(servico_str)
 
         if duracao_minutos is None:
@@ -765,8 +771,12 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                                 "enum": SERVICOS_PERMITIDOS_ENUM
                             },
                             "data": {"type_": "STRING", "description": "A data no formato DD/MM/AAAA."},
-                            "hora": {"type_": "STRING", "description": "A hora no formato HH:MM."}
-                        },
+                            "hora": {"type_": "STRING", "description": "A hora no formato HH:MM."},
+                            "observacao": {
+                                "type_": "STRING",
+                                "description": "Detalhes extras opcionais citados pelo cliente (ex: 'mesa para 5', 'aniversário', 'cadeirinha de bebê'). Deixe vazio se não houver."
+                            }
+                        },  # <--- ESTA CHAVE FECHA O 'PROPERTIES'
                         "required": ["nome", "cpf", "telefone", "servico", "data", "hora"]
                     }
                 },
@@ -1618,6 +1628,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     *Serviço*:
                     *Data*: 
                     *Hora*: 
+                    *Obs*: (Apenas se houver algo relevante, ex: 'Mesa p/ 5', senão deixe em branco)
 
                     Tudo certo, posso agendar?
 
@@ -2290,6 +2301,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     *Serviço*:
                     *Data*: 
                     *Hora*:
+                    *Obs*: (Apenas se houver algo relevante, ex: 'Mesa p/ 5', senão deixe em branco)
 
                     Tudo certo, posso agendar?
         
@@ -2450,7 +2462,8 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 servico=args.get("servico", ""),
                 data_str=args.get("data", ""),
                 hora_str=args.get("hora", ""),
-                owner_id=contact_id
+                owner_id=contact_id,
+                observacao=args.get("observacao", "")
             )
             return json.dumps(resp, ensure_ascii=False)
 
@@ -3562,6 +3575,7 @@ def api_meus_agendamentos():
                 "cliente_nome": ag.get("nome", "Sem Nome").title(),
                 "cliente_telefone": ag.get("cliente_telefone") or ag.get("telefone", ""),
                 "cpf": ag.get("cpf", ""),
+                "observacao": ag.get("observacao", ""),
                 "owner_whatsapp_id": ag.get("owner_whatsapp_id", ""),
                 "created_at": created_at_str
             }
@@ -3632,6 +3646,7 @@ def api_criar_agendamento():
     servico = data.get('servico', 'reunião')
     data_str = data.get('data') # DD/MM/YYYY
     hora_str = data.get('hora') # HH:MM
+    observacao = data.get('observacao', '')
     
     # Se o admin estiver criando, o owner_whatsapp_id pode ser o telefone limpo
     # para que os lembretes funcionem.
@@ -3647,6 +3662,7 @@ def api_criar_agendamento():
         cpf_raw=cpf,
         telefone=telefone,
         servico=servico,
+        observacao=observacao,
         data_str=data_str,
         hora_str=hora_str,
         owner_id=owner_id
