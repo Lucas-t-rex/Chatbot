@@ -1027,8 +1027,8 @@ def executar_profiler_cliente(contact_id):
 
         # 3. O Prompt do Engenheiro de Dados (Profiler) - REFINADO
         prompt_profiler = f"""
-        Você é um EXPERT EM COMPORTAMENTO GASTRONÔMICO (PROFILER DE RESTAURANTE).
-        Sua missão é analisar a conversa e atualizar o 'Dossiê do Cliente' com foco em Vendas e Preferências Alimentares.
+        Você é um ANALISTA DE CONVERSSA E PERFIL DE CLIENTE (PROFILER DE RESTAURANTE).
+        Sua missão é analisar a conversa e atualizar o 'Dossiê do Cliente' com foco em Vendas e Preferências Alimentares informaçoes que podem nos ajudar a analisar a venda.
 
         PERFIL JÁ CONSOLIDADO (O que já sabíamos):
         {json.dumps(perfil_atual, ensure_ascii=False)}
@@ -1066,7 +1066,11 @@ def executar_profiler_cliente(contact_id):
 
         6. DADOS_CADASTRAIS_BASICOS:
            - Nome, Bairro (para logística), Profissão (se citar).
+        
+        7. TIPO DE COMUNICAÇÃO
 
+
+           
         === REGRAS DE HIGIENE ===
         - Mantenha o JSON limpo. Use chaves sugeridas: 'nome', 'preferencias', 'restricoes', 'familia', 'tipo_cliente' (delivery/mesa), 'sensibilidade_preco', 'ultima_objecao'.
         - Se o cliente disse "hoje não vou querer", salve o motivo em 'ultima_objecao'.
@@ -1216,30 +1220,36 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         instrucao = ""
 
         if status_alvo == "sucesso":
+            # Link limpo para abrir direto a caixa de avaliação do Google
+            link_google = "https://www.google.com/search?q=Restaurante+e+Pizzaria+Ilha+dos+A%C3%A7ores#lrd=0x952739b43bbfffff:0x12f11078255879a4,3,,,,"
+            
             instrucao = (
-                f"""O cliente ({inicio_fala}) finalizou o processo com sucesso. 
-                OBJETIVO: Agradecer com classe, reforçar vínculo e estimular continuidade. 
-                ESTRATÉGIA PSICOLÓGICA: Gratidão genuína + Sensação de Parceria. 
-                1. Agradeça sem exageros (seja profissional mas calorosa). 
-                2. Crie uma sensação de parceria. 
-                3. Faça o cliente sentir que fez uma ótima escolha e se sentir valorizado. 
-                4. Não peça mais nada, apenas celebre a decisão.
-                5. Contexto: Este é um contato de agradecimento pós-venda."""
+                f"""O cliente ({inicio_fala}) teve uma interação de sucesso conosco recentemente (ontem).
+                OBJETIVO: Pós-venda Focado em Retenção e Reputação (Google Reviews).
+                ESTRATÉGIA PSICOLÓGICA:
+                1. ABORDAGEM NEUTRA: Pergunte "E aí, deu tudo certo ontem?" ou "O que achou da experiência ontem?". 
+                   - IMPORTANTE: NÃO afirme o que ele comeu (não diga "gostou da pizza?"), pois pode ter sido buffet ou outro prato. Use termos como "pedido", "jantar" ou "nossa comida".
+                2. GATILHO DA RECIPROCIDADE: Se a experiência foi boa, peça uma avaliação como um favor pessoal para ajudar a casa.
+                   - Exemplo: "Se puder dar uma moral pra gente lá no Google, ajuda demais!"
+                3. LINK OBRIGATÓRIO: A mensagem DEVE terminar com este link exato: {link_google}
+                4. Se quiser saber das novidades segue nos la no insta! : link exato:https://www.instagram.com/pizzariailhadosacores/
+                """
             )
         
         elif status_alvo == "fracasso":
             instrucao = (
-            f"""O cliente ({inicio_fala}) recusou ou desistiu.
-            OBJETIVO: Tentar uma última reversão de forma leve, simpática e bem-humorada — sem pressão e sem agressividade.
-            ESTILO DE COMUNICAÇÃO: Humor suave + elegância + tom acolhedor.
-            Nada de ironia pesada ou intimidação. A ideia é brincar de forma gentil, como quem sorri enquanto fala.
-            ESTRATÉGIA PSICOLÓGICA:
-            1. Questione a decisão de modo leve, quase como uma brincadeira amistosa.
-            2. Toque na dificuldade atual do cliente com humor sutil (ex.: rotina manual, complicações, tempo perdido).
-            3. Mostre que a nossa solução tornaria tudo mais simples e leve — benefício imediato.
-            4. Finalize deixando a porta aberta com classe, convidando a pessoa a repensar quando quiser.
-            5. Lembrar: Esta é uma tentativa final de repescagem, portanto deve soar leve, simpática e agradável.
-            """
+                f"""O cliente ({inicio_fala}) não finalizou o pedido ontem.
+                
+                OBJETIVO: Coletar Feedback para Melhoria (Postura de Humildade).
+                NÃO tente vender nada agora. A meta é entender a barreira (Preço? Atendimento? Cardápio?).
+
+                ESTRATÉGIA DE TEXTO (Consultiva e Leve):
+                1. Abertura Empática: Comece assumindo que não deu certo ("Acho que ontem acabou não rolando o pedido, né?").
+                2. O Pedido de Conselho: Pergunte o que poderíamos ter feito melhor. Coloque o cliente na posição de "consultor".
+                   - Exemplo de tom: "Se eu te pedisse uma única dica pra gente melhorar (seja no preço, no cardápio ou no meu atendimento), o que tu me dirias?"
+                
+                3. Finalização: Agradeça antecipadamente pela sinceridade.
+                """
             )
             
         elif status_alvo == "andamento":
@@ -1271,50 +1281,45 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                 )
             elif estagio == 1:
                 instrucao = (
-                    f"""O cliente ignorou o primeiro lembrete.
-                    OBJETIVO: Resgatar o interesse mostrando o BENEFÍCIO PRÁTICO de continuar, baseado no que ele mesmo disse antes.
+                    f"""O cliente ignorou o primeiro contato e o assunto morreu.
+                    OBJETIVO: Ser o 'Amigo com a Solução'. Parar de cobrar resposta e oferecer uma IDEIA PRÁTICA.
                     
-                    ANÁLISE DO HISTÓRICO {historico_texto}:
-                    - Identifique: Qual era a 'dor' ou o 'desejo' do cliente? (Ex: agendar rápido, tirar dúvida, saber preço).
+                    ANÁLISE DO HISTÓRICO ({historico_texto}):
+                    - O que ele estava olhando? Pizza? Lanche? Bebida?
                     
-                    ESTRUTURA DA RESPOSTA:
-                    {inicio_fala} você nao chegou a responder. Tava pensando aqui: se a gente resolver essa questão do [ASSUNTO_QUE_FALAVAM], você já consegue [RESULTADO_POSITIVO/GANHO]. O que acha?"
+                    ESTRATÉGIA DE TEXTO (Apetite e Solução):
+                    1. Assuma que ele ficou na dúvida ou ocupado.
+                    2. Ofereça uma sugestão direta para "resolver a janta" agora.
                     
-                    EXEMPLOS DE ADAPTAÇÃO:
-                    - Se era agendamento: "...se a gente resolver esse agendamento, você já garante seu horário sem estresse."
-                    - Se era sobre o bot: "...se a gente implementar isso, você para de perder tempo respondendo manual."
-                    - Se era dúvida: "...se eu te explicar isso, você já consegue decidir o melhor caminho."
+                    MODELOS DE RACIOCÍNIO:
+                    - Se ele queria pizza: "{inicio_fala} não sei se tu já jantou, mas se a dúvida for sabor, a de Strogonoff tá saindo muito hoje. Mata a fome rapidinho. O que acha de eu já mandar o link?"
+                    - Se ele queria agendar: "{inicio_fala} pensei aqui: quer que eu segure aquela mesa pra ti por garantia? Assim tu não ficas na mão se decidir vir."
+                    - Se não sabe o que ele quer: "{inicio_fala} se tiver na correria aí e quiser agilizar, eu te mando o link do cardápio e tu escolhes com calma. Pode ser?"
 
-                    REGRAS CRÍTICAS:
-                    1. NÃO use saudações (Oi/Olá/Bom dia).
-                    2. NÃO liste características do produto. Fale do RESULTADO para a vida dele.
-                    3. Tom de "Consultor Amigo": Você quer ajudar ele a resolver o problema dele, não apenas vender.
-                    4. Mantenha curto.
+                    REGRAS:
+                    - Tom casual e prestativo (Manezinho).
+                    - Foco em resolver o problema (fome/lugar) e não em vender.
                     """
                 )
             
             elif estagio == 2:
+                # Link do Instagram para fidelização visual
+                link_insta = "https://www.instagram.com/pizzariailhadosacores/"
+                
                 instrucao = (
-                    f"""Última tentativa após longo silêncio.
-                    OBJETIVO: Despedida leve, bem-humorada e educada. Deixar a porta aberta sem pressionar.
+                    f"""Última tentativa de contato (Encerramento Leve).
+                    OBJETIVO: Despedir-se com educação, assumindo que o cliente já resolveu a fome ou está ocupado.
                     
-                    ANÁLISE DE CONTEXTO ({historico_texto}):
-                    - Identifique sobre o que falavam (agendamento, automação, dúvidas) para citar na despedida.
-
-                    ESTRUTURA DA RESPOSTA (Siga esta lógica):
-                    1. Humor leve (Quebra de gelo): Comece brincando que talvez esteja falando sozinho. Use 'kkkkkk' ou 'rsrsrs'.
-                    Ex: "{inicio_fala} não sei se tô falando sozinho aqui kkkkkk..." ou "Acho que te perdi na correria por aí rsrsrs..."
+                    ESTRATÉGIA DE TEXTO (Disponibilidade + Vitrine):
+                    1. Assuma que ele já conseguiu o que queria: "Imagino que tu já deves ter resolvido a janta/almoço por aí ou estás na correria."
+                    2. Coloque-se à disposição: "Mas qualquer coisa, se a fome bater de novo, é só gritar que a gente tá sempre por aqui."
+                    3. Convite Visual: Convide para seguir no Insta e ver as fotos (isso mantém a marca na cabeça dele sem vender nada agora).
                     
-                    2. Disponibilidade (Porta Aberta): Diga que se ele quiser retomar o assunto [ASSUNTO_DA_CONVERSA], você está por perto.
-                    Ex: "...mas ó, se quiser voltar a falar sobre a automação do seu negócio, é só me chamar."
-                    
-                    3. Fechamento (Gratidão + Bênção): Agradeça e encerre.
-                    Ex: "Obrigado pela atenção até aqui. Fico à disposição. Deus abençoe!"
-
                     REGRAS CRÍTICAS:
-                    1. NÃO faça perguntas no final. É uma afirmação de despedida.
-                    2. OBRIGATÓRIO usar a expressão 'Deus abençoe' no final.
-                    3. Adapte o meio da frase ao contexto (se era agendamento, fale de marcar; se era bot, fale do negócio).
+                    - Tom: Amigável, leve e sem cobrança.
+                    - NÃO faça perguntas. É uma afirmação final.
+                    - Encerre a frase com um "Deus abençoe!" ou "Bom descanso!".
+                    - A MENSAGEM DEVE TERMINAR OBRIGATORIAMENTE COM O LINK: {link_insta}
                     """
                 )
             else:
