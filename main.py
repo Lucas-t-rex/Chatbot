@@ -948,6 +948,7 @@ def analisar_status_da_conversa(history):
 
             1. SUCESSO:
                - O Bot enviou o LINK DE DELIVERY (pedido.anota.ai).
+               - Se tem o link de anota.ai na converssa.
                - O Cliente confirmou que fez o pedido ("já pedi", "tá feito").
                - Note se ele realmente fez o pedido.
             
@@ -960,6 +961,7 @@ def analisar_status_da_conversa(history):
                - O Cliente ainda está escolhendo sabores ou tirando dúvidas.
                - O Cliente disse "vou ver com minha esposa/marido" (Isso não é fracasso, é espera).
                - A conversa parou no meio de um assunto.
+               - Se ainda nao tiver o Link (pedido.anota.ai), se tiver é status sucesso.
             
             Responda APENAS uma palavra: SUCESSO, FRACASSO ou ANDAMENTO.
             """
