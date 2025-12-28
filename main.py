@@ -823,11 +823,11 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
 
                 {
                     "name": "fn_solicitar_intervencao",
-                    "description": "Aciona o atendimento humano. Use esta função se o cliente pedir para 'falar com o Carlos Alberto', 'falar com o dono', ou 'falar com um humano'.",
+                    "description": "Aciona o atendimento humano. Use esta função se o cliente pedir para 'falar com o Carlos Alberto (gerente)', 'falar com o dono', ou 'falar com um humano'.",
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
-                            "motivo": {"type_": "STRING", "description": "O motivo exato pelo qual o cliente pediu para falar com Carlos Alberto."}
+                            "motivo": {"type_": "STRING", "description": "O motivo exato pelo qual o cliente pediu para falar com Carlos Alberto (gerente)."}
                         },
                         "required": ["motivo"]
                     }
@@ -971,6 +971,7 @@ def analisar_status_da_conversa(history):
             
             2. FRACASSO (Perda):
                - O Cliente DISSE EXPLICITAMENTE que não quer mais ("deixa quieto", "tá muito caro", "vou pedir em outro lugar").
+               - Se nas ultimas mensagens teve um retorno de feed back negativo ainda é fracasso, o bot só esta tendando enteder o que aconteceu.
                - O Cliente encerrou a conversa de forma negativa ou seca sem pedir ("obrigado, tchau", "esquece").
                - Note se ele rejeitou a compra.
 
@@ -1583,64 +1584,91 @@ def send_whatsapp_media(number, media_url, file_name, caption=""):
 
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None) -> str:
     try:
-        agora = datetime.now(FUSO_HORARIO)
+        fuso = pytz.timezone('America/Sao_Paulo')
+        agora = datetime.now(fuso)
+        
+        # --- CÁLCULO RIGOROSO DE TURNO E STATUS (PYTHON) ---
+        # Regras:
+        # Almoço: Seg-Sex (11h-14h) | Sab-Dom (11h-14h30)
+        # Jantar: Todos os dias (18h-23h30)
+        
+        dia_sem = agora.weekday() # 0=Seg, 6=Dom
+        hora_float = agora.hour + (agora.minute / 60.0)
+        
+        status_casa = "FECHADO"
+        mensagem_status = ""
+        produtos_bloqueados = ""
+        produtos_liberados = ""
+        
+        # Definição dos horários limites
+        fim_almoco = 14.5 if dia_sem >= 5 else 14.0 # 14:30 fds, 14:00 semana
+        inicio_jantar = 18.0
+        fim_jantar = 23.5 # 23:30
+        
+        if 11.0 <= hora_float < fim_almoco:
+            status_casa = "ABERTO_ALMOCO"
+            mensagem_status = "🟢 ESTAMOS ABERTOS PARA O ALMOÇO AGORA!"
+            produtos_liberados = "Buffet Livre ou Kilo, Marmitas."
+            produtos_bloqueados = "PIZZAS, RODÍZIO E Á LA CARTE (Só servimos isso à noite, a partir das 18h)."
+            
+        elif inicio_jantar <= hora_float < fim_jantar:
+            status_casa = "ABERTO_JANTAR"
+            mensagem_status = "🟢 ESTAMOS ABERTOS PARA O JANTAR AGORA!"
+            produtos_liberados = "Pizzas, Rodízio, Pratos à La Carte, Lanches."
+            produtos_bloqueados = "BUFFET DE ALMOÇO (Encerrado)."
+            
+        elif fim_almoco <= hora_float < inicio_jantar:
+            status_casa = "FECHADO_TARDE"
+            mensagem_status = f"🔴 ESTAMOS NO INTERVALO (FECHADOS). Voltamos às 18:00."
+            produtos_liberados = "NENHUM PARA AGORA. Apenas pré-encomendas para a noite."
+            produtos_bloqueados = "TUDO. A cozinha está fechada."
+            
+        else:
+            status_casa = "FECHADO_NOITE"
+            mensagem_status = "🔴 ESTAMOS FECHADOS (ENCERRADO POR HOJE). Voltamos amanhã às 11:00."
+            produtos_liberados = "Nenhum."
+            produtos_bloqueados = "TUDO."
+
+        # --- FIM DO CÁLCULO ---
+
         dias_semana = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
-        meses = ["", "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
         
         # Variáveis do Agora
         dia_sem_str = dias_semana[agora.weekday()]
         hora_fmt = agora.strftime("%H:%M")
         data_hoje_fmt = agora.strftime("%d/%m/%Y")
-        
         dia_num = agora.day
-        ano_atual = agora.year # Isso muda automaticamente para 2026 quando o servidor virar
+        ano_atual = agora.year
 
-        # --- A MÁGICA: MAPA DOS PRÓXIMOS 45 DIAS (ZERO CÁLCULO PRA IA) ---
-        # A IA não vai precisar calcular nada. Ela só vai LER.
+        # Mapa de Datas (Mantido igual)
         lista_dias = []
-        
-        # 1. Gera os próximos 45 dias detalhados
         for i in range(45): 
             d = agora + timedelta(days=i)
-            nome_dia = dias_semana[d.weekday()] # <--- CORRIGIDO AQUI (era nome_sem)
+            nome_dia = dias_semana[d.weekday()]
             data_str = d.strftime("%d/%m")
-            
             marcador = ""
             if i == 0: marcador = " (HOJE)"
             elif i == 1: marcador = " (AMANHÃ)"
-            
             lista_dias.append(f"- {data_str} é {nome_dia}{marcador}")
 
-        # 2. Gera âncoras longas (apenas 1º dia dos meses seguintes)
-        lista_meses_futuros = []
-        for i in range(1, 7): # Próximos 6 meses
-            mes_futuro = agora.replace(day=1) + timedelta(days=i*30)
-            data_mes = mes_futuro.strftime("%m/%Y")
-            try:
-                nome_dia_mes = dias_semana[mes_futuro.replace(day=1).weekday()]
-                lista_meses_futuros.append(f"(Ref: 01/{data_mes} cai numa {nome_dia_mes})")
-            except: pass
-
-        calendario_completo = "\n".join(lista_dias) + "\n\nReferência Futura:\n" + "\n".join(lista_meses_futuros)
+        calendario_completo = "\n".join(lista_dias)
         
-        # Variável MESTRA para o Prompt
         info_tempo_real = (
             f"HOJE É: {dia_sem_str}, {data_hoje_fmt} | HORA: {hora_fmt}\n"
-            f"=== MAPA DE DATAS (NÃO CALCULE, APENAS LEIA AQUI) ===\n"
-            f"{calendario_completo}\n"
-            f"======================================================"
+            f"=== STATUS ATUAL DA CASA (LEI ABSOLUTA) ===\n"
+            f"STATUS: {status_casa}\n"
+            f"MENSAGEM AO CLIENTE: {mensagem_status}\n"
+            f"O QUE PODE VENDER AGORA: {produtos_liberados}\n"
+            f"O QUE ESTÁ PROIBIDO AGORA: {produtos_bloqueados}\n"
+            f"===========================================\n"
+            f"=== MAPA DE DATAS ===\n{calendario_completo}\n"
         )
         
     except Exception as e:
-        # Fallback de segurança (Só acontece se o servidor estiver sem relógio)
-        info_tempo_real = f"DATA: {horario_atual} (Erro ao gerar calendário: {e})"
-        dia_sem_str = "Dia desconhecido"
-        dia_num = "X"
-        ano_atual = datetime.now().year #
+        info_tempo_real = f"DATA: {horario_atual} (Erro critico data: {e})"
 
     texto_perfil_cliente = "Nenhum detalhe pessoal conhecido ainda."
     if client_profile_json:
-        # Formata o JSON para um texto legível para a IA
         import json
         texto_perfil_cliente = json.dumps(client_profile_json, indent=2, ensure_ascii=False)
 
@@ -1682,15 +1710,25 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         3. Sempre deve terminar com uma pergunta a não ser que seja uma despedida. 
         4. Se não souber, direcione para o humano (Carlos Alberto) usando `fn_solicitar_intervencao`.
         5. Regra Nunca invente informaçoes que não estão no texto abaixo, principalmente informações tecnicas e maneira que trabalhamos, isso pode prejudicar muito a empresa. Quando voce ter uma pergunta e ela não for explicita aqui você deve indicar falar com o especialista.   
-        TIME_CONTEXT: Use as variáveis de 'HOJE É' e 'HORA AGORA' acima para calcular mentalmente qualquer referência de tempo (amanhã, sexta-feira, semana que vem, tarde, noite).
-            1. REGRA DE TRADUÇÃO DE HORÁRIO (CRÍTICO): 
-                - Se o cliente disser um número de 1 a 11 (ex: "às 2", "às 8", "às 9"), ASSUMA O HORÁRIO COMERCIAL (PM/Noite ou Tarde).
-                - Exemplo: "As 2" = 14:00. "As 8" = 20:00. "As 9" = 21:00.
-                - JAMAIS pergunte "Você quis dizer 14:00?". Apenas assuma que "2" é "14:00" e siga para o CPF.
-                - Se o horário convertido (ex: 14:00) estiver na lista de disponíveis, capture-o IMEDIATAMENTE.
-                - Se disser "as 11" confirme se é 11:00 (manhã) ou 23:00 (noite).
-                - Se ele disser "pra agora", considere o horário mais próximo disponível na lista retornada pela Tool.
-                - IMPORTANTE: NÃO trabalhamos fora dos horários listados na Tool. Se o cliente pedir horário fora (ex: 16h), diga que estamos fechados nesse horário.
+        TIME_CONTEXT: Você NÃO deve calcular se está aberto. O Python já calculou e colocou em 'STATUS' lá em cima em {info_tempo_real}.
+        
+            CENÁRIO 1: STATUS = ABERTO_ALMOCO
+            - O foco é Buffet e Marmitas.
+            - SE O CLIENTE PEDIR PIZZA: Explique educadamente: "Agora no almoço nosso foco é o buffet! As pizzas e o rodízio começam a partir das 18h. Posso te mandar o cardápio da noite pra tu já escolheres?"
+            - NÃO aceite pedidos de pizza para entrega IMEDIATA (Só agendamento para a noite).
+
+            CENÁRIO 2: STATUS = ABERTO_JANTAR
+            - O foco é Pizza, Rodízio e À La Carte.
+            - SE O CLIENTE PEDIR BUFFET: "O buffet é só no almoço. Agora a gente tá com aquele rodízio de pizza top e pratos à la carte!"
+
+            CENÁRIO 3: STATUS = FECHADO_TARDE_INTERVALO
+            - A cozinha está FECHADA. NADA sai da cozinha agora.
+            - SE O CLIENTE QUISER COMER AGORA: "Poxa, agora a cozinha tá no intervalo da tarde. A gente reabre às 18h em ponto pro jantar! Já queres deixar teu pedido garantido pra noite?"
+            - NÃO diga que "vamos ver". Está fechado.
+
+            CENÁRIO 4: STATUS = FECHADO_NOITE_MADRUGADA
+            - O expediente acabou.
+            - RESPOSTA PADRÃO: "Agora a gente tá fechado recarregando as energias! Voltamos amanhã às 11h pro almoço. Se quiser deixar recado, eu anoto!"
 
             2. REGRA DE DATA: Se hoje é {dia_sem_str} ({dia_num}), calcule o dia correto quando ele disser "Sexta" ou "Amanhã".
             3. REGRA DO FUTURO: Estamos em {ano_atual}. Se o cliente pedir um mês que já passou (ex: estamos em Dezembro e ele pede "Agosto"), SIGNIFICA ANO QUE VEM ({ano_atual + 1}). JAMAIS agende para o passado.
@@ -1748,9 +1786,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - PROIBIÇÃO: JAMAIS escreva o código da função ou "print(...)". Apenas CHAME a ferramenta silenciosamente.
         
         7. `fn_enviar_cardapio_pdf`:
-            - QUANDO USAR: Se o cliente pedir "preço", "valores", "quanto custa", "cardápio", "menu" ou "tabela".
-            - AÇÃO: Chame a função IMEDIATAMENTE.
-            - O QUE FALAR: "Dá uma olhada aqui no nosso cardápio completo com todos os valores! 📄 Posso te ajudar com mais alguma coisa?"
+            - GATILHO: Perguntas como "quanto custa?", "manda o cardápio", "preços", "ver o menu".
+            - REGRA DE BLOQUEIO: Você é PROIBIDA de apenas descrever preços soltos ou falar "Veja abaixo". O cliente quer ver o arquivo visual.
+            - AÇÃO: Chame esta função IMEDIATAMENTE.
+            - O QUE ACONTECE DEPOIS: O sistema enviará o PDF e você deve perguntar: "Conseguiu abrir aí? Posso te ajudar a escolher algum sabor?"
 
         # ---------------------------------------------------------
         # 2. PERSONALIDADE & IDENTIDADE (Rosie)
@@ -1812,7 +1851,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         - JAMAIS diga "Vou verificar". Verifique (chame a tool) e responda com o dado em mãos.
         - JAMAIS invente plataformas (Facebook/Instagram). Atendemos localmente e por entregar pelo app "Anota ai".
         - NÃO diga "Sou uma IA". Você é a Rosie.
-        - Deixar a pessoa sair da converssa sem agendar a reunião ou falar com o Carlos Alberto. Caso ela negue o serviço use o PROTOCOLO DE RESGATE E OBJEÇÕES abaixo.
+        - Deixar a pessoa sair da converssa sem reservar uma mesa ou enviar o link de delivery ou parecer que ela ja esta a caminho. Caso ela negue o serviço use o PROTOCOLO DE RESGATE E OBJEÇÕES abaixo.
         - Usar emojis.
         - Não invente preços voce tem o cardapio em mãos.
         - Você NÃO anota pedidos de comida/pizza. (Sua função é enviar o LINK).
@@ -1855,14 +1894,18 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         # ---------------------------------------------------------
         NOME: Restaurante e Pizzaria Ilha dos Açores | SETOR: Alimentação e lazer
         META:  Por que o cliente deve escolher a Ilha dos Açores e não o concorrente? produto de qualidade com preço bom ambiente familiar equipe que gosta do que faz. compromisso como cliente. 
-        LOCAL: Av. Pref. Waldemar Vieira, 327 - Loja 04 - Saco dos Limões, Florianópolis - SC, 88045-500
+        LOCAL: VOCÊ DEVE RESPONDER EXATAMENTE NESTE FORMATO (COM A QUEBRA DE LINHA):
+        Av. Pref. Waldemar Vieira, 327 - Loja 04 - Saco dos Limões, Florianópolis - SC, 88045-500
+        https://maps.app.goo.gl/oeqig3dbJYV1yyn87
+        (Não envie apenas o link solto, envie o endereço escrito acima e o link abaixo).
         CONTATO: Telefone: (48) 3067-6550 DELIVERY - 48 99991-1060, | HORÁRIO: Seg a Sex 11:00-14:00, 18:00-23:30. Sabados e Domingos 11:00-14:30, 18:00-23:30.
         
         ===  PRODUTOS ===
         O restaurante ofereçe pratos e self-service e marmita  na hora do almoço e pizzas e marmitas para entrega nos horarios noturnos. Não vendemos pizzas no horario de almoço e nem self-service no horario noturno.
-        Os pedidos de entrega do restaurantes para entrega são apenas feito no aplicativo "Anota ai", enviar Link https://pedido.anota.ai/.
+        Os pedidos de entrega do restaurantes para entrega são apenas feito no aplicativo "Anota ai", enviar Link https://pedido.anota.ai/loja/pizzaria-ilha-dos-acores?f=ms.
         Resumo cardapio jantar (Ofereça essas opçoes e pergunte pro cliente o que ele procura): Pizzas Salgadas e Doces, Esfihas, Massas, Porções, Rodízio, Fondue, Prato Feito e Bebidas.
-        REGRA DE OURO DO CARDÁPIO: Use os dados abaixo APENAS para responder perguntas (ingredientes, preços, sabores). SE O CLIENTE DISSER "QUERO ESSA", NÃO ANOTE O PEDIDO. MANDE O LINK: https://pedido.anota.ai/
+        REGRA DE OURO DO CARDÁPIO: Use os dados abaixo APENAS para responder perguntas (ingredientes, preços, sabores). SE O CLIENTE DISSER "QUERO ESSA", NÃO ANOTE O PEDIDO. MANDE O LINK: https://pedido.anota.ai/loja/pizzaria-ilha-dos-acores?f=ms
+        [AVISO AO SISTEMA: Os dados abaixo servem para tirar dúvidas pontuais (ex: "tem bacon?"). Para apresentar o cardápio completo ou lista de preços, USE SEMPRE A TOOL `fn_enviar_cardapio_pdf`.]
 
         Cardapio Almoço.
             Buffet - valor: Dias de semana: Por kilo: R$ 70,00 / Livre R$ 46,00
@@ -2278,7 +2321,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
            - PRIMEIRO: Acolha e valide a fome dele. ("Veio no lugar certo pra matar essa fome!", "Hoje tá pedindo uma pizza mesmo, né?").
            - SEGUNDO: Descubra rápido a intenção com uma pergunta fechada, mas simpática. ("Tás querendo pedir pra entregar aí ou vais vir comer aqui com a gente?").
            - TERCEIRO (A SOLUÇÃO):
-               a) Se for **ENTREGA/RETIRADA**: "Então não perde tempo. Clica aqui que é rapidinho pra pedir: https://pedido.anota.ai/"
+               a) Se for **ENTREGA/RETIRADA**: "Então não perde tempo. Clica aqui que é rapidinho pra pedir: https://pedido.anota.ai/loja/pizzaria-ilha-dos-acores?f=ms"
                b) Se for **RESERVA/MESA**: "Show! Deixa que eu vejo um lugar pra ti. Pra quantas pessoas?"
            - Exemplo Mental: O cliente diz "Quero pizza". Você não manda o link. Você diz: "Opa, saiu quentinha agora! É pra levar ou pra comer aqui?"
 
@@ -2293,7 +2336,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         3. O DIRECIONAMENTO FINAL (NÃO ANOTE PEDIDOS):
            - REGRA DE FERRO: Você NÃO é um garçom digital. Você NÃO anota pedidos de pizza/comida pelo chat.
            - Se o cliente decidiu pedir (entrega ou retirada): ENCERRE mandando o link.
-           - "Querido, pra pedir é direto por esse link aqui, é bem mais rápido e tu já vês as fotos: https://pedido.anota.ai/"
+           - "Querido, pra pedir é direto por esse link aqui, é bem mais rápido e tu já vês as fotos: https://pedido.anota.ai/loja/pizzaria-ilha-dos-acores?f=ms"
            - NÃO pergunte sabores, NÃO pergunte endereço. Mande o link e pronto.
            - Apenas se for RESERVA DE MESA é que você continua a conversa para agendar.
 
@@ -2366,7 +2409,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         4. FECHAMENTO (O PULO DO GATO):
            - Não enrole. Se é pra pedir, mande o link.
            - USE ESTE ROTEIRO:
-           "Fechou! Pra pedir essa delícia, clica aqui no nosso app que cai direto na cozinha: https://pedido.anota.ai/ . Tás servido?"
+           "Fechou! Pra pedir essa delícia, clica aqui no nosso app que cai direto na cozinha: https://pedido.anota.ai/loja/pizzaria-ilha-dos-acores?f=ms . Tás servido?"
            - Se pedir reserva ou mesa, agende!
 
         - Se o cliente reclamar do preço, do tempo de entrega, da qualidade da pizza.
@@ -2458,7 +2501,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
            - QUANDO USAR: Imediatamente após o cliente dizer como quer ser chamado.
         
         2. `fn_solicitar_intervencao`:
-           - QUANDO USAR: Se o cliente pedir para falar com humano, o dono Carlos Alberto, ou se houver emergência.
+           - QUANDO USAR: Se o cliente pedir para falar com humano, o dono Carlos Alberto (gerente), ou se houver emergência.
 
         === SUA MISSÃO (GATEKEEPER) ===
         Descubra o nome com simpatia e interesse genuíno, mas fale pouco.
@@ -2496,8 +2539,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         Antes de chamar `fn_capturar_nome`, analise o texto do usuário:
 
         APRESENTAÇÃO vs PEDIDO:
-           - Se ele disser "Sou o Carlos Alberto" ou "Meu nome é Carlos Alberto" ou apenas "Carlos Alberto", "Oi com o Carlos Alberto" -> É APRESENTAÇÃO -> Chame `fn_capturar_nome`.
-           - Se ele disser "Quero falar com o Carlos Alberto",  "Chama o Carlos Alberto" , "Quero falar com o dono", "Quero falar com um humano", ou xingar ou algo que pareça agressivo de mais, ou uma reclamação.-> É PEDIDO -> Chame `fn_solicitar_intervencao`.
+           - Se ele disser "Sou o Carlos Alberto " ou "Meu nome é Carlos Alberto" ou apenas "Carlos Alberto", "Oi com o Carlos Alberto" -> É APRESENTAÇÃO -> Chame `fn_capturar_nome`.
+           - Se ele disser "Quero falar com o Carlos Alberto (gerente)",  "Chama o Carlos Alberto (gerente)" , "Quero falar com o dono", "Quero falar com um humano", ou xingar ou algo que pareça agressivo de mais, ou uma reclamação.-> É PEDIDO -> Chame `fn_solicitar_intervencao`.
         
         1. É UM NOME VÁLIDO? (Ex: "João", "Ana", "Carlos", "Fernanda")
         Se o usuário disser 'Meu nome é Isaque e quero saber preço', extraia apenas 'Isaque' e chame a função. Ignore o resto da frase por enquanto, o outro prompt cuidará disso."
