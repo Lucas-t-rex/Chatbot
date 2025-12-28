@@ -910,46 +910,58 @@ def append_message_to_db(contact_id, role, text, message_id=None):
 
 def analisar_status_da_conversa(history):
     """
-    Auditoria Híbrida:
-    1. Verifica SUCESSO via código (Varre TODO o histórico).
-    2. Se não for sucesso, usa IA com prompt MINIMALISTA para ver se é Fracasso ou Andamento.
+    Auditoria IA Unificada (V3):
+    1. Verifica Regra de Ouro (Agendamento Feito) via código.
+    2. Joga todo o resto para a IA classificar entre SUCESSO, FRACASSO ou ANDAMENTO.
     """
     if not history:
         return "andamento", 0, 0
 
-    for msg in history: 
-        text = msg.get('text', '')
-        
-        if "fn_salvar_agendamento" in text or "fn_solicitar_intervencao" in text:
-            print("✅ [Auditor] Sucesso Histórico Detectado (Conversão Garantida)")
-            return "sucesso", 0, 0
-        
-    msgs_para_analise = history[-8:] 
+    # Pega as últimas 15 mensagens conforme solicitado
+    msgs_para_analise = history[-15:] 
+    
     historico_texto = ""
     for msg in msgs_para_analise:
+        text = msg.get('text', '')
         role = "Bot" if msg.get('role') in ['assistant', 'model'] else "Cliente"
-        txt_limpo = msg.get('text', '').replace('\n', ' ')
         
+        # --- 1. REGRA DE FERRO (Solicitada) ---
+        if "fn_salvar_agendamento" in text:
+            print("✅ [Auditor] Sucesso detectado via função de agendamento.")
+            return "sucesso", 0, 0
+            
+        # Prepara o texto para a IA (limpa logs técnicos para não confundir)
+        txt_limpo = text.replace('\n', ' ')
         if "Chamando função" not in txt_limpo: 
             historico_texto += f"{role}: {txt_limpo}\n"
 
+    # --- 2. IA ANALISA O CONTEXTO GERAL ---
     if modelo_ia:
         try:
-            # Prompt "Dieta Rigorosa" - Focado apenas em detectar o FIM
             prompt_auditoria = f"""
-            Analise a conversa:
+            Analise as últimas 15 mensagens deste atendimento de Restaurante/Delivery.
+            
+            HISTÓRICO:
             {historico_texto}
 
-            1. STATUS: ANDAMENTO (Prioridade Alta)
-               - Use este status se o Bot ainda está tentando argumentar, oferecendo "teste grátis", perguntando o motivo da recusa ou tentando reverter o "não". Resumindo a conversa ainda esta viva.
-               - ATENÇÃO: Se o cliente disse "não", mas o Bot respondeu com uma pergunta ou contra-oferta, o status É ANDAMENTO. A venda ainda não morreu.
+            SUA MISSÃO: Classifique a conversa em uma das 3 categorias abaixo.
 
-            2. STATUS: FRACASSO
-               - Ocorre APENAS se o Bot aceitou a negativa E enviou uma mensagem FINAL de despedida.
-               - Exemplos de fim: "Tenha uma ótima tarde", "Ficamos à disposição", "Até logo".
-               - Se o Bot não se despediu explicitamente, NÃO marque fracasso.
+            1. SUCESSO:
+               - O Bot enviou o LINK DE DELIVERY (pedido.anota.ai).
+               - O Cliente confirmou que fez o pedido ("já pedi", "tá feito").
+               - Note se ele realmente fez o pedido.
+            
+            2. FRACASSO:
+               - O Cliente disse EXPLICITAMENTE que não quer mais ("deixa quieto", "tá caro", "vou ver outro").
+               - O Cliente encerrou a conversa sem pedir ("obrigado, tchau").
+               - Note se ele nao quiz comprar.
 
-            Responda APENAS uma palavra: FRACASSO ou ANDAMENTO.
+            3. ANDAMENTO:
+               - O Cliente ainda está escolhendo sabores ou tirando dúvidas.
+               - O Cliente disse "vou ver com minha esposa/marido" (Isso não é fracasso, é espera).
+               - A conversa parou no meio de um assunto.
+            
+            Responda APENAS uma palavra: SUCESSO, FRACASSO ou ANDAMENTO.
             """
             
             resp = modelo_ia.generate_content(prompt_auditoria)
@@ -957,14 +969,15 @@ def analisar_status_da_conversa(history):
             
             status_ia = resp.text.strip().upper()
             
-            if "FRACASSO" in status_ia: 
-                return "fracasso", in_tokens, out_tokens
+            # Tratamento de segurança caso a IA responda algo fora do padrão
+            if "SUCESSO" in status_ia: return "sucesso", in_tokens, out_tokens
+            if "FRACASSO" in status_ia: return "fracasso", in_tokens, out_tokens
             
+            # Se não for sucesso nem fracasso, é andamento
             return "andamento", in_tokens, out_tokens
 
         except Exception as e:
-            print(f"⚠️ Erro auditoria: {e}")
-            # Em caso de erro na IA, mantém em andamento para não perder leads
+            print(f"⚠️ Erro auditoria IA: {e}")
             return "andamento", 0, 0
 
     return "andamento", 0, 0
@@ -1012,31 +1025,49 @@ def executar_profiler_cliente(contact_id):
 
         # 3. O Prompt do Engenheiro de Dados (Profiler) - REFINADO
         prompt_profiler = f"""
-        Você é um ANALISTA COMPORTAMENTAL (PROFILER).
-        Sua missão é extrair a IDENTIDADE DO CLIENTE.
+        Você é um EXPERT EM COMPORTAMENTO GASTRONÔMICO (PROFILER DE RESTAURANTE).
+        Sua missão é analisar a conversa e atualizar o 'Dossiê do Cliente' com foco em Vendas e Preferências Alimentares.
 
-        PERFIL JÁ CONSOLIDADO (O que já sabemos):
+        PERFIL JÁ CONSOLIDADO (O que já sabíamos):
         {json.dumps(perfil_atual, ensure_ascii=False)}
 
-        NOVAS MENSAGENS (Para análise):
+        NOVAS MENSAGENS (O que acabou de acontecer):
         {txt_conversa_nova}
 
-        === DIRETRIZES DE FOCO (CRÍTICO) ===
-        1. FOCO TOTAL NO CLIENTE: Ignore as opiniões e o jeito de falar da 'Rosie (IA)'. Analise APENAS o comportamento do 'Cliente'.
-        2. CONTEXTO APENAS: Use as falas da IA apenas para entender o que o cliente respondeu (ex: se a IA perguntou 'tem filhos?' e ele disse 'sim', anote que tem filhos).
-        3. PROIBIDO TRANSCREVER: JAMAIS crie um campo com lista de mensagens (como 'falas', 'historico', 'mensagens'). O usuário já tem o histórico, não duplique isso.
-        
-        === O QUE EXTRAIR (OUTPUT JSON) ===
-        1. FATOS REAIS: Nome, Profissão, Filhos, Carro, Time, Cidade, Como nos encontrou.
-        2. ESTILO DE COMUNICAÇÃO (Substitui 'falas'): Descreva COMO ele fala .
-           - Exemplos: "Usa gírias", "Formal e direto", "Usa muitos emojis", "Comete erros de português", "Fala picado".
-        3. PSICOLOGIA: Se é sensível a preço, ansioso, desconfiado ou amigável.
-        4. Intimidade: Capte informações para criar intimidade com o cliente, de rotina e estilo de vida. 
-        
+        === DIRETRIZES DE ANÁLISE ===
+        1. FOCO NO APETITE: Descubra o que faz esse cliente salivar ou desistir da compra.
+        2. CONTEXTO SOCIAL: É crucial saber se ele come sozinho (venda individual) ou com família (venda de combos/gigantes).
+        3. OBJEÇÕES REAIS: Se ele não comprou, descubra o motivo exato (Preço? Tempo de entrega? Sabor não disponível?).
+
+        === O QUE EXTRAIR E ATUALIZAR (JSON OUTPUT) ===
+
+        1. PREFERENCIAS_SABORES:
+           - O que ele pediu ou demonstrou interesse? (Ex: "Ama coração", "Gosta de massa fina", "Prefere vinho suave").
+           - O que ele rejeitou? (Ex: "Odeia cebola", "Não come carne de porco", "Alergia a glúten").
+
+        2. HABITO_DE_CONSUMO (Delivery vs Mesa):
+           - O cliente prefere comer em casa (Delivery/Retirada) ou no restaurante (Reserva)?
+           - Ele é objetivo ("Manda o link") ou gosta de conversar/tirar dúvidas?
+
+        3. CONTEXTO_FAMILIAR (Ouro para Vendas):
+           - Mencionou filhos/crianças? (Indica potencial para Combo Família/Batata Frita).
+           - Mencionou esposa/marido/namorado(a)? (Jantar a dois).
+           - Grupo grande? Aniversário?
+
+        4. SENSIBILIDADE_PRECO (Psicologia):
+           - ALTA: Pergunta muito de promoções, reclama do valor, pede desconto.
+           - BAIXA: Pede direto, foca na qualidade, escolhe itens Premium.
+
+        5. OBJECOES_E_QUEIXAS:
+           - Se ele não fechou o pedido, POR QUE? (Achou caro? Demora na entrega? Não tinha o sabor?).
+           - Fez alguma reclamação de pedido anterior? (Anote para que o atendimento humano possa compensar depois).
+
+        6. DADOS_CADASTRAIS_BASICOS:
+           - Nome, Bairro (para logística), Profissão (se citar).
+
         === REGRAS DE HIGIENE ===
-        - REMOVA do JSON o campo 'falas' se ele existir antigamente.
-        - VALIDAÇÃO DE REALIDADE: Só adicione ao perfil fatos explícitos ditos pelo Cliente.
-        - Mantenha chaves em PT-BR sugeridas: 'nome', 'profissao', 'familia', 'interesses', 'personalidade', 'dores', 'estilo_comunicacao', 'origem_contato'.
+        - Mantenha o JSON limpo. Use chaves sugeridas: 'nome', 'preferencias', 'restricoes', 'familia', 'tipo_cliente' (delivery/mesa), 'sensibilidade_preco', 'ultima_objecao'.
+        - Se o cliente disse "hoje não vou querer", salve o motivo em 'ultima_objecao'.
 
         SAÍDA OBRIGATÓRIA: Apenas o JSON atualizado.
         """
@@ -1750,7 +1781,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         Cardapio Almoço.
             Buffet livre - valor: 00,00
                 -Inclui: Carnes, Massas, Variado Buffet de Saladas e Frutas , e complementos como arroz feijão e etc...
-                Bebidas a parte.  
+                Bebidas a parte. 
+            Entrega de marmita, via link.
         Cardapio Jantar.
             Pizzas alacarte.
                 -Inclui: Pizzas Tradicionais - Valores 1. BROTO (4 Fatias): R$ 42,00 | 2. GRANDE (8 Fatias): R$ 52,00 | 3. GIGANTE (12 Fatias): R$ 72,00 | 4. FAMÍLIA (16 Fatias): R$ 101,90
@@ -2212,24 +2244,22 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         REGRA CRÍTICA: NUNCA pule etapas. Espere o cliente responder.
         
-        === ALGORITMO DE VENDAS ===
-
         === REGRA DE OURO DO CARDÁPIO (CRÍTICO) ===
-        1. FILTRO DE HORÁRIO (OLHE O RELÓGIO):
-           - Verifique a {info_tempo_real}.
-           - Se for ANTES das 17:00: O foco é BUFFET DE ALMOÇO. Se pedirem pizza, diga educadamente que o forno só acende as 18h.
-           - Se for DEPOIS das 18:00: O foco é PIZZARIA/JANTAR. Não ofereça buffet.
+            1. FILTRO DE HORÁRIO (OLHE O RELÓGIO):
+            - Verifique a {info_tempo_real}.
+            - Se for ANTES das 17:00: O foco é BUFFET DE ALMOÇO. Se pedirem pizza, diga educadamente que o forno só acende as 18h.
+            - Se for DEPOIS das 18:00: O foco é PIZZARIA/JANTAR. Não ofereça buffet.
 
-        2. PROIBIDO "VÔMITO DE DADOS":
-           - Se o cliente perguntar "Qual o preço da pizza?", JAMAIS responda com a tabela inteira (Broto, Grande, Gigante, Premium, Tradicional...). Isso polui a tela.
-           - AÇÃO CORRETA: Devolva com uma pergunta de sondagem.
-           - Exemplo: "Depende do tamanho, querido. É pra ti ou pra família toda? (Assim eu te passo o valor certo)".
+            2. PROIBIDO "VÔMITO DE DADOS":
+            - Se o cliente perguntar "Qual o preço da pizza?", JAMAIS responda com a tabela inteira (Broto, Grande, Gigante, Premium, Tradicional...). Isso polui a tela.
+            - AÇÃO CORRETA: Devolva com uma pergunta de sondagem.
+            - Exemplo: "Depende do tamanho, querido. É pra ti ou pra família toda? (Assim eu te passo o valor certo)".
 
-        3. NÃO MANDE O LINK CEDO DEMAIS:
-           - Se o cliente pedir o cardápio, NÃO jogue o link e fique quieta. Converse!
-           - Exemplo: "Temos pizzas tradicionais e umas premium que são uma delícia. Tu gostas mais de carne, frango ou queijo? Me diz que eu te ajudo."
-           - SÓ MANDE O LINK QUANDO: Ele escolher um sabor ou disser "quero pedir".
-
+            3. NÃO MANDE O LINK CEDO DEMAIS:
+            - Se o cliente pedir o cardápio, NÃO jogue o link e fique quieta. Converse!
+            - Exemplo: "Temos pizzas tradicionais e umas premium que são uma delícia. Tu gostas mais de carne, frango ou queijo? Me diz que eu te ajudo."
+            - SÓ MANDE O LINK QUANDO: Ele escolher um sabor ou disser "quero pedir".
+        === ALGORITMO DE VENDAS ===
         1. ESCUTA ATIVA (VALIDAÇÃO): Preste atenção no que o cliente diz, responda sempre fazendo sentido.
         2. SONDAGEM: Descobra o que o cliente precisa, se quer pedir, saber preço , como funciona (ex: "eai tas com fome?"). Use `fn_consultar_historico_completo` se achar que ele já disse isso antes.
             - Antes de dar preço, descubra o que ele gosta.
@@ -2287,8 +2317,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 1. Se ele responder "Sim/Pode/É esse": Considere o número {clean_number} validado e siga para o Passo 5.
                 2. Se ele disser "Não/Use outro": Pergunte qual é o número.
                 3. Se ele informar outro número: "Anote" mentalmente esse novo número e siga para o Passo 5.
+        PASSO 5:Pergunte se tem observações, como "mesa pra quantos", algumas coisa que precisa completar.
 
-        PASSO 5: Gerar gabarito APENAS COM TODAS AS INFORMAÇOES ACIMA CORRETAS! SEMPRE GERAR O GABARITO E ESPERAR ELE CONFIRMAR ENTES DE SALVAR!
+        PASSO 6: Gerar gabarito APENAS COM TODAS AS INFORMAÇOES ACIMA CORRETAS! SEMPRE GERAR O GABARITO E ESPERAR ELE CONFIRMAR ENTES DE SALVAR!
         - ANTES DE GERAR: Chame `fn_listar_horarios_disponiveis` MAIS UMA VEZ para garantir que o horário ainda está livre. E se o cpf que voce esta escrevendo ai é realmente o que ele passou e se esta correto.
         - TRAVA DE SEGURANÇA DO TELEFONE: Verifique o número. Se o cliente digitou um número, use APENAS o que ele digitou. Se ele confirmou o seu, use o {clean_number}. JAMAIS repita ou concatene os números (Ex: Errado: 999888789999888789). Escreva o telefone uma única vez da mesma forma como ele escreveu.
         -> AÇÃO: GERE O GABARITO COMPLETO.
@@ -2305,7 +2336,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
                     Tudo certo, posso agendar?
         
-        PASSO 6: Cliente disse "SIM/PODE" ou algo positivo?
+        PASSO 7: Cliente disse "SIM/PODE" ou algo positivo?
         (ESTA AÇÃO ABAIXO DEVE SER A MAIS IMPORTANTE, POIS ELE SALVA OS AGENDAMENTOS!)
         -> AÇÃO FINAL: Chame `fn_salvar_agendamento`.
         - Se a função der erro, avise o cliente. Se der sucesso, comemore.
