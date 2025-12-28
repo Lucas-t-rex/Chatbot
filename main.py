@@ -957,6 +957,8 @@ def analisar_status_da_conversa(history):
                - O Cliente confirmou verbalmente que pediu ("já pedi", "fiz o pedido", "tá feito", "pronto").
                - O Bot enviou o link do 'anota.ai' e o cliente agradeceu ou encerrou positivamente.
                - Houve intervenção humana solicitada para fechar o pedido.
+               - Se disser que ja esta indo , ou que notar que ele esta a caminho do local ja.
+               - Se notar qualquuer coisa positiva sobre a compra do nosso produto.
             
             2. FRACASSO (Perda):
                - O Cliente DISSE EXPLICITAMENTE que não quer mais ("deixa quieto", "tá muito caro", "vou pedir em outro lugar").
@@ -1644,7 +1646,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                - Se o horário convertido (ex: 14:00) estiver na lista de disponíveis, capture-o IMEDIATAMENTE.
                - Se disser as 11 confirme se é as 11 ou as 23.
                - Se ele disser pra agora , sera o horario mais proximo disponivel. 
-               
+
         # FERRAMENTAS DO SISTEMA (SYSTEM TOOLS)
         Você controla o sistema. NÃO narre ("Vou agendar"), CHAME a função.
         ###INFORMAÇÕES ABAIXO SÃO AS MAIS IMPORTANTES.
@@ -2206,6 +2208,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         Veja como o cliente converssa, demostre interesse genuino por ele e trate ele com importacia em enteder ele a vida dele. 
         O fluxo ideal esta abaixo, mas você deve prestar atenção no que o cliente diz e fazer perguntas sobre aquilo que ele falou e não empurrar o fluxo direto, deve ser leve e fluido. 
         Você deve vender nosso "peixe" mas de maneira fluida e humana.
+        Se notar que o cliente ja esta a caminho, ou que ja pediu ou que ja esta resolvido a compra dele conosco agradeça e deixe a converssa.
         
         1. FASE DE ACOLHIMENTO E DIREÇÃO (SEM ROBÓTICA):
            - O cliente tem pressa (fome), mas quer atenção. NÃO jogue o link na cara dele de primeira.
