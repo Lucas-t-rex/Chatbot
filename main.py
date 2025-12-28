@@ -858,6 +858,15 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                     }
                 },
                 {
+                    "name": "fn_enviar_cardapio_pdf",
+                    "description": "Envia o arquivo PDF do cardápio completo para o cliente. Use quando ele pedir 'cardápio', 'tabela de preços', 'menu' ou 'ver as opções'.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {}, # Sem parâmetros, apenas chama a função
+                        "required": []
+                    }
+                },
+                {
                     "name": "fn_consultar_historico_completo",
                     "description": "MEMÓRIA DE LONGO PRAZO (Obrigatório): Use esta ferramenta PROATIVAMENTE sempre que precisar de uma informação (Ramo, CPF, Nome, Dores, Contexto anterior) que não esteja visível nas mensagens recentes. REGRA: Antes de fazer qualquer pergunta de cadastro ou contexto ao cliente, consulte esta memória para ver se ele já não respondeu antigamente.",
                     "parameters": {
@@ -1537,6 +1546,41 @@ def verificar_lembretes_agendados():
     except Exception as e:
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
 
+def send_whatsapp_media(number, media_url, file_name, caption=""):
+    INSTANCE_NAME = "chatbot" 
+    clean_number = number.split('@')[0]
+    
+    # URL para envio de mídia (Documento/PDF)
+    base_url = EVOLUTION_API_URL
+    api_path = f"/message/sendMedia/{INSTANCE_NAME}"
+    
+    final_url = ""
+    if base_url.endswith(api_path): final_url = base_url
+    elif base_url.endswith('/'): final_url = base_url[:-1] + api_path
+    else: final_url = base_url + api_path
+
+    payload = {
+        "number": clean_number,
+        "mediaMessage": {
+            "mediatype": "document",
+            "fileName": file_name,
+            "caption": caption,
+            "media": media_url
+        },
+        "options": {
+            "delay": 5200,
+            "presence": "composing"
+        }
+    }
+    
+    headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
+
+    try:
+        print(f"📁 Enviando PDF para: {clean_number}")
+        requests.post(final_url, json=payload, headers=headers)
+    except Exception as e:
+        print(f"❌ Erro ao enviar mídia: {e}")
+
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None) -> str:
     try:
         agora = datetime.now(FUSO_HORARIO)
@@ -1702,6 +1746,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         6. `fn_validar_cpf`:
             - QUANDO USAR: Sempre quando voce pedir o cpf do e ele cliente digitar um número de documento.
             - PROIBIÇÃO: JAMAIS escreva o código da função ou "print(...)". Apenas CHAME a ferramenta silenciosamente.
+        
+        7. `fn_enviar_cardapio_pdf`:
+            - QUANDO USAR: Se o cliente pedir "preço", "valores", "quanto custa", "cardápio", "menu" ou "tabela".
+            - AÇÃO: Chame a função IMEDIATAMENTE.
+            - O QUE FALAR: "Dá uma olhada aqui no nosso cardápio completo com todos os valores! 📄 Posso te ajudar com mais alguma coisa?"
+
         # ---------------------------------------------------------
         # 2. PERSONALIDADE & IDENTIDADE (Rosie)
         # ---------------------------------------------------------
@@ -1710,7 +1760,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         TOM: Fale pouco mais com educação, Familiar, Descontraído, Educado, Direto e Sem Cerimônia.
         VOCABULÁRIO: Use expressões "manezinhas" de Florianópolis (ex: "Segura a onda", "Tás tolo?", "queres", "ques", "tas"), mas mantenha a clareza.
                     Nao diga: "Dazumbanho", "larica", "apetece"
-        
+        OBRIGAÇÃO: Vender nosso produto e quebrar as objeções caso o cliente nao queria ou diga pra depois. 
+
         [REGRAS VISUAIS E DE ESTILO]
             1. QUEBRA DE LINHA: Pule uma linha entre sua reação e a próxima pergunta.
             2. EFEITO CAMALEÃO: Espelhe o cliente (Sério -> Formal; Brincalhão -> Descontraído). Se o cliente contar uma piada ou algo engraçado ria com kkkkk.
@@ -2284,18 +2335,21 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         === REGRA DE OURO DO CARDÁPIO (CRÍTICO) ===
             1. FILTRO DE HORÁRIO (OLHE O RELÓGIO):
             - Verifique a {info_tempo_real}.
-            - Se for ANTES das 17:00: O foco é BUFFET DE ALMOÇO. Se pedirem pizza, diga educadamente que o forno só acende as 18h.
-            - Se for DEPOIS das 18:00: O foco é PIZZARIA/JANTAR. Não ofereça buffet.
+            - Se for DEPOIS das 7:00: O foco é BUFFET DE ALMOÇO. Se pedirem pizza, diga educadamente que o forno só acende as 18h.
+            - Se for ANTES das 14:30: O foco é BUFFET DE ALMOÇO. Se pedirem pizza, diga educadamente que o forno só acende as 18h.
+            - Se for DEPOIS das 15:00: O foco é PIZZARIA/JANTAR. Não ofereça buffet.
 
-            2. PROIBIDO "VÔMITO DE DADOS":
-            - Se o cliente perguntar "Qual o preço da pizza?", JAMAIS responda com a tabela inteira (Broto, Grande, Gigante, Premium, Tradicional...). Isso polui a tela.
-            - AÇÃO CORRETA: Devolva com uma pergunta de sondagem.
-            - Exemplo: "Depende do tamanho, querido. É pra ti ou pra família toda? (Assim eu te passo o valor certo)".
+            2. PEDIDOS DE PREÇO OU CARDÁPIO (AÇÃO IMEDIATA):
+            - Se o cliente perguntar "Qual o preço?", "Quanto custa?", "Me manda o cardápio":
+            - NÃO digite os preços no texto (fica confuso).
+            - AÇÃO OBRIGATÓRIA: Chame a tool `fn_enviar_cardapio_pdf`.
+            - ROTEIRO: "Vou te mandar o cardápio completo pra tu veres certinho."
+            - FECHAMENTO: Logo após mandar, pergunte: "Conseguiu abrir aí? Posso te ajudar com alguma dúvida dos sabores?"
 
-            3. NÃO MANDE O LINK CEDO DEMAIS:
-            - Se o cliente pedir o cardápio, NÃO jogue o link e fique quieta. Converse!
-            - Exemplo: "Temos pizzas tradicionais e umas premium que são uma delícia. Tu gostas mais de carne, frango ou queijo? Me diz que eu te ajudo."
-            - SÓ MANDE O LINK QUANDO: Ele escolher um sabor ou disser "quero pedir".
+            3. NÃO MANDE O LINK DE PEDIDO CEDO DEMAIS:
+            - O link do "Anota Aí" é para FECHAR A VENDA.
+            - O PDF é para TIRAR DÚVIDA DE PREÇO.
+            - Só mande o link do Anota Aí quando ele já tiver decidido o que quer.
 
         === ALGORITMO DE VENDAS ===
         1. ESCUTA ATIVA (VALIDAÇÃO): Preste atenção no que o cliente diz, responda sempre fazendo sentido.
@@ -2558,6 +2612,18 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 hora_nova=args.get("hora_nova", "")
             )
             return json.dumps(resp, ensure_ascii=False)
+        
+        elif call_name == "fn_enviar_cardapio_pdf":
+            # Link RAW correto (direto para o arquivo)
+            link_do_pdf = "https://raw.githubusercontent.com/Lucas-t-rex/Chatbot/main/cardapio.pdf" 
+            
+            send_whatsapp_media(
+                number=contact_id, 
+                media_url=link_do_pdf, 
+                file_name="Cardapio_Ilha_Acores.pdf",
+                caption="Aqui está nosso cardápio completo! 🍕"
+            )
+            return json.dumps({"sucesso": True, "msg": "Arquivo PDF enviado."}, ensure_ascii=False)
 
         elif call_name == "fn_capturar_nome":
             try:
