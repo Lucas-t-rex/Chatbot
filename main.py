@@ -910,14 +910,14 @@ def append_message_to_db(contact_id, role, text, message_id=None):
 
 def analisar_status_da_conversa(history):
     """
-    Auditoria IA Unificada (V3):
-    1. Verifica Regra de Ouro (Agendamento Feito) via código.
-    2. Joga todo o resto para a IA classificar entre SUCESSO, FRACASSO ou ANDAMENTO.
+    Auditoria IA Unificada (V4 - Otimizada):
+    1. Verifica Regras de Ouro (Link enviado ou Função chamada) via código para resposta imediata.
+    2. Se não houver sinais claros, a IA analisa o contexto psicológico (Desistência vs Dúvida).
     """
     if not history:
         return "andamento", 0, 0
 
-    # Pega as últimas 15 mensagens conforme solicitado
+    # Pega as últimas 15 mensagens conforme solicitado para ter contexto
     msgs_para_analise = history[-15:] 
     
     historico_texto = ""
@@ -925,44 +925,52 @@ def analisar_status_da_conversa(history):
         text = msg.get('text', '')
         role = "Bot" if msg.get('role') in ['assistant', 'model'] else "Cliente"
         
-        # --- 1. REGRA DE FERRO (Solicitada) ---
+        # --- 1. REGRAS DE FERRO (Verificação Automática) ---
+        # Se estas condições existirem, é SUCESSO garantido e não precisamos gastar IA.
+        
         if "fn_salvar_agendamento" in text:
             print("✅ [Auditor] Sucesso detectado via função de agendamento.")
             return "sucesso", 0, 0
+
+        # Se o link do cardápio foi enviado, a conversão técnica foi feita.
+        if "pedido.anota.ai" in text:
+            print("✅ [Auditor] Sucesso detectado via Link de Delivery Enviado.")
+            return "sucesso", 0, 0
             
-        # Prepara o texto para a IA (limpa logs técnicos para não confundir)
+        # Prepara o texto limpo para a IA analisar o restante
         txt_limpo = text.replace('\n', ' ')
         if "Chamando função" not in txt_limpo: 
             historico_texto += f"{role}: {txt_limpo}\n"
 
-    # --- 2. IA ANALISA O CONTEXTO GERAL ---
+    # --- 2. IA ANALISA O CONTEXTO (Só roda se não caiu nas regras acima) ---
     if modelo_ia:
         try:
             prompt_auditoria = f"""
-            Analise as últimas 15 mensagens deste atendimento de Restaurante/Delivery.
+            Analise as últimas mensagens deste atendimento de Restaurante/Delivery.
             
-            HISTÓRICO:
+            HISTÓRICO RECENTE:
             {historico_texto}
 
-            SUA MISSÃO: Classifique a conversa em uma das 3 categorias abaixo.
-
-            1. SUCESSO:
-               - O Bot enviou o LINK DE DELIVERY (pedido.anota.ai).
-               - Se tem o link de anota.ai na converssa.
-               - O Cliente confirmou que fez o pedido ("já pedi", "tá feito").
-               - Note se ele realmente fez o pedido.
+            SUA MISSÃO: Classifique o ESTADO ATUAL da conversa.
             
-            2. FRACASSO:
-               - O Cliente disse EXPLICITAMENTE que não quer mais ("deixa quieto", "tá caro", "vou ver outro").
-               - O Cliente encerrou a conversa sem pedir ("obrigado, tchau").
-               - Note se ele nao quiz comprar.
-
-            3. ANDAMENTO:
-               - O Cliente ainda está escolhendo sabores ou tirando dúvidas.
-               - O Cliente disse "vou ver com minha esposa/marido" (Isso não é fracasso, é espera).
-               - A conversa parou no meio de um assunto.
-               - Se ainda nao tiver o Link (pedido.anota.ai), se tiver é status sucesso.
+            1. SUCESSO (Vitória):
+               - O Cliente confirmou verbalmente que pediu ("já pedi", "fiz o pedido", "tá feito", "pronto").
+               - O Bot enviou o link do 'anota.ai' e o cliente agradeceu ou encerrou positivamente.
+               - Houve intervenção humana solicitada para fechar o pedido.
             
+            2. FRACASSO (Perda):
+               - O Cliente DISSE EXPLICITAMENTE que não quer mais ("deixa quieto", "tá muito caro", "vou pedir em outro lugar").
+               - O Cliente encerrou a conversa de forma negativa ou seca sem pedir ("obrigado, tchau", "esquece").
+               - Note se ele rejeitou a compra.
+
+            3. ANDAMENTO (Oportunidade):
+               - O Cliente ainda está tirando dúvidas, escolhendo sabores ou vendo o cardápio.
+               - O Cliente disse "vou ver com minha esposa/marido" (Isso é espera, não fracasso).
+               - O link AINDA NÃO FOI ENVIADO.
+               - A conversa parou no meio de um assunto ou dúvida.
+            
+            REGRA FINAL: Na dúvida entre Fracasso e Andamento, escolha ANDAMENTO (pois ainda podemos tentar recuperar).
+
             Responda APENAS uma palavra: SUCESSO, FRACASSO ou ANDAMENTO.
             """
             
@@ -971,11 +979,11 @@ def analisar_status_da_conversa(history):
             
             status_ia = resp.text.strip().upper()
             
-            # Tratamento de segurança caso a IA responda algo fora do padrão
+            # Tratamento de segurança
             if "SUCESSO" in status_ia: return "sucesso", in_tokens, out_tokens
             if "FRACASSO" in status_ia: return "fracasso", in_tokens, out_tokens
             
-            # Se não for sucesso nem fracasso, é andamento
+            # Padrão é andamento
             return "andamento", in_tokens, out_tokens
 
         except Exception as e:
@@ -1319,7 +1327,8 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                     - Tom: Amigável, leve e sem cobrança.
                     - NÃO faça perguntas. É uma afirmação final.
                     - Encerre a frase com um "Deus abençoe!" ou "Bom descanso!".
-                    - A MENSAGEM DEVE TERMINAR OBRIGATORIAMENTE COM O LINK: {link_insta}
+                    - Peça pra seguir no instagram.
+                    - A MENSAGEM DEVE TERMINAR OBRIGATORIAMENTE COM O LINK: SE quiser ver as novidades ! {link_insta}
                     """
                 )
             else:
@@ -1713,6 +1722,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         === DEVER ===
         O seu dever é enteder o que o cliente precisa e forçar um reserva ou delivery do nosso cardapio, MAS sem forçar ou parecer insistente, método deve ser o RELACIONAMENTO. Você pode usar o [HISTÓRICO] para ter contexto de converssa.
+        Obrigatoria , se o cliente disser não ou que voce ira perder a venda use o PROTOCOLO DE RESGATE E OBJEÇÕES.
         Você não tira pedidos, pode passar preços ou para delivery apenas envia o link do app "Anota ai" que é responsavel por essa parte.
         Agendar quando o cliente precisar.
         Você não é um formulário de cadastro. Você é a Rosie, Seja amigável, vendedora e persistente com interesse em resolver o que o cliente precisa, mas sem parecer forçada.
@@ -1724,6 +1734,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         Usar o PROTOCOLO DE RESGATE E OBJEÇÕES aabixo quando a pessoa não quer fechar.
         Os valores estão no cardapio, nao invente.
         Você NÃO usa emojis.
+        >>> GATILHO DE ATIVAÇÃO DE RESGATE (PRIORIDADE MÁXIMA) <<<
+        SEMPRE QUE O CLIENTE DISSER "NÃO", "VOU VER", "TÁ CARO" OU RECUSAR:
+        PARE TUDO E ATIVE O PROTOCOLO DE RESGATE ABAIXO IMEDIATAMENTE.
+        NÃO ACEITE O "NÃO" DE PRIMEIRA. TENTE SALVAR A VENDA COM O FUNIL ABAIXO.
 
         === NUNCA FAZER ===
         - Tentar tirar um pedido: voce apenas pode ou fazer uma reserva ou enviar o link do "anota ai"
@@ -2266,6 +2280,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - Se o cliente pedir o cardápio, NÃO jogue o link e fique quieta. Converse!
             - Exemplo: "Temos pizzas tradicionais e umas premium que são uma delícia. Tu gostas mais de carne, frango ou queijo? Me diz que eu te ajudo."
             - SÓ MANDE O LINK QUANDO: Ele escolher um sabor ou disser "quero pedir".
+
         === ALGORITMO DE VENDAS ===
         1. ESCUTA ATIVA (VALIDAÇÃO): Preste atenção no que o cliente diz, responda sempre fazendo sentido.
         2. SONDAGEM: Descobra o que o cliente precisa, se quer pedir, saber preço , como funciona (ex: "eai tas com fome?"). Use `fn_consultar_historico_completo` se achar que ele já disse isso antes.
