@@ -859,10 +859,10 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                 },
                 {
                     "name": "fn_enviar_cardapio_pdf",
-                    "description": "Envia o arquivo PDF do cardápio completo para o cliente. Use quando ele pedir 'cardápio', 'tabela de preços', 'menu' ou 'ver as opções'.",
+                    "description": "AÇÃO OBRIGATÓRIA quando o cliente pede para ver 'cardápio', 'menu', 'tabela de preços' ou 'opções'. O sistema NÃO consegue mostrar o cardápio por texto, é NECESSÁRIO chamar esta função para enviar o arquivo PDF.",
                     "parameters": {
                         "type_": "OBJECT",
-                        "properties": {}, # Sem parâmetros, apenas chama a função
+                        "properties": {}, 
                         "required": []
                     }
                 },
