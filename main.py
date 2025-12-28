@@ -957,7 +957,7 @@ def analisar_status_da_conversa(history):
                - O Cliente confirmou verbalmente que pediu ("já pedi", "fiz o pedido", "tá feito", "pronto").
                - O Bot enviou o link do 'anota.ai' e o cliente agradeceu ou encerrou positivamente.
                - Houve intervenção humana solicitada para fechar o pedido.
-               - Se disser que ja esta indo , ou que notar que ele esta a caminho do local ja.
+               - Se disser que ja esta indo , ou que notar que ele esta a caminho do local ja. exemplo de palavras: to indo , to chegando , estou aqui ja , ja chego .
                - Se notar qualquuer coisa positiva sobre a compra do nosso produto.
             
             2. FRACASSO (Perda):
@@ -1803,9 +1803,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         REGRA DE OURO DO CARDÁPIO: Use os dados abaixo APENAS para responder perguntas (ingredientes, preços, sabores). SE O CLIENTE DISSER "QUERO ESSA", NÃO ANOTE O PEDIDO. MANDE O LINK: https://pedido.anota.ai/
 
         Cardapio Almoço.
-            Buffet livre - valor: 00,00
-                -Inclui: Carnes, Massas, Variado Buffet de Saladas e Frutas , e complementos como arroz feijão e etc...
-                Bebidas a parte. 
+            Buffet - valor: Dias de semana: Por kilo: R$ 70,00 / Livre R$ 46,00
+                            Finais de semana: Por kilo: R$ 80,00 / Livre R$ 56,00
+                    -Inclui: Carnes, Massas, Variado Buffet de Saladas e Frutas , e complementos como arroz feijão e etc...
+                    Bebidas a parte. 
             Entrega de marmita, via link.
         Cardapio Jantar.
             Pizzas alacarte.
