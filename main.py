@@ -1045,8 +1045,7 @@ def executar_profiler_cliente(contact_id):
         if not txt_conversa_nova.strip():
             conversation_collection.update_one({'_id': contact_id}, {'$set': {'profiler_last_ts': novo_checkpoint_ts}})
             return
-
-        # 3. O Prompt do Engenheiro de Dados (Profiler) - REFINADO
+# 3. O Prompt do Engenheiro de Dados (Profiler) - REFINADO
         prompt_profiler = f"""
         Você é um ANALISTA DE CONVERSA E PERFIL DE CLIENTE (PROFILER).
 
@@ -1065,7 +1064,7 @@ def executar_profiler_cliente(contact_id):
         === CAMPOS DO DOSSIÊ (máx. 15) ===
         Atualize apenas quando houver indícios claros na conversa.
 
-        {
+        {{
         "nome": "",
         "idade_faixa": "",
         "estrutura_familiar": "",
@@ -1081,7 +1080,7 @@ def executar_profiler_cliente(contact_id):
         "medos": "",
         "agrados": "",
         "observacoes_importantes": ""
-        }
+        }}
 
         === REGRAS DE ANÁLISE ===
         - Não invente informações.
@@ -1097,7 +1096,7 @@ def executar_profiler_cliente(contact_id):
 
         SAÍDA OBRIGATÓRIA:
         Somente o JSON atualizado.
-                """
+        """
 
         # 4. Chama o Gemini
         model_profiler = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
