@@ -3596,29 +3596,54 @@ def process_message_logic(message_data, buffered_message_text=None):
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin, delay_ms=1000)
             
             else:
+                # -----------------------------------------------------------
+                # NOVA LÓGICA DE ENVIO (SPLIT 100 CARACTERES + LINKS)
+                # -----------------------------------------------------------
+                
+                # 1. Limpeza para evitar balões vazios no final
+                ai_reply = ai_reply.strip()
+
                 def is_gabarito(text):
                     text_clean = text.lower().replace("*", "")
-                    
                     required = ["nome:", "cpf:", "telefone:", "serviço:", "servico:", "data:", "hora:"]
-                    
                     found = [k for k in required if k in text_clean]
                     return len(found) >= 3
 
-                if is_gabarito(ai_reply) or len(ai_reply) < 200:
+                # Define se deve dividir a mensagem
+                should_split = False
+                if "http" in ai_reply: should_split = True
+                if len(ai_reply) > 100: should_split = True  # Regra de 100 caracteres
+                if "\n" in ai_reply: should_split = True     # Regra de quebra de linha
+
+                # Cenário 1: Gabarito (Manda tudo junto para facilitar cópia)
+                if is_gabarito(ai_reply):
                     print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}")
                     send_whatsapp_message(sender_number_full, ai_reply, delay_ms=2000)
                 
-                else:
-                    print(f"🤖 Resposta da IA (Fracionada por Parágrafos) para {sender_name_from_wpp}")
+                # Cenário 2: Mensagem longa, com Link ou com Enters (Divide)
+                elif should_split:
+                    print(f"🤖 Resposta da IA (Fracionada > 100 chars, Link ou Enter) para {sender_name_from_wpp}")
                     
-                    paragraphs = [p.strip() for p in ai_reply.split('\n\n') if p.strip()]
+                    # Divide por qualquer 'enter' (\n)
+                    paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
                     
                     if not paragraphs: return
 
                     for i, para in enumerate(paragraphs):
-                        current_delay = 2000 if i == 0 else 4000
+                        # Cálculo de delay dinâmico para parecer digitação humana
+                        tempo_leitura = len(para) * 50 # 50ms por letra
+                        current_delay = 1500 + tempo_leitura
+                        
+                        if current_delay > 5000: current_delay = 5000 # Max 5 seg
+                        if i == 0: current_delay = 2000 # Primeira mensagem é padrão
+
                         send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
                         time.sleep(current_delay / 1000)
+
+                # Cenário 3: Mensagem curta simples (Manda direto)
+                else:
+                    print(f"🤖 Resposta da IA (Curta) para {sender_name_from_wpp}")
+                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=2000)
 
             try:
                 if ai_reply: # Só chama se teve conversa
@@ -3644,7 +3669,7 @@ def process_message_logic(message_data, buffered_message_text=None):
 
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
-    print("    CHATBOT WHATSAPP COM IA INICIADO (V2 - COM AGENDA)")
+    print("    CHATBOT WHATSAPP COM IA INICIADO COM AGENDA)")
     print(f"    CLIENTE: {CLIENT_NAME}")
     if not RESPONSIBLE_NUMBER:
         print("    AVISO: 'RESPONSIBLE_NUMBER' não configurado.")
