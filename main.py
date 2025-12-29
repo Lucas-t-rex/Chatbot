@@ -974,6 +974,7 @@ def analisar_status_da_conversa(history):
                - Se nas ultimas mensagens teve um retorno de feed back negativo ainda é fracasso, o bot só esta tendando enteder o que aconteceu.
                - O Cliente encerrou a conversa de forma negativa ou seca sem pedir ("obrigado, tchau", "esquece").
                - Note se ele rejeitou a compra.
+               - Mesmo com o follow up negativo do cliente ele nao falou o que foi ruim ou disse tudo certo, ainda é fracasso.
 
             3. ANDAMENTO (Oportunidade):
                - O Cliente ainda está tirando dúvidas, escolhendo sabores ou vendo o cardápio.
@@ -1789,7 +1790,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - GATILHO: Perguntas como "quanto custa?", "manda o cardápio", "preços", "ver o menu".
             - REGRA DE BLOQUEIO: Você é PROIBIDA de apenas descrever preços soltos ou falar "Veja abaixo". O cliente quer ver o arquivo visual.
             - AÇÃO: Chame esta função IMEDIATAMENTE.
-            - O QUE ACONTECE DEPOIS: O sistema enviará o PDF e você deve perguntar: "Conseguiu abrir aí? Posso te ajudar a escolher algum sabor?"
+            - O QUE ACONTECE DEPOIS: O sistema enviará o PDF e você deve perguntar: "Recebeu ai, se tiver alguma duvida me avisa!"
 
         # ---------------------------------------------------------
         # 2. PERSONALIDADE & IDENTIDADE (Rosie)
@@ -1802,7 +1803,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         OBRIGAÇÃO: Vender nosso produto e quebrar as objeções caso o cliente nao queria ou diga pra depois. 
 
         [REGRAS VISUAIS E DE ESTILO]
-            1. QUEBRA DE LINHA: Pule uma linha entre sua reação e a próxima pergunta.
+            1. QUEBRA DE LINHA AGRESSIVA: 
+                - NÃO escreva parágrafos longos. 
+                - Use 'Enter' a cada frase ou ideia. O WhatsApp precisa de mensagens curtas.
+                - Exemplo: "Temos rodízio sim! (Enter) Funciona assim: (Enter) Tu escolhes o sabor..."
             2. EFEITO CAMALEÃO: Espelhe o cliente (Sério -> Formal; Brincalhão -> Descontraído). Se o cliente contar uma piada ou algo engraçado ria com kkkkk.
             3. ANTI-REPETIÇÃO (CRÍTICO): 
                - JAMAIS inicie frases validando o usuário ("Entendi", "Compreendo", "Pois é", "Imaginei").
@@ -2362,7 +2366,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         PASSO 1: A SONDAGEM SUAVE (Primeiro "Não")
         -> Objetivo: Entender se é preço ou indecisão sem ser chata.
         -> O que fazer: Mostre surpresa e pergunte o motivo rapidinho.
-        -> Exemplo: "Poxa, sério? A chapa já tava quente aqui. Mas me diz, achou o valor puxado ou vai deixar pra outro dia mesmo?"
+        -> Exemplo: "Poxa, sério? Ja tava me preprando aqui. Mas porqueeee? kkk"
 
         PASSO 2: A QUEBRA DE OBJEÇÃO (Se ele explicar)
         -> Objetivo: Mostrar que vale a pena cada centavo.
@@ -2694,7 +2698,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 number=contact_id, 
                 media_url=link_do_pdf, 
                 file_name="Cardapio_Ilha_Acores.pdf",
-                caption="Aqui está nosso cardápio completo! 🍕"
+                caption="Da uma conferida no cardápio completo! 🍕"
             )
             return json.dumps({"sucesso": True, "msg": "Arquivo PDF enviado."}, ensure_ascii=False)
 
@@ -3622,31 +3626,33 @@ def process_message_logic(message_data, buffered_message_text=None):
 
                 # Define se deve dividir a mensagem
                 should_split = False
-                if "http" in ai_reply: should_split = True
-                if len(ai_reply) > 100: should_split = True  # Regra de 100 caracteres
-                if "\n" in ai_reply: should_split = True     # Regra de quebra de linha
+                if "http" in ai_reply: should_split = True    # Tem link? Divide.
+                if len(ai_reply) > 30: should_split = True   # Maior que 100 letras? Divide.
+                if "\n" in ai_reply: should_split = True      # Tem "Enter"? Divide.
 
                 # Cenário 1: Gabarito (Manda tudo junto para facilitar cópia)
                 if is_gabarito(ai_reply):
                     print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}")
                     send_whatsapp_message(sender_number_full, ai_reply, delay_ms=2000)
                 
-                # Cenário 2: Mensagem longa, com Link ou com Enters (Divide)
+                # Cenário 2: Mensagem que precisa ser dividida
                 elif should_split:
-                    print(f"🤖 Resposta da IA (Fracionada > 100 chars, Link ou Enter) para {sender_name_from_wpp}")
+                    print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}")
                     
-                    # Divide por qualquer 'enter' (\n)
+                    # O segredo: Divide por 'Enter' (\n). 
+                    # Se a IA mandar texto corrido > 100 chars mas SEM enter, ele ainda vai num bloco só 
+                    # (a menos que a gente use regex complexo, mas o \n é mais seguro).
                     paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
                     
                     if not paragraphs: return
 
                     for i, para in enumerate(paragraphs):
-                        # Cálculo de delay dinâmico para parecer digitação humana
-                        tempo_leitura = len(para) * 50 # 50ms por letra
-                        current_delay = 1500 + tempo_leitura
+                        # Delay mais curto para ficar dinâmico
+                        tempo_leitura = len(para) * 40 
+                        current_delay = 1000 + tempo_leitura
                         
-                        if current_delay > 5000: current_delay = 5000 # Max 5 seg
-                        if i == 0: current_delay = 2000 # Primeira mensagem é padrão
+                        if current_delay > 4000: current_delay = 4000 
+                        if i == 0: current_delay = 1500 
 
                         send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
                         time.sleep(current_delay / 1000)
