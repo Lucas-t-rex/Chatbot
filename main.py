@@ -868,13 +868,13 @@ if agenda_instance: # Só adiciona ferramentas de agenda se a conexão funcionar
                 },
                 {
                     "name": "fn_consultar_historico_completo",
-                    "description": "MEMÓRIA DE LONGO PRAZO (Obrigatório): Use esta ferramenta PROATIVAMENTE sempre que precisar de uma informação (Ramo, CPF, Nome, Dores, Contexto anterior) que não esteja visível nas mensagens recentes. REGRA: Antes de fazer qualquer pergunta de cadastro ou contexto ao cliente, consulte esta memória para ver se ele já não respondeu antigamente.",
+                    "description": "MEMÓRIA ARQUIVADA (BUSCA DE ÚLTIMO RECURSO): Use esta ferramenta SOMENTE se você precisar saber algo específico (ex: CPF, Endereço, Preferência) e essa informação NÃO estiver escrita nas mensagens recentes acima. REGRA: Se a informação não estiver na conversa atual, aí sim você busca aqui.",
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
-                            "query": {"type_": "STRING", "description": "O que você está procurando? (Ex: 'ramo da empresa', 'cpf', 'motivo do contato')"}
+                            "query": {"type_": "STRING", "description": "O que você procurou na conversa atual e não achou? (Ex: 'qual o cpf dele', 'preferencia de pizza')"}
                         },
-                        "required": []
+                        "required": ["query"]
                     }
                 }
             ]
@@ -1777,8 +1777,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 Caso você não entenda peça pra pessoa ser mais claro na intenção dela.
 
         4. `fn_consultar_historico_completo`: 
-           - QUANDO USAR: Memória de Longo Prazo. Antes de perguntar um dado (CPF, Ramo, um pedido, um sabor, uma duvida), verifique se ele já não disse isso semanas atrás usando esta tool.
-
+            - QUANDO USAR: APENAS para buscar informações de DIAS ANTERIORES que não estão no [HISTÓRICO RECENTE] acima.
+            - PROIBIDO: Não chame essa função para ver o que o cliente acabou de dizer. Leia o histórico que já te enviei no prompt.
+            
         5. `fn_buscar_por_cpf` / `fn_alterar_agendamento` / `fn_excluir_agendamento`:
            - QUANDO USAR: Gestão. Use para consultar, remarcar ou cancelar agendamentos existentes.
         
@@ -2842,7 +2843,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     if convo_data:
         history_from_db = convo_data.get('history', [])
         perfil_cliente_dados = convo_data.get('client_profile', {})
-        janela_recente = history_from_db[-25:] 
+        janela_recente = history_from_db[-15:] 
         qtd_msg_enviadas = len(janela_recente)
         print(f"📉 [METRICA] Janela Deslizante: Enviando apenas as últimas {qtd_msg_enviadas} mensagens para o Prompt.")
         
