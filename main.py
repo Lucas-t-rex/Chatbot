@@ -1048,54 +1048,56 @@ def executar_profiler_cliente(contact_id):
 
         # 3. O Prompt do Engenheiro de Dados (Profiler) - REFINADO
         prompt_profiler = f"""
-        Você é um ANALISTA DE CONVERSSA E PERFIL DE CLIENTE (PROFILER DE RESTAURANTE).
-        Sua missão é analisar a conversa e atualizar o 'Dossiê do Cliente' com foco em Vendas e Preferências Alimentares informaçoes que podem nos ajudar a analisar a venda.
+        Você é um ANALISTA DE CONVERSA E PERFIL DE CLIENTE (PROFILER).
 
-        PERFIL JÁ CONSOLIDADO (O que já sabíamos):
+        Sua missão é analisar a conversa e ATUALIZAR o "Dossiê do Cliente" com foco em:
+        - Vendas
+        - Preferências alimentares
+        - Comportamento de compra
+        - Relacionamento com a marca
+
+        PERFIL JÁ CONSOLIDADO (dados existentes):
         {json.dumps(perfil_atual, ensure_ascii=False)}
 
-        NOVAS MENSAGENS (O que acabou de acontecer):
+        NOVAS MENSAGENS (contexto recente da conversa):
         {txt_conversa_nova}
 
-        === DIRETRIZES DE ANÁLISE ===
-        1. FOCO NO APETITE: Descubra o que faz esse cliente salivar ou desistir da compra.
-        2. CONTEXTO SOCIAL: É crucial saber se ele come sozinho (venda individual) ou com família (venda de combos/gigantes).
-        3. OBJEÇÕES REAIS: Se ele não comprou, descubra o motivo exato (Preço? Tempo de entrega? Sabor não disponível?).
+        === CAMPOS DO DOSSIÊ (máx. 15) ===
+        Atualize apenas quando houver indícios claros na conversa.
 
-        === O QUE EXTRAIR E ATUALIZAR (JSON OUTPUT) ===
+        {
+        "nome": "",
+        "idade_faixa": "",
+        "estrutura_familiar": "",
+        "ocupacao_principal": "",
+        "objetivo_principal": "",
+        "principal_dor_problema": "",
+        "perfil_comportamental": "",
+        "estilo_de_comunicacao": "",
+        "fatores_de_decisao": "",
+        "nivel_de_relacionamento_com_a_marca": "",
+        "objecoes:": "",
+        "desejos": "",
+        "medos": "",
+        "agrados": "",
+        "observacoes_importantes": ""
+        }
 
-        1. PREFERENCIAS_SABORES:
-           - O que ele pediu ou demonstrou interesse? (Ex: "Ama coração", "Gosta de massa fina", "Prefere vinho suave").
-           - O que ele rejeitou? (Ex: "Odeia cebola", "Não come carne de porco", "Alergia a glúten").
-
-        2. HABITO_DE_CONSUMO (Delivery vs Mesa):
-           - O cliente prefere comer em casa (Delivery/Retirada) ou no restaurante (Reserva)?
-           - Ele é objetivo ("Manda o link") ou gosta de conversar/tirar dúvidas?
-
-        3. CONTEXTO_FAMILIAR (Ouro para Vendas):
-           - Mencionou filhos/crianças? (Indica potencial para Combo Família/Batata Frita).
-           - Mencionou esposa/marido/namorado(a)? (Jantar a dois).
-           - Grupo grande? Aniversário?
-
-        4. SENSIBILIDADE_PRECO (Psicologia):
-           - ALTA: Pergunta muito de promoções, reclama do valor, pede desconto.
-           - BAIXA: Pede direto, foca na qualidade, escolhe itens Premium.
-
-        5. OBJECOES_E_QUEIXAS:
-           - Se ele não fechou o pedido, POR QUE? (Achou caro? Demora na entrega? Não tinha o sabor?).
-           - Fez alguma reclamação de pedido anterior? (Anote para que o atendimento humano possa compensar depois).
-
-        6. DADOS_CADASTRAIS_BASICOS:
-           - Nome, Bairro (para logística), Profissão (se citar).
-        
-        7. TIPO DE COMUNICAÇÃO
+        === REGRAS DE ANÁLISE ===
+        - Não invente informações.
+        - Se não houver dados suficientes, mantenha o valor anterior.
+        - Priorize sinais implícitos (tom, urgência, hesitação).
+        - Considere contexto alimentar e decisão de compra.
 
         === REGRAS DE HIGIENE ===
-        - Mantenha o JSON limpo. Use chaves sugeridas: 'nome', 'preferencias', 'restricoes', 'familia', 'tipo_cliente' (delivery/mesa), 'sensibilidade_preco', 'ultima_objecao'.
-        - Se o cliente disse "hoje não vou querer", salve o motivo em 'ultima_objecao'.
+        - Retorne APENAS o JSON final.
+        - JSON válido, sem comentários ou texto extra.
+        - Nunca ultrapasse os 10 campos definidos.
+        - Se houver recusa ou adiamento, registre o motivo em "principal_dor_problema".
 
-        SAÍDA OBRIGATÓRIA: Apenas o JSON atualizado.
-        """
+        SAÍDA OBRIGATÓRIA:
+        Somente o JSON atualizado.
+                """
 
         # 4. Chama o Gemini
         model_profiler = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
@@ -1313,7 +1315,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                     MODELOS DE RACIOCÍNIO:
                     - Se ele queria pizza: "{inicio_fala} não sei se tu já jantou, mas se a dúvida for sabor, a de Strogonoff tá saindo muito hoje. Mata a fome rapidinho. O que acha de eu já mandar o link?"
                     - Se ele queria agendar: "{inicio_fala} pensei aqui: quer que eu segure aquela mesa pra ti por garantia? Assim tu não ficas na mão se decidir vir."
-                    - Se não sabe o que ele quer: "{inicio_fala} se tiver na correria aí e quiser agilizar, eu te mando o link do cardápio e tu escolhes com calma. Pode ser?"
+                    - Se não sabe o que ele quer: "{inicio_fala} nessas horas a fome ja virou amiga, kkkkkk, conseguiu resolver?"
 
                     REGRAS:
                     - Tom casual e prestativo (Manezinho).
