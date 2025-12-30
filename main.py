@@ -1640,15 +1640,31 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         dia_num = agora.day
         ano_atual = agora.year
 
-        # Mapa de Datas (Mantido igual)
         lista_dias = []
-        for i in range(45): 
+        
+        # Reduzimos para 30 dias para focar no mês atual/próximo
+        for i in range(30): 
             d = agora + timedelta(days=i)
             nome_dia = dias_semana[d.weekday()]
             data_str = d.strftime("%d/%m")
+            
             marcador = ""
-            if i == 0: marcador = " (HOJE)"
-            elif i == 1: marcador = " (AMANHÃ)"
+            
+            # --- AQUI ESTÁ A MÁGICA DA CORREÇÃO ---
+            if i == 0: 
+                marcador = " (HOJE)"
+            elif i == 1: 
+                marcador = " (AMANHÃ)"
+            elif i < 7:
+                # Se estiver dentro dos próximos 7 dias, marcamos explicitamente
+                # Isso impede o bot de pular para a outra semana
+                if nome_dia == "Domingo":
+                    marcador = " [DOMINGO AGORA - O PRÓXIMO]"
+                elif nome_dia == "Sexta-feira":
+                    marcador = " [SEXTA AGORA]"
+                elif nome_dia == "Sábado":
+                    marcador = " [SÁBADO AGORA]"
+
             lista_dias.append(f"- {data_str} é {nome_dia}{marcador}")
 
         calendario_completo = "\n".join(lista_dias)
@@ -1707,6 +1723,11 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         1. Responda dúvidas pendentes no histórico usando APENAS dados abaixo.
         2. Você deve ter noção do tempo em {info_tempo_real}!
+        REGRA DE OURO DAS DATAS (CRÍTICO):
+                1. NÃO calcule datas de cabeça. O ano pode ter mudado.
+                2. OLHE o 'MAPA DE DATAS' acima. Ele é a verdade absoluta.
+                3. Se o cliente pedir "Domingo" ou "Próximo Domingo", pegue o PRIMEIRO domingo que aparece na lista do Mapa de Datas (marcado como [DOMINGO MAIS PRÓXIMO]).
+                4. Exemplo: Se no mapa diz "04/01 (Domingo)", ENTÃO O DOMINGO É DIA 04. Não invente dia 05.
         3. Sempre deve terminar com uma pergunta a não ser que seja uma despedida. 
         4. Se não souber, direcione para o humano (Carlos Alberto (gerente)) usando `fn_solicitar_intervencao`.
         5. Regra Nunca invente informaçoes que não estão no texto abaixo, principalmente informações tecnicas e maneira que trabalhamos, isso pode prejudicar muito a empresa. Quando voce ter uma pergunta e ela não for explicita aqui você deve indicar falar com o especialista.   
@@ -1885,8 +1906,18 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         >>> VERIFICAÇÃO DE FUNCIONAMENTO <<<
         ANTES de responder se estamos abertos, OLHE A HORA EM {info_tempo_real} e compare com os HORÁRIOS da empresa abaixo.
+        REGRA DE OURO DAS DATAS (CRÍTICO):
+            1. NÃO calcule datas de cabeça. O ano pode ter mudado.
+            2. OLHE o 'MAPA DE DATAS' acima. Ele é a verdade absoluta.
+            3. Se o cliente pedir "Domingo" ou "Próximo Domingo", pegue o PRIMEIRO domingo que aparece na lista do Mapa de Datas (marcado como [DOMINGO MAIS PRÓXIMO]).
+            4. Exemplo: Se no mapa diz "04/01 (Domingo)", ENTÃO O DOMINGO É DIA 04. Não invente dia 05.
         - SE ESTIVER FECHADO (ex: 15h00): Diga "Agora a cozinha tá fechada, mas a gente volta às 18h! Já quer deixar garantido pra noite?".
         - NÃO diga que está aberto se estiver no intervalo entre almoço e jantar.
+            REGRA DE OURO DAS DATAS (CRÍTICO):
+                1. NÃO calcule datas de cabeça. O ano pode ter mudado.
+                2. OLHE o 'MAPA DE DATAS' acima. Ele é a verdade absoluta.
+                3. Se o cliente pedir "Domingo" ou "Próximo Domingo", pegue o PRIMEIRO domingo que aparece na lista do Mapa de Datas (marcado como [DOMINGO MAIS PRÓXIMO]).
+                4. Exemplo: Se no mapa diz "04/01 (Domingo)", ENTÃO O DOMINGO É DIA 04. Não invente dia 05.
 
         === NUNCA FAZER ===
         - Tentar tirar um pedido: voce apenas pode ou fazer uma reserva ou enviar o link do "anota ai"
@@ -2433,7 +2464,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         4. GESTÃO DE OBJEÇÕES (Se disser "tá caro" ou "não"):
             - "Capaz! Pensa que tem **bebida e sorvete liberado**. Se botar na ponta do lápis, compensa demais! E a qualidade é diferenciada."
             - Ofereça as promoções de combos se for delivery.
-            
+
         5. REGRA DO "KKKKK" (ESPELHAMENTO):
            - Se o cliente rir ("kkkk"), RIA JUNTO!
            - Se ele mandar kkkk, NÃO TENTE VENDER na mesma mensagem. Apenas brinque de volta ou comente algo engraçado.
@@ -2485,6 +2516,11 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             NUNCA DIGA QUE VAI ENVIAR O CARDAPIO E NÃO CHAME A `fn_enviar_cardapio_pdf`. SEMPRE CHAME A `fn_enviar_cardapio_pdf` SE MENCIONAR CARDAPIO.
             1. FILTRO DE HORÁRIO (OLHE O RELÓGIO):
             - Verifique a {info_tempo_real}.
+                REGRA DE OURO DAS DATAS (CRÍTICO):
+                    1. NÃO calcule datas de cabeça. O ano pode ter mudado.
+                    2. OLHE o 'MAPA DE DATAS' acima. Ele é a verdade absoluta.
+                    3. Se o cliente pedir "Domingo" ou "Próximo Domingo", pegue o PRIMEIRO domingo que aparece na lista do Mapa de Datas (marcado como [DOMINGO MAIS PRÓXIMO]).
+                    4. Exemplo: Se no mapa diz "04/01 (Domingo)", ENTÃO O DOMINGO É DIA 04. Não invente dia 05.
             - Se for DEPOIS das 7:00: O foco é BUFFET DE ALMOÇO. Se pedirem pizza, diga educadamente que o forno só acende as 18h.
             - Se for ANTES das 14:30: O foco é BUFFET DE ALMOÇO. Se pedirem pizza, diga educadamente que o forno só acende as 18h.
             - Se for DEPOIS das 15:00: O foco é PIZZARIA/JANTAR. Não ofereça buffet.
