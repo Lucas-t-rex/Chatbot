@@ -3384,7 +3384,7 @@ processed_messages = set()
 
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
-    data = request.json # <--- O ponto que você mencionou
+    data = request.json 
 
     event_type = data.get('event')
     if event_type and event_type != 'messages.upsert':
@@ -3399,18 +3399,27 @@ def receive_webhook():
         if not key_info:
             return jsonify({"status": "ignored_no_key"}), 200
         
+        # --- CORREÇÃO: Prioridade ao senderPn (Corrige o bug do ID 71...) ---
+        sender_number_full = key_info.get('senderPn')
+        
+        # Se não tiver senderPn, tenta o participant ou remoteJid
+        if not sender_number_full:
+            sender_number_full = key_info.get('participant') or key_info.get('remoteJid')
+
+        if not sender_number_full:
+             return jsonify({"status": "ignored_no_number"}), 200
+             
+        # Mantemos remoteJid apenas para checar se é grupo/transmissão
         remote_jid = key_info.get('remoteJid', '')
         
         if remote_jid.endswith('@g.us') or remote_jid.endswith('@broadcast'):
             return jsonify({"status": "ignored_group_context"}), 200
 
+        # Verifica se é mensagem enviada pelo próprio bot (admin)
         if key_info.get('fromMe'):
-            # ... (seu código de ignorar fromMe existente) ...
-            sender_number_full = key_info.get('remoteJid')
             clean_number = sender_number_full.split('@')[0]
             if clean_number != RESPONSIBLE_NUMBER:
                  return jsonify({"status": "ignored_from_me"}), 200
-            # ...
 
         message_id = key_info.get('id')
         if not message_id:
@@ -3439,19 +3448,31 @@ def handle_message_buffering(message_data):
     
     try:
         key_info = message_data.get('key', {})
-        sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
+        
+        # --- CORREÇÃO: Prioridade total ao senderPn ---
+        # Tenta pegar o número real primeiro.
+        sender_number_full = key_info.get('senderPn')
+        
+        # Só se não tiver senderPn é que tentamos os outros (participant ou remoteJid)
+        if not sender_number_full:
+            sender_number_full = key_info.get('participant') or key_info.get('remoteJid')
+
+        # Se for grupo (@g.us) ou não tiver número, ignora
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
+            
         clean_number = sender_number_full.split('@')[0]
         
         message = message_data.get('message', {})
         user_message_content = None
         
+        # Lógica de Áudio (Processamento Imediato)
         if message.get('audioMessage'):
             print("🎤 Áudio recebido, processando imediatamente (sem buffer)...")
             threading.Thread(target=process_message_logic, args=(message_data, None)).start()
             return
         
+        # Extração de Texto
         if message.get('conversation'):
             user_message_content = message['conversation']
         elif message.get('extendedTextMessage'):
@@ -3461,12 +3482,14 @@ def handle_message_buffering(message_data):
             print("➡️  Mensagem sem conteúdo de texto ignorada pelo buffer.")
             return
 
+        # Adiciona ao Buffer
         if clean_number not in message_buffer:
             message_buffer[clean_number] = []
         message_buffer[clean_number].append(user_message_content)
         
         print(f"📥 Mensagem adicionada ao buffer de {clean_number}: '{user_message_content}'")
 
+        # Gestão do Timer (Reinicia se chegar nova mensagem)
         if clean_number in message_timers:
             message_timers[clean_number].cancel()
 
@@ -3480,7 +3503,7 @@ def handle_message_buffering(message_data):
 
     except Exception as e:
         print(f"❌ Erro no 'handle_message_buffering': {e}")
-            
+
 def _trigger_ai_processing(clean_number, last_message_data):
     global message_buffer, message_timers
     
@@ -3591,11 +3614,22 @@ def process_message_logic(message_data, buffered_message_text=None):
         
     try:
         key_info = message_data.get('key', {})
-        sender_number_full = key_info.get('senderPn') or key_info.get('participant') or key_info.get('remoteJid')
+        
+        # ==============================================================================
+        # 🚨 CORREÇÃO CRÍTICA: Prioridade Absoluta ao senderPn (Evita erro 400)
+        # ==============================================================================
+        sender_number_full = key_info.get('senderPn')
+        
+        # Só tenta os outros se senderPn estiver vazio
+        if not sender_number_full:
+            sender_number_full = key_info.get('participant') or key_info.get('remoteJid')
+
+        # Se for grupo ou inválido, ignora
         if not sender_number_full or sender_number_full.endswith('@g.us'): return
         
         clean_number = sender_number_full.split('@')[0]
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
+        # ==============================================================================
 
         # ==============================================================================
         # 🛡️ LÓGICA DE "SALA DE ESPERA" (Atomicidade)
@@ -3821,7 +3855,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                 {'_id': clean_number},
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
-
+            
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
     print("    CHATBOT WHATSAPP COM IA INICIADO COM AGENDA)")
