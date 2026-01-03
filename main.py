@@ -3616,27 +3616,46 @@ def process_message_logic(message_data, buffered_message_text=None):
         key_info = message_data.get('key', {})
         
         # ==============================================================================
-        # 🚨 CORREÇÃO CRÍTICA: Prioridade Absoluta ao senderPn (Evita erro 400)
+        # 🕵️‍♂️ SHERLOCK HOLMES DOS NÚMEROS (A Busca pelo 55...)
         # ==============================================================================
+        # 1. Tenta o senderPn (O número real, vindo do WhatsApp)
         sender_number_full = key_info.get('senderPn')
         
-        # Só tenta os outros se senderPn estiver vazio
+        # 2. SE FALHAR: Tenta o campo 'sender' (A Evolution costuma mandar o 55 aqui, mesmo se a key vier errada)
         if not sender_number_full:
-            sender_number_full = key_info.get('participant') or key_info.get('remoteJid')
+            sender_number_full = message_data.get('sender')
 
-        # Se for grupo ou inválido, ignora
+        # 3. SE FALHAR: Tenta participant (Usado em grupos/iOS)
+        if not sender_number_full:
+            sender_number_full = key_info.get('participant')
+
+        # 4. ÚLTIMO RECURSO: remoteJid (É aqui que mora o perigo do ID 71..., por isso deixamos por último)
+        if not sender_number_full:
+            sender_number_full = key_info.get('remoteJid')
+
+        # Se não achou nada ou é grupo, encerra.
         if not sender_number_full or sender_number_full.endswith('@g.us'): return
         
-        clean_number = sender_number_full.split('@')[0]
+        # Limpa o número (Remove @s.whatsapp.net e :device_id se houver)
+        clean_number = sender_number_full.split('@')[0].split(':')[0]
+
+        # 🚨 VACINA ANTI-LID (A MUDANÇA CRÍTICA) 🚨
+        # Se o número começar com '7' E for muito longo (JIDs reais do BR têm 12 ou 13 dígitos),
+        # significa que é um ID Fantasma do WhatsApp. NÓS RECUSAMOS PROCESSAR.
+        if clean_number.startswith('7') and len(clean_number) > 14:
+            print(f"🚫 [Anti-Bug] ID Fantasma (LID) detectado: {clean_number}. Mensagem ignorada para proteger o banco.")
+            return
+        
+        # Se passou daqui, o clean_number é confiável (Provavelmente 55...)
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
         # ==============================================================================
 
         # ==============================================================================
-        # 🛡️ LÓGICA DE "SALA DE ESPERA" (Atomicidade)
+        # 🛡️ LÓGICA DE "SALA DE ESPERA" (Atomicidade e Lock)
         # ==============================================================================
         now = datetime.now()
 
-        # 1. Garante que o cliente existe no banco
+        # 1. Garante que o cliente existe no banco (Agora com o ID CORRETO 55...)
         conversation_collection.update_one(
             {'_id': clean_number},
             {'$setOnInsert': {'created_at': now, 'history': []}},
@@ -3682,7 +3701,7 @@ def process_message_logic(message_data, buffered_message_text=None):
         else:
             message = message_data.get('message', {})
             
-            # >>>> TRATAMENTO DE ÁUDIO (Onde a mágica acontece) <<<<
+            # >>>> TRATAMENTO DE ÁUDIO <<<<
             if message.get('audioMessage') and message.get('base64'):
                 message_id = key_info.get('id')
                 print(f"🎤 Mensagem de áudio recebida de {clean_number}. Transcrevendo...")
@@ -3704,16 +3723,15 @@ def process_message_logic(message_data, buffered_message_text=None):
                     send_whatsapp_message(sender_number_full, "Desculpe, tive um problema técnico para ouvir seu áudio. Pode escrever ou tentar de novo? 🎧", delay_ms=2000)
                     user_message_content = "[Erro no Áudio]"
                 else:
-                    # AQUI ESTÁ O SEGREDO: Adicionamos a etiqueta para a IA saber que é áudio
                     user_message_content = f"[Transcrição de Áudio]: {texto_transcrito}"
             
             else:
-                # Se não for áudio nem buffer, tenta pegar texto direto (ex: imagem com legenda)
+                # Se não for áudio nem buffer, tenta pegar texto direto
                 user_message_content = message.get('conversation') or message.get('extendedTextMessage', {}).get('text')
                 if not user_message_content:
                     user_message_content = "[Mensagem não suportada (Imagem/Figurinha)]"
             
-            # Salva no histórico (O texto transcrito agora vai pro DB)
+            # Salva no histórico
             if user_message_content:
                 append_message_to_db(clean_number, 'user', user_message_content)
 
@@ -3743,7 +3761,7 @@ def process_message_logic(message_data, buffered_message_text=None):
         
         log_info(f"[DEBUG RASTREIO | PONTO 2] Conteúdo final para IA (Cliente {clean_number}): '{user_message_content}'")
 
-        # Chama a IA (Ela vai ler o histórico do DB, que agora tem o áudio transcrito)
+        # Chama a IA
         ai_reply = gerar_resposta_ia_com_tools(
             clean_number,
             sender_name_from_wpp,
@@ -3769,7 +3787,6 @@ def process_message_logic(message_data, buffered_message_text=None):
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
                     display_name = known_customer_name or sender_name_from_wpp
                     
-                    # Pega resumo para o admin
                     hist = load_conversation_from_db(clean_number).get('history', [])
                     resumo = get_last_messages_summary(hist)
                     
@@ -3784,10 +3801,8 @@ def process_message_logic(message_data, buffered_message_text=None):
             
             else:
                 # -----------------------------------------------------------
-                # NOVA LÓGICA DE ENVIO (SPLIT 100 CARACTERES + LINKS)
+                # ENVIO ROBUSTO (MANTÉM SUA LÓGICA DE SPLIT)
                 # -----------------------------------------------------------
-                
-                # 1. Limpeza para evitar balões vazios no final
                 ai_reply = ai_reply.strip()
 
                 def is_gabarito(text):
@@ -3796,51 +3811,39 @@ def process_message_logic(message_data, buffered_message_text=None):
                     found = [k for k in required if k in text_clean]
                     return len(found) >= 3
 
-                # Define se deve dividir a mensagem
                 should_split = False
-                if "http" in ai_reply: should_split = True    # Tem link? Divide.
-                if len(ai_reply) > 30: should_split = True   # Maior que 100 letras? Divide.
-                if "\n" in ai_reply: should_split = True      # Tem "Enter"? Divide.
+                if "http" in ai_reply: should_split = True
+                if len(ai_reply) > 30: should_split = True
+                if "\n" in ai_reply: should_split = True
 
-                # Cenário 1: Gabarito (Manda tudo junto para facilitar cópia)
                 if is_gabarito(ai_reply):
                     print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}")
                     send_whatsapp_message(sender_number_full, ai_reply, delay_ms=2000)
                 
-                # Cenário 2: Mensagem que precisa ser dividida
                 elif should_split:
                     print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}")
-                    
-                    # O segredo: Divide por 'Enter' (\n). 
-                    # Se a IA mandar texto corrido > 100 chars mas SEM enter, ele ainda vai num bloco só 
-                    # (a menos que a gente use regex complexo, mas o \n é mais seguro).
                     paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
                     
                     if not paragraphs: return
 
                     for i, para in enumerate(paragraphs):
-                        # Delay mais curto para ficar dinâmico
                         tempo_leitura = len(para) * 40 
                         current_delay = 1000 + tempo_leitura
-                        
                         if current_delay > 4000: current_delay = 4000 
                         if i == 0: current_delay = 1500 
 
                         send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
                         time.sleep(current_delay / 1000)
 
-                # Cenário 3: Mensagem curta simples (Manda direto)
                 else:
                     print(f"🤖 Resposta da IA (Curta) para {sender_name_from_wpp}")
                     send_whatsapp_message(sender_number_full, ai_reply, delay_ms=2000)
 
             try:
-                if ai_reply: # Só chama se teve conversa
-                    # print(f"🕵️ Iniciando espião de perfil para {clean_number}...")
+                if ai_reply:
                     threading.Thread(target=executar_profiler_cliente, args=(clean_number,)).start()
             except Exception as e:
                 print(f"❌ Erro ao disparar thread do Profiler: {e}")
-
 
         except Exception as e:
             print(f"❌ Erro no envio: {e}")
@@ -3849,13 +3852,12 @@ def process_message_logic(message_data, buffered_message_text=None):
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
-        # --- Libera o Lock ---
         if clean_number and lock_acquired and conversation_collection is not None:
             conversation_collection.update_one(
                 {'_id': clean_number},
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
-            
+
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
     print("    CHATBOT WHATSAPP COM IA INICIADO COM AGENDA)")
