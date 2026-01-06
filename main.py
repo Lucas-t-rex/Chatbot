@@ -64,6 +64,33 @@ tools = [
     }
 ]
 
+def get_maringa_time():
+    return datetime.now(FUSO_HORARIO)
+
+def get_tempo_real():
+    agora = datetime.now(FUSO_HORARIO)
+    hora = agora.hour
+    if 5 <= hora < 12:
+        saudacao = "Bom dia"
+    elif 12 <= hora < 18:
+        saudacao = "Boa tarde"
+    else:
+        saudacao = "Boa noite"
+
+    dias_semana = {0: "Segunda-feira", 1: "Terça-feira", 2: "Quarta-feira", 
+                   3: "Quinta-feira", 4: "Sexta-feira", 5: "Sábado", 6: "Domingo"}
+    meses = {1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril", 5: "Maio", 
+             6: "Junho", 7: "Julho", 8: "Agosto", 9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"}
+
+    return {
+        "saudacao_real": saudacao,
+        "dia_semana": dias_semana[agora.weekday()],
+        "dia": agora.day,
+        "mes_nome": meses[agora.month],
+        "ano": agora.year,
+        "hora_fmt": agora.strftime('%H:%M')
+    }
+
 def get_system_prompt():
     tempo = get_tempo_real() 
 
@@ -140,45 +167,6 @@ app = Flask(__name__)
 # ==============================================================================
 # 🛠️ FUNÇÕES AUXILIARES
 # ==============================================================================
-def get_maringa_time():
-    """Retorna o timestamp atual no fuso de Maringá."""
-    return datetime.now(FUSO_HORARIO)
-
-def get_tempo_real():
-    """
-    Calcula o tempo, data e saudação correta baseada em Maringá.
-    Retorna um dicionário com tudo pronto para uso.
-    """
-    agora = datetime.now(FUSO_HORARIO)
-    
-    # 1. Lógica da Saudação
-    hora = agora.hour
-    if 5 <= hora < 12:
-        saudacao = "Bom dia"
-    elif 12 <= hora < 18:
-        saudacao = "Boa tarde"
-    else:
-        saudacao = "Boa noite"
-
-    # 2. Mapas de Texto
-    dias_semana = {
-        0: "Segunda-feira", 1: "Terça-feira", 2: "Quarta-feira", 
-        3: "Quinta-feira", 4: "Sexta-feira", 5: "Sábado", 6: "Domingo"
-    }
-    meses = {
-        1: "Janeiro", 2: "Fevereiro", 3: "Março", 4: "Abril",
-        5: "Maio", 6: "Junho", 7: "Julho", 8: "Agosto",
-        9: "Setembro", 10: "Outubro", 11: "Novembro", 12: "Dezembro"
-    }
-
-    return {
-        "saudacao_real": saudacao,
-        "dia_semana": dias_semana[agora.weekday()],
-        "dia": agora.day,
-        "mes_nome": meses[agora.month],
-        "ano": agora.year,
-        "hora_fmt": agora.strftime('%H:%M')
-    }
 
 def db_save_message(phone_number, role, text):
     """Salva mensagens de forma atômica no MongoDB."""
@@ -376,5 +364,4 @@ def webhook():
         return jsonify({"status": "error"}), 200
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 8000)) 
-    app.run(host='0.0.0.0', port=port)
+    app.run(host='0.0.0.0', port=8000)
