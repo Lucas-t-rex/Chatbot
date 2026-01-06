@@ -126,7 +126,7 @@ def get_system_prompt():
 # Só inicia o modelo se tiver chave
 model = None
 if GEMINI_API_KEY:
-    model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=get_system_prompt)
+    model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=get_system_prompt())
 
 # ==============================================================================
 # 🗄️ MEMÓRIA & BUFFER (VOLÁTIL)
