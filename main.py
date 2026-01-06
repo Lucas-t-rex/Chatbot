@@ -126,7 +126,7 @@ def get_system_prompt():
 # Só inicia o modelo se tiver chave
 model = None
 if GEMINI_API_KEY:
-    model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=get_system_prompt)
+    model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=get_system_prompt())
 
 # ==============================================================================
 # 🗄️ MEMÓRIA & BUFFER (VOLÁTIL)
@@ -376,5 +376,5 @@ def webhook():
         return jsonify({"status": "error"}), 200
 
 if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 8080)) 
+    port = int(os.environ.get("PORT", 8000)) 
     app.run(host='0.0.0.0', port=port)
