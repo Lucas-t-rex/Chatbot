@@ -1,6 +1,7 @@
 import os
 import sys
 import pytz
+import json
 import time
 import requests
 import threading
@@ -234,6 +235,97 @@ def send_whatsapp_message(number, text, delay_extra=0):
         log(f"📤 [ENVIO] Enviado para {number}: {text[:30]}...")
     except Exception as e:
         log(f"❌ [ERRO] Falha envio: {e}")
+
+def executar_profiler_cliente(contact_id):
+    """
+    AGENTE PROFILER V3: Analisa o comportamento do cliente de autopeças.
+    Roda em segundo plano para não gerar latência no chat.
+    """
+    if conversation_collection is None or not GEMINI_API_KEY:
+        return
+
+    try:
+        # 1. Busca os dados atuais no MongoDB
+        doc = conversation_collection.find_one({'_id': contact_id})
+        if not doc: return
+
+        history_completo = doc.get('history', [])
+        perfil_atual = doc.get('client_profile', {})
+        
+        # --- LÓGICA DE CHECKPOINT (Economia de Tokens) ---
+        ultimo_ts_lido = doc.get('profiler_last_ts', "2000-01-01T00:00:00")
+        
+        # Filtra apenas mensagens que ainda não foram processadas pelo Profiler
+        mensagens_novas = [
+            m for m in history_completo 
+            if m.get('ts', '') > ultimo_ts_lido
+        ]
+
+        if not mensagens_novas:
+            return
+
+        novo_checkpoint_ts = mensagens_novas[-1].get('ts')
+
+        # 2. Prepara o texto para a IA analisar
+        txt_conversa_nova = ""
+        for m in mensagens_novas:
+            role = "Cliente" if m.get('role') == 'user' else "Vendedor(IA)"
+            texto = m.get('text', '')
+            # Ignora logs técnicos
+            if not texto.startswith("Chamando função") and "[HUMAN" not in texto:
+                txt_conversa_nova += f"- {role}: {texto}\n"
+        
+        if not txt_conversa_nova.strip():
+            return
+
+        # 3. Prompt Especializado para Autopeças (Diferente do Restaurante)
+        prompt_profiler = f"""
+        Você é um ANALISTA DE PERFIL de clientes
+        Sua missão é atualizar o "Dossiê do Cliente" com base nas novas mensagens.
+
+        PERFIL ATUAL: {json.dumps(perfil_atual, ensure_ascii=False)}
+        NOVAS MENSAGENS: {txt_conversa_nova}
+
+        CAMPOS PARA ATUALIZAR (JSON):
+        {{
+        "nome": "Nome do cliente ou empresa",
+        "frota_caminhoes": "Marcas mencionadas (Volvo, Scania, etc)",
+        "perfil_comportamental": "Ex: Decidido, busca preço, urgente, técnico",
+        "principais_pecas_procuradas": "Ex: Filtros, suspensão, elétrica",
+        "localidade": "Cidade ou região se mencionada",
+        "nivel_de_relacionamento": "Novo, recorrente, frotista",
+        "objecoes_comuns": "O que impede ele de fechar? (Frete, preço, prazo)",
+        "observacoes_importantes": "Detalhes únicos para o vendedor humano saber"
+        }}
+
+        REGRAS: 
+        - Retorne APENAS o JSON. 
+        - Não invente dados.
+        - Mantenha o que já existia se não houver informação nova.
+        """
+
+        # 4. Chamada ao Gemini (Configurado para JSON)
+        model_profiler = genai.GenerativeModel('gemini-2.0-flash') 
+        response = model_profiler.generate_content(prompt_profiler)
+        
+        # Limpeza simples para garantir que pegamos apenas o JSON (caso a IA mande ```json ...)
+        json_text = response.text.replace('```json', '').replace('```', '').strip()
+        novo_perfil_json = json.loads(json_text)
+
+        # 5. Atualização Atômica no MongoDB
+        conversation_collection.update_one(
+            {'_id': contact_id},
+            {
+                '$set': {
+                    'client_profile': novo_perfil_json,
+                    'profiler_last_ts': novo_checkpoint_ts
+                }
+            }
+        )
+        print(f"🕵️ [Profiler] Dossiê de {contact_id} atualizado com sucesso.")
+
+    except Exception as e:
+        print(f"⚠️ Erro no Agente Profiler: {e}")
 
 # ==============================================================================
 # 🧠 LÓGICA DE PROCESSAMENTO (THREAD)
