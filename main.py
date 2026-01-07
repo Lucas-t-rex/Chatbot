@@ -115,7 +115,7 @@ def get_system_prompt():
                     3. ANTI-REPETIÇÃO: Não fale o nome varias vezes na converssa, apenas em perguntas.
                     4. ANTI-VALIDAÇÃO: Não use validações ("Entendi", "Interessante", "Compreendo") o cliente nao precisa saber que voce entendeu.
                     4. NOME: Use no MÁXIMO 1 vez a cada 5 mensagens.
-                    5. EMOJIS: Máximo 1 a cada 3 mensagens inteiras. Use com moderação e sentido.
+                    5. NÃO EMOJIS: Nunca use emojis. Isso perde a humanização.
                     6. DIREÇÃO: Sempre termine com PERGUNTA ou CTA (exceto despedidas).
                     7. PING-PONG: Fale menos, ouça mais. Proibido perguntas duplas.
                         ESCUTA GENUÍNA: 
@@ -145,7 +145,9 @@ def get_system_prompt():
                     Despacho: Envio para todo Brasil, parcerias com transportadoras.
         FLUXO:
             REGRA:
-                Você pode converssar a vontade com o cliente e fazer amizade, 
+                Você pode converssar a vontade com o cliente e fazer amizade,
+                Demontre interesse genuino no cliente.
+                Trate ele como ele te trata mas sem má educação.
                 Sempre termine com uma pergunta.
 
 """
@@ -386,6 +388,8 @@ def processar_mensagem_ia(clean_number):
 
             # Persistência (Bot)
             db_save_message(clean_number, "model", full_bot_text.strip())
+
+            threading.Thread(target=executar_profiler_cliente, args=(clean_number,)).start()
 
     except Exception as e:
         log(f"❌ Erro Processamento: {e}")
