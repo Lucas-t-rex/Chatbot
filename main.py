@@ -8,7 +8,9 @@ import threading
 from datetime import datetime
 from pymongo import MongoClient
 import google.generativeai as genai
+from datetime import datetime, timedelta
 from flask import Flask, request, jsonify
+
 
 
 # ==============================================================================
@@ -26,6 +28,13 @@ DB_NAME = "chatgrupar_db"
 
 mongo_client = None
 conversation_collection = None
+
+# ==============================================================================
+# ⏱️ CONFIGURAÇÃO DE TEMPOS DE FOLLOW-UP (EM MINUTOS)
+# ==============================================================================
+TEMPO_FOLLOWUP_1 = 2     # 30 min sem resposta (Cobrança leve)
+TEMPO_FOLLOWUP_2 = 3    # 2 horas sem resposta (Oferta de ajuda/Estoque)
+TEMPO_FOLLOWUP_3 = 4  # 24 horas (Última tentativa / "Vou arquivar")
 
 try:
     if MONGO_URI:
@@ -172,12 +181,12 @@ app = Flask(__name__)
 # ==============================================================================
 
 def db_save_message(phone_number, role, text):
-    """Salva mensagens de forma atômica no MongoDB."""
+    """Salva mensagens e atualiza o status para 'andamento' (Vendas Ativas)."""
     if conversation_collection is None: return
     
     timestamp = get_maringa_time()
     msg_entry = {
-        "role": role, # 'user' ou 'model'
+        "role": role, 
         "text": text,
         "ts": timestamp.isoformat()
     }
@@ -186,7 +195,11 @@ def db_save_message(phone_number, role, text):
         {"_id": phone_number},
         {
             "$push": {"history": msg_entry},
-            "$set": {"last_interaction": timestamp},
+            "$set": {
+                "last_interaction": timestamp,
+                "status": "andamento",  # <--- NOVA LINHA: Força status ativo
+                "followup_stage": 0     # <--- NOVA LINHA: Reseta contador de follow-up
+            },
             "$setOnInsert": {"created_at": timestamp}
         },
         upsert=True
@@ -329,6 +342,155 @@ def executar_profiler_cliente(contact_id):
     except Exception as e:
         print(f"⚠️ Erro no Agente Profiler: {e}")
 
+def gerar_msg_followup_ia(contact_id, status_alvo, estagio_atual, nome_cliente):
+    """
+    Lê as últimas 15 mensagens e gera um texto persuasivo de Vendas de Peças Pesadas.
+    Focado EXCLUSIVAMENTE em recuperar conversas em ANDAMENTO.
+    """
+    if conversation_collection is None: return None
+
+    try:
+        # 1. Busca histórico recente (15 msgs)
+        doc = conversation_collection.find_one({'_id': contact_id}, {'history': {'$slice': -15}})
+        if not doc: return None
+        
+        historico = doc.get('history', [])
+        txt_historico = ""
+        for m in historico:
+            role = "Cliente" if m.get('role') == 'user' else "Vendedor"
+            txt = m.get('text', '').replace('\n', ' ')
+            # Ignora logs técnicos para não confundir a IA
+            if "Chamando função" not in txt and "[HUMAN" not in txt:
+                txt_historico += f"- {role}: {txt}\n"
+
+        # 2. Define a Instrução de Vendas baseada no Estágio
+        instrucao = ""
+        
+        # Só processa se for ANDAMENTO (Vendas Ativas)
+        if status_alvo == "andamento":
+            if estagio_atual == 0: # Vai para o 1 (Cobrança Leve - Amigo)
+                instrucao = f"O cliente parou de responder faz {TEMPO_FOLLOWUP_1} min. Mande uma mensagem curta e descontraída perguntando se ele conseguiu ver a cotação ou se está na correria da estrada. Tom de parceiro."
+            
+            elif estagio_atual == 1: # Vai para o 2 (Urgência de Estoque)
+                instrucao = "O cliente sumiu faz 2 horas. Diga que o estoque está girando rápido hoje e pergunte se ele quer que você já separe a peça pra garantir o preço/disponibilidade. Gere senso de urgência leve."
+            
+            elif estagio_atual == 2: # Vai para o 3 (Ultimato Educado)
+                instrucao = "Última tentativa de contato (24h depois). Diga que vai precisar liberar o pré-orçamento no sistema pra não prender o item no estoque, mas que você continua à disposição (QAP) se ele precisar depois."
+        
+        else:
+            return None # Se não for andamento, não faz nada
+
+        # 3. Monta o Prompt do "Vitão"
+        prompt = f"""
+        Você é o Vitão, vendedor experiente de peças de caminhão (Linha Pesada - Grupar).
+        Analise a conversa abaixo e gere uma mensagem de retomada (Follow-up) curta e direta.
+
+        HISTÓRICO DA NEGOCIAÇÃO:
+        {txt_historico}
+
+        SUA MISSÃO AGORA:
+        {instrucao}
+
+        REGRAS:
+        - Nome do cliente: {nome_cliente}
+        - Use gírias leves de oficina/caminhoneiro (ex: "QRA", "tapetão", "bruto", "na lida", "QAP").
+        - SEMPRE termine com uma pergunta para incentivar a resposta.
+        - Máximo 1 ou 2 frases curtas.
+        """
+
+        # 4. Gera
+        model_gen = genai.GenerativeModel('gemini-2.0-flash')
+        resp = model_gen.generate_content(prompt)
+        return resp.text.strip()
+
+    except Exception as e:
+        print(f"⚠️ Erro ao gerar follow-up IA: {e}")
+        return None
+    
+def sistema_followup_vendas():
+    """
+    Loop infinito que verifica os tempos e dispara os gatilhos de vendas.
+    (FOCADO APENAS EM RECUPERAR VENDAS EM ANDAMENTO)
+    """
+    print("🚚 [SISTEMA] Monitor de Vendas Iniciado (Follow-up Inteligente)...")
+    
+    while True:
+        try:
+            if conversation_collection is None:
+                time.sleep(60)
+                continue
+
+            agora = get_maringa_time()
+
+            # Definição das Regras de Negócio
+            # Apenas 3 estágios de cobrança para quem está "andamento"
+            regras = [
+                # Estágio 0 -> 1 (Cobrança Rápida - 30 min)
+                {"status": "andamento", "stage_atual": 0, "prox_stage": 1, "tempo_min": TEMPO_FOLLOWUP_1},
+                
+                # Estágio 1 -> 2 (Oferta de Estoque - 2 horas)
+                {"status": "andamento", "stage_atual": 1, "prox_stage": 2, "tempo_min": TEMPO_FOLLOWUP_2},
+                
+                # Estágio 2 -> 3 (Última Tentativa - 24 horas)
+                {"status": "andamento", "stage_atual": 2, "prox_stage": 3, "tempo_min": TEMPO_FOLLOWUP_3},
+            ]
+
+            for regra in regras:
+                # Busca clientes que encaixam na regra de tempo e status
+                filtro = {
+                    "status": regra["status"],
+                    "followup_stage": regra["stage_atual"],
+                    "last_interaction": {"$lt": agora - timedelta(minutes=regra["tempo_min"])},
+                    "intervention_active": {"$ne": True} # Não incomodar se estiver falando com humano
+                }
+
+                # Limita a 5 por vez para evitar bloqueio do WhatsApp
+                clientes_para_processar = list(conversation_collection.find(filtro).limit(5))
+
+                for cliente in clientes_para_processar:
+                    numero = cliente['_id']
+                    nome = cliente.get('client_profile', {}).get('nome', 'Parceiro')
+
+                    # Chama a IA para ler o histórico e criar a mensagem
+                    mensagem_ia = gerar_msg_followup_ia(
+                        contact_id=numero,
+                        status_alvo=regra["status"],
+                        estagio_atual=regra["stage_atual"],
+                        nome_cliente=nome
+                    )
+
+                    # Se a IA gerou uma mensagem válida, envia
+                    if mensagem_ia:
+                        log(f"🚚 [FOLLOW-UP] Enviando ({regra['status']} {regra['stage_atual']}->{regra['prox_stage']}) para {numero}")
+                        
+                        # Envia via Evolution API
+                        send_whatsapp_message(numero, mensagem_ia)
+                        
+                        # Atualiza o banco (Incrementa estágio)
+                        # IMPORTANTE: Não alteramos 'last_interaction' para o contador de tempo continuar valendo
+                        conversation_collection.update_one(
+                            {"_id": numero},
+                            {
+                                "$set": {"followup_stage": regra["prox_stage"]},
+                                "$push": {
+                                    "history": {
+                                        "role": "model",
+                                        "text": mensagem_ia,
+                                        "ts": get_maringa_time().isoformat(),
+                                        "meta": "followup_automatico"
+                                    }
+                                }
+                            }
+                        )
+                    # Pausa leve entre envios para segurança
+                    time.sleep(3) 
+
+        except Exception as e:
+            print(f"⚠️ Erro no Loop de Follow-up: {e}")
+        
+        # Verifica a cada 60 segundos
+        time.sleep(60)
+
 # ==============================================================================
 # 🧠 LÓGICA DE PROCESSAMENTO (THREAD)
 # ==============================================================================
@@ -458,6 +620,10 @@ def webhook():
     except Exception as e:
         log(f"❌ [ERRO GERAL] {e}")
         return jsonify({"status": "error"}), 200
+    
+thread_followup = threading.Thread(target=sistema_followup_vendas, daemon=True)
+thread_followup.start()
 
 if __name__ == '__main__':
+    print("🚚 Sistema de Vendas Grupar Iniciado...")
     app.run(host='0.0.0.0', port=8000)
