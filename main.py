@@ -294,29 +294,54 @@ def executar_profiler_cliente(contact_id):
             return
 
         # 3. Prompt Especializado para Autopeças (Diferente do Restaurante)
+        # 3. Prompt Especializado para Autopeças (ROBUSTO E COMPLETO)
         prompt_profiler = f"""
-        Você é um ANALISTA DE PERFIL de clientes
-        Sua missão é atualizar o "Dossiê do Cliente" com base nas novas mensagens.
+        Você é um ANALISTA DE INTELIGÊNCIA COMERCIAL especializado em Linha Pesada (Caminhões).
+        Sua missão é ler a conversa e ATUALIZAR o "Dossiê do Cliente" com precisão cirúrgica.
 
-        PERFIL ATUAL: {json.dumps(perfil_atual, ensure_ascii=False)}
-        NOVAS MENSAGENS: {txt_conversa_nova}
+        PERFIL JÁ CONSOLIDADO (dados existentes):
+        {json.dumps(perfil_atual, ensure_ascii=False)}
 
-        CAMPOS PARA ATUALIZAR (JSON):
+        NOVAS MENSAGENS (contexto recente):
+        {txt_conversa_nova}
+
+        === CAMPOS DO DOSSIÊ (ESTRUTURA FIXA) ===
+        Atualize APENAS se houver evidência clara nas novas mensagens ou mantenha o anterior.
+
         {{
-        "nome": "Nome do cliente ou empresa",
-        "frota_caminhoes": "Marcas mencionadas (Volvo, Scania, etc)",
-        "perfil_comportamental": "Ex: Decidido, busca preço, urgente, técnico",
-        "principais_pecas_procuradas": "Ex: Filtros, suspensão, elétrica",
-        "localidade": "Cidade ou região se mencionada",
-        "nivel_de_relacionamento": "Novo, recorrente, frotista",
-        "objecoes_comuns": "O que impede ele de fechar? (Frete, preço, prazo)",
-        "observacoes_importantes": "Detalhes únicos para o vendedor humano saber"
+        "nome": "",
+        "cargo_ocupacao": "Ex: Dono de Frota, Motorista Autônomo, Comprador, Mecânico",
+        "idade_faixa_estimada": "",
+        "estrutura_familiar_pessoal": "Ex: Tem filhos, casado, trabalha com o pai",
+        
+        "frota_marcas": "Ex: Volvo, Scania, Mercedes, DAF, Iveco, VW",
+        "frota_modelos": "Ex: FH 540, R440, 113, Axor, Constellation, Meteor",
+        "frota_porte": "Classifique: 1 (Autônomo), 2-5 (Pequena), 6-10 (Média), 11+ (Grande)",
+        "frota_composicao": "CRÍTICO: Liste quantidade e modelo. Ex: '10 Scania 124, 1 Volvo FH, 5 Mercedes Atego'",
+        
+        "pecas_mais_procuradas": "Histórico do que ele pede (Ex: Filtros, Kit Embreagem, Suspensão)",
+        "intencao_atual": "Ex: Cotação urgente, Apenas especulando preço, Compra programada",
+        
+        "perfil_comportamental": "Ex: Técnico, Apressado, Pechincheiro, Parceiro, Desconfiado",
+        "estilo_comunicacao_vocabulario": "Gírias usadas (QRA, QAP, Tapetão), Formal ou Simples",
+        "humor_gatilhos_riso": "O que fez ele rir ou descontrair na conversa",
+        
+        "principal_dor": "Ex: Preço alto, Peça parada, Demora na entrega, Qualidade ruim anterior",
+        "principais_desejos": "Ex: Agilidade, Originalidade, Prazo de pagamento",
+        "medos_receios": "Ex: Peça paralela quebrar, Caminhão ficar parado na estrada",
+        "agrados_preferencias": "O que agrada ele? (Ex: Frete grátis, Brinde, Desconto à vista)",
+        
+        "principais_objecoes": "O que ele usa para dizer não? (Ex: 'Achei mais barato', 'Vou ver com sócio')",
+        "gatilhos_de_venda_identificados": "O que faz ele fechar? (Ex: Urgência, Marca Premium, Preço)",
+        
+        "observacoes_gerais_vendas": "Resumo estratégico para o vendedor humano (Vitão) ler rápido"
         }}
 
-        REGRAS: 
-        - Retorne APENAS o JSON. 
-        - Não invente dados.
-        - Mantenha o que já existia se não houver informação nova.
+        === REGRAS DE ANÁLISE ===
+        1. NÃO INVENTE DADOS. Se não souber, mantenha o valor atual ou string vazia.
+        2. FOCO NA FROTA: Se ele mencionar "meu FH" ou "tenho 3 Scania", capture isso imediatamente.
+        3. PERFIL: Diferencie o "Dono" (paga a conta) do "Motorista" (apenas dirige/cotiza).
+        4. HIGIENE: Retorne APENAS o JSON válido. Sem Markdown (```json).
         """
 
         # 4. Chamada ao Gemini (Configurado para JSON)
