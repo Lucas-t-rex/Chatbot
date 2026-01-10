@@ -3378,18 +3378,6 @@ processed_messages = set()
 def receive_webhook():
     data = request.json 
 
-    # ======================================================================
-    # 🕵️ LOG ESPIÃO: Mostra o JSON completo no terminal para acharmos o erro
-    # ======================================================================
-    if data:
-        try:
-            print("\n" + "="*60)
-            print("📦 [DEBUG RAW JSON] CHEGOU DO WHATSAPP:")
-            print(json.dumps(data, indent=2, ensure_ascii=False))
-            print("="*60 + "\n")
-        except:
-            print(f"📦 [DEBUG RAW] (Erro ao formatar JSON): {data}")
-    # ======================================================================
 
     event_type = data.get('event')
     if event_type and event_type != 'messages.upsert':
@@ -3903,7 +3891,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                 {'_id': clean_number},
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
-            
+
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
     print("    CHATBOT WHATSAPP COM IA INICIADO COM AGENDA)")
