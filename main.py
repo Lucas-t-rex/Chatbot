@@ -209,32 +209,42 @@ app = Flask(__name__)
 # 🛠️ FUNÇÕES AUXILIARES
 # ==============================================================================
 
-def transcrever_audio_gemini(caminho_do_audio):
-    """Envia áudio para o Gemini e retorna texto."""
+def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
+    """Envia áudio para o Gemini e retorna texto (Aceita contact_id para não quebrar)."""
     if not GEMINI_API_KEY:
         print("❌ Erro: Sem chave Gemini para áudio.")
         return "[Erro: Sem chave de IA]"
 
     try:
-        # 1. Upload do arquivo
+        # TENTATIVA 1
         audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
-        
-        # 2. Modelo Flash (Mais rápido e barato para áudio)
         model_transcritor = genai.GenerativeModel('gemini-2.0-flash')
         
-        # 3. Solicita transcrição
         response = model_transcritor.generate_content([
             "Transcreva este áudio exatamente como foi falado. Apenas o texto.", 
             audio_file
         ])
         
-        # 4. Limpeza (Deleta arquivo da nuvem do Google)
-        genai.delete_file(audio_file.name)
+        try:
+            genai.delete_file(audio_file.name)
+        except:
+            pass
         
         return response.text.strip()
+
     except Exception as e:
-        print(f"❌ Erro na transcrição: {e}")
-        return "[Áudio inaudível ou erro técnico]"
+        print(f"❌ Erro na transcrição 1: {e}")
+        # TENTATIVA 2 (Retry de segurança)
+        try:
+            time.sleep(2)
+            modelo_retry = genai.GenerativeModel('gemini-2.0-flash')
+            audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
+            response_retry = modelo_retry.generate_content(["Transcreva.", audio_file_retry])
+            try: genai.delete_file(audio_file_retry.name) 
+            except: pass
+            return response_retry.text.strip()
+        except:
+            return "[Erro técnico ao ler áudio]"
 
 def db_save_message(phone_number, role, text):
     """Salva mensagens e atualiza o status para 'andamento' (Vendas Ativas)."""
