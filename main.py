@@ -3,6 +3,7 @@ import sys
 import pytz
 import json
 import time
+import base64
 import requests
 import threading
 from datetime import datetime
@@ -114,7 +115,7 @@ def get_system_prompt():
                 Mesmo que o usuario erre (diga Bom dia à noite), ignore o erro dele e responda naturalmente usando APENAS "{tempo['saudacao_real']}".
         PERSONALIDADE: 
             REGRA:
-                ROLE: Atendente, Vendedor e Especialista em peças de caminhão linha pesada. Você trabalha na empresa citada abaixo!
+                ROLE: Consultor Comercial (SDR) e Especialista em peças de caminhão linha pesada. Você atua na prospecção ativa: sua missão é puxar assunto, descobrir o potencial da frota do cliente e criar uma abertura para negócios, e não apenas tirar pedidos. Atendente e Vendedor.  Você trabalha na empresa citada abaixo!
                 NOME: Vitor (apelido Vitão). (Você deve encarnar um humano, nunca assuma que é um robô/IA).
                 TOM: Humano, Educado, Profissional, Empático. Você deve tratar a pessoa como alguém da família — de forma acolhedora, próxima e natural, mas sem ser forçado. 
                 VOCABULARIO: Usa o minimo do palavras possiveis pra se expressar. Usa risadas como kkkkk. Comprimenta como , "eai", "fla comigo", "tudo certo?" Usa abreviações de internet, como "vc", "qlq", "blz', "vlw".
@@ -128,14 +129,18 @@ def get_system_prompt():
                     6. DIREÇÃO: Sempre termine com PERGUNTA ou CTA (exceto despedidas).
                     7. PING-PONG: Fale menos, ouça mais. Proibido perguntas duplas.
                         ESCUTA GENUÍNA: 
-                            Preste atenção no que o cliente disse, sempre tenha um interesse genuino sobre ele. 
-                            Busque fazer amizade.
-                            Não seja chato.
-                        DIREÇÃO DA CONVERSA: 
-                            Não explique "para entender suas necessidades". O cliente não quer ser analisado, ele quer ser ajudado.
-                            Faça UMA pergunta, espere a resposta, COMENTE a resposta dele com interesse genuíno, e só depois avance.
-                            Não tenha pressa. Se o cliente quiser conversar, converse.
-                            Não se explique ou explique uma ação ou pensamento pro cliente, você é humano. 
+                            - Preste atenção no que o cliente disse, sempre tenha um interesse genuino sobre ele. 
+                            - Busque fazer amizade.
+                            - Não seja chato.
+                        DIREÇÃO DA CONVERSA:
+                            - NÃO SEJA UM ROBÔ DE SUPORTE. Você não está lá para "resolver um ticket", está lá para fazer um parceiro comercial.
+                            - Se o cliente contar uma história, comente a história. Se ele reclamar do tempo, fale do tempo. 
+                            - Só ofereça peças se ele pedir peças. Enquanto ele não pedir, foque em descobrir os [DADOS A DESCOBRIR] citados acima.
+                            - Use gatilhos mentais de familiaridade. (Ex: "Caraca, conheço a G10, gigante hein! Deve dar um trabalho manter a manutenção em dia, é só você que cuida das compras?", "Fh é um caminhão bom de mais!", "ah que legal eu tbm gosto!".)
+                            - Não explique "para entender suas necessidades". O cliente não quer ser analisado, ele quer ser ajudado.
+                            - Faça UMA pergunta, espere a resposta, COMENTE a resposta dele com interesse genuíno, e só depois avance.
+                            - Não tenha pressa. Se o cliente quiser conversar, converse.
+                            - Não se explique ou explique uma ação ou pensamento pro cliente, você é humano. 
         EMPRESA: 
             REGRA: Nunca invente informações desta empresa, se alguem perguntar algo sobre a empresa e não estiver aqui em baixo diga que não sabe.
                 Informações:
@@ -152,12 +157,25 @@ def get_system_prompt():
                     Seguimento: Acabamentos, filtros, eletrica, suspenção e acessorios.
                     Formas de pagamento: Pix, Boleto, Dinheiro, Cartão.
                     Despacho: Envio para todo Brasil, parcerias com transportadoras.
+                Produtos:
+                    Acabamentos: Partes de funelaria para cabine do caminhão, como grades frontais, coberturas do parachoque, estribos, paralamas, tapa-sol, acabamentos de funalaria externos.
+                    Filtros: Marca hengts para varios caminhões. (engrandeça a marca é a melhor do mercado, se igualando com as originais)
+                    Eletrica: Parte de Iluminação, farois, lanternas, lanternas laterias, botões de vidro.
+                    Suspenção: Tanto para cavalos quanto para carretas(apenas Randon, Noma, Facchini, Librelato).
+                    Acessorios: Em geral. 
         FLUXO:
             REGRA:
                 Você pode converssar a vontade com o cliente e fazer amizade,
                 Demontre interesse genuino no cliente.
                 Trate ele como ele te trata mas sem má educação.
                 Sempre termine com uma pergunta.
+            OBJETIVOS (SDR INVISÍVEL):
+            REGRA DE OURO: Você está prospectando. Sua meta é extrair informações sem parecer um inquérito policial. Use a técnica da "Curiosidade Ingênua".
+            DADOS A DESCOBRIR (Misture essas perguntas no meio da conversa casual):
+                1. QUEM É: Pergunte o nome, qual cargo ele tem na empresa, se é comprador, dono, motorista.
+                2. SEGMENTO: Trabalha com linha pesada mesmo?
+                3. FROTA: Qual o tamanho da frota? ("e quantos caminhões vocês tem na frota hoje?"), se ele disser faça um comentario sobre impressionado, ("eu nao tenho nenhum ja sou feliz, imagina quem tem esse tanto.kkkk)
+                4. MARCAS: Quais as marcas da frota? (Ex: "E qual a marca da frota, pergunto isso pra saber melhor o que posso te oferecer!")
 
 """
     return prompt
@@ -179,6 +197,33 @@ app = Flask(__name__)
 # ==============================================================================
 # 🛠️ FUNÇÕES AUXILIARES
 # ==============================================================================
+
+def transcrever_audio_gemini(caminho_do_audio):
+    """Envia áudio para o Gemini e retorna texto."""
+    if not GEMINI_API_KEY:
+        print("❌ Erro: Sem chave Gemini para áudio.")
+        return "[Erro: Sem chave de IA]"
+
+    try:
+        # 1. Upload do arquivo
+        audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
+        
+        # 2. Modelo Flash (Mais rápido e barato para áudio)
+        model_transcritor = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # 3. Solicita transcrição
+        response = model_transcritor.generate_content([
+            "Transcreva este áudio exatamente como foi falado. Apenas o texto.", 
+            audio_file
+        ])
+        
+        # 4. Limpeza (Deleta arquivo da nuvem do Google)
+        genai.delete_file(audio_file.name)
+        
+        return response.text.strip()
+    except Exception as e:
+        print(f"❌ Erro na transcrição: {e}")
+        return "[Áudio inaudível ou erro técnico]"
 
 def db_save_message(phone_number, role, text):
     """Salva mensagens e atualiza o status para 'andamento' (Vendas Ativas)."""
@@ -394,13 +439,13 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio_atual, nome_cliente):
         # Só processa se for ANDAMENTO (Vendas Ativas)
         if status_alvo == "andamento":
             if estagio_atual == 0: # Vai para o 1 (Cobrança Leve - Amigo)
-                instrucao = f"O cliente parou de responder faz {TEMPO_FOLLOWUP_1} min. Mande uma mensagem curta e descontraída perguntando se ele conseguiu ver a cotação ou se está na correria da estrada. Tom de parceiro."
+                instrucao = f"O cliente parou de responder faz {TEMPO_FOLLOWUP_1} min. Mande uma mensagem dando uma cutucada curta e descontraída. Tom de parceiro. EX: ai, é só voce me falar (sobre assunto que estava falando) pra (resolver assunto que estava converssando)"
             
             elif estagio_atual == 1: # Vai para o 2 (Urgência de Estoque)
-                instrucao = "O cliente sumiu faz 2 horas. Diga que o estoque está girando rápido hoje e pergunte se ele quer que você já separe a peça pra garantir o preço/disponibilidade. Gere senso de urgência leve."
+                instrucao = "O cliente sumiu faz 2 horas. Mande uma mensagem empática sobre a correria do dia a dia. Comente: 'Sei que você deve estar a mil aí, mas queria muito agilizar isso pra você testar nossa entrega/agilidade'. Pergunte de forma leve: 'Conseguimos retomar ou prefere que eu te chame mais tarde?'"
             
             elif estagio_atual == 2: # Vai para o 3 (Ultimato Educado)
-                instrucao = "Última tentativa de contato (24h depois). Diga que vai precisar liberar o pré-orçamento no sistema pra não prender o item no estoque, mas que você continua à disposição (QAP) se ele precisar depois."
+                instrucao = "Faz 24h sem resposta. Não cobre a venda. Use a técnica do 'Desapego Construtivo'. Diga algo como: 'não sei se seus fornecedores atuais já te atendem 100%, mas te garanto que ter a gente na manga vai te salvar uma grana ou tempo uma hora dessas'. Encerre deixando a porta aberta: 'Vou deixar você tranquilo aí, mas salva meu número. Precisou de cotação pra comparar ou peça difícil, é só dar um grito. Tmj!'"
         
         else:
             return None # Se não for andamento, não faz nada
@@ -418,7 +463,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio_atual, nome_cliente):
 
         REGRAS:
         - Nome do cliente: {nome_cliente}
-        - Use gírias leves de oficina/caminhoneiro (ex: "QRA", "tapetão", "bruto", "na lida", "QAP").
+        - Seja educado.
         - SEMPRE termine com uma pergunta para incentivar a resposta.
         - Máximo 1 ou 2 frases curtas.
         """
@@ -613,12 +658,56 @@ def webhook():
         remote_jid = key.get('remoteJid')
         clean_number = remote_jid.split('@')[0]
         
-        # Extração de Texto
-        user_msg = msg_data.get('message', {}).get('conversation') or \
-                   msg_data.get('message', {}).get('extendedTextMessage', {}).get('text')
+        # ======================================================================
+        # 🎤 TRATAMENTO DE MÍDIA (ÁUDIO & TEXTO)
+        # ======================================================================
+        message_content = msg_data.get('message', {})
+        user_msg = None
 
+        # 1. Verifica se é Áudio
+        if message_content.get('audioMessage'):
+            try:
+                print(f"🎤 Áudio recebido de {clean_number}. Processando...")
+                
+                # Pega o base64 (conteúdo bruto do áudio)
+                audio_base64 = message_content['audioMessage'].get('mediaKey') # Fallback
+                if 'mediaKey' in message_content['audioMessage']:
+                     # Nota: A Evolution geralmente manda o base64 no campo 'base64' se configurado, 
+                     # ou precisamos baixar. Assumindo que sua Evolution manda 'base64' no JSON global ou dentro da msg.
+                     # Se a Evolution não mandar base64 direto, use 'url'. 
+                     # Abaixo segue o padrão para base64 direto se disponível:
+                     audio_base64 = msg_data.get('base64') or message_content.get('audioMessage', {}).get('base64')
+
+                # Se não tiver base64, tenta pegar texto normal (fallback)
+                if not audio_base64:
+                     user_msg = "[Áudio recebido, mas sem dados para transcrever]"
+                else:
+                    # Salva arquivo temporário
+                    audio_data = base64.b64decode(audio_base64)
+                    temp_path = f"/tmp/audio_{clean_number}_{int(time.time())}.ogg"
+                    
+                    with open(temp_path, 'wb') as f:
+                        f.write(audio_data)
+                    
+                    # Transcreve
+                    transcricao = transcrever_audio_gemini(temp_path)
+                    user_msg = f"[Cliente enviou Áudio]: {transcricao}"
+                    
+                    # Remove arquivo temp
+                    os.remove(temp_path)
+
+            except Exception as e:
+                print(f"❌ Falha ao processar áudio: {e}")
+                user_msg = "[Erro ao ler áudio]"
+
+        # 2. Se não for áudio, tenta Texto Normal
         if not user_msg:
-            return jsonify({"status": "no_text"}), 200
+            user_msg = message_content.get('conversation') or \
+                       message_content.get('extendedTextMessage', {}).get('text')
+
+        # 3. Se ainda estiver vazio, ignora
+        if not user_msg:
+            return jsonify({"status": "ignored_no_text"}), 200
 
         log(f"📩 [BUFFER] Recebido de {clean_number}: {user_msg}")
 
