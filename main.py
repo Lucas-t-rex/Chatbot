@@ -102,8 +102,9 @@ def get_tempo_real():
         "hora_fmt": agora.strftime('%H:%M')
     }
 
-def get_system_prompt():
-    tempo = get_tempo_real() 
+def get_system_prompt(client_profile={}):
+    tempo = get_tempo_real()
+    profile_txt = json.dumps(client_profile, ensure_ascii=False, indent=2)
 
     prompt = f"""
         CONFIGURAÇÕES:
@@ -113,6 +114,15 @@ def get_system_prompt():
                 {tempo['dia_semana']}, {tempo['dia']} de {tempo['mes_nome']} às {tempo['hora_fmt']}.
                 SAUDAÇÃO "{tempo['saudacao_real']}".
                 Mesmo que o usuario erre (diga Bom dia à noite), ignore o erro dele e responda naturalmente usando APENAS "{tempo['saudacao_real']}".
+            [MEMÓRIA]
+            Abaixo estão os dados que JÁ SABEMOS sobre este cliente (vêm do Banco de Dados).
+            DADOS ATUAIS: 
+            {profile_txt}
+            DIRETRIZ DE USO DA MEMÓRIA:
+            1. LEITURA OBRIGATÓRIA: Antes de responder, verifique os dados acima.
+            2. NÃO SEJA REPETITIVO: Se o campo (nome, frota_tamanho, marcas, cargo) já estiver preenchido, JAMAIS pergunte novamente. Em vez disso, use a informação para criar vínculo (Ex: se a marca for Scania, diga "E as máquinas da Scania, rodando muito?").
+            3. PREENCHIMENTO DE LACUNAS: Se APENAS exclusivamente os campos nome, frota , e cargo estiverem VAZIOS ou NULOS, seu objetivo oculto é descobrir essas informações, uma de cada vez, de forma natural. O restante dos campos não precisa tentar preencher, isso acontecera automaticamente.
+
         PERSONALIDADE: 
             REGRA:
                 ROLE: Consultor Comercial (SDR) e Especialista em peças de caminhão linha pesada. Você atua na prospecção ativa: sua missão é puxar assunto, descobrir o potencial da frota do cliente e criar uma abertura para negócios, e não apenas tirar pedidos. Atendente e Vendedor.  Você trabalha na empresa citada abaixo!
@@ -582,8 +592,9 @@ def processar_mensagem_ia(clean_number):
         db_save_message(clean_number, "user", full_user_msg)
 
         history_context = db_load_history(clean_number, limit=25)
-        
-        prompt_completo = get_system_prompt()
+        doc = conversation_collection.find_one({"_id": clean_number})
+        perfil_cliente = doc.get('client_profile', {}) if doc else {}
+        prompt_completo = get_system_prompt(perfil_cliente)
 
         current_model = genai.GenerativeModel('gemini-2.0-flash', tools=tools, system_instruction=prompt_completo)
         
