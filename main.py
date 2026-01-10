@@ -210,20 +210,35 @@ app = Flask(__name__)
 # ==============================================================================
 
 def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
+    """
+    Transcreve áudio usando a IA.
+    Inclui: Proteção contra arquivo corrompido e Retry automático.
+    (Sem contagem de tokens).
+    """
     if not GEMINI_API_KEY:
         print("❌ Erro: API Key não definida para transcrição.")
-        return None
+        return "[Erro: Sem chave de IA]"
+
+    # 1. PROTEÇÃO CONTRA O ERRO 400 (Arquivo Vazio/Corrompido)
+    try:
+        tamanho = os.path.getsize(caminho_do_audio)
+        if tamanho < 100: # Se for menor que 100 bytes, não é áudio, é erro.
+            print(f"⚠️ Arquivo de áudio muito pequeno ({tamanho} bytes). Ignorando envio.")
+            return "[Áudio vazio ou falha no download]"
+    except:
+        pass
 
     print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição...")
 
     try:
+        # TENTATIVA 1
         audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
         modelo_transcritor = genai.GenerativeModel('gemini-2.0-flash') 
         prompt_transcricao = "Transcreva este áudio exatamente como foi falado. Apenas o texto, sem comentários."
         
         response = modelo_transcritor.generate_content([prompt_transcricao, audio_file])
         
-
+        # Limpeza
         try:
             genai.delete_file(audio_file.name)
         except:
@@ -238,7 +253,9 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
             return "[Áudio sem fala ou inaudível]"
 
     except Exception as e:
-        print(f"❌ Erro ao transcrever áudio: {e}")
+        print(f"❌ Erro ao transcrever áudio (Tentativa 1): {e}")
+        
+        # TENTATIVA 2 (Retry)
         try:
             print("🔄 Tentando transcrição novamente (Retry)...")
             time.sleep(2)
@@ -246,14 +263,16 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
             audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
             response_retry = modelo_retry.generate_content(["Transcreva o áudio.", audio_file_retry])
 
-
-            genai.delete_file(audio_file_retry.name)
+            try:
+                genai.delete_file(audio_file_retry.name)
+            except:
+                pass
+            
             return response_retry.text.strip()
         except Exception as e2:
              print(f"❌ Falha total na transcrição: {e2}")
              return "[Erro ao processar áudio]"
         
-
 def db_save_message(phone_number, role, text):
     """Salva mensagens e atualiza o status para 'andamento' (Vendas Ativas)."""
     if conversation_collection is None: return
