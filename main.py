@@ -3606,7 +3606,16 @@ def handle_responsible_command(message_content, responsible_number):
     return True
 
 
-def process_message_logic(message_data, buffered_message_text=None):
+def process_message_logic(message_data_or_full_json, buffered_message_text=None):
+    # --- [1] PREPARAÇÃO E NORMALIZAÇÃO DOS DADOS ---
+    # Garante que temos acesso a tudo, independente se veio o JSON puro ou só o 'data'
+    if 'data' in message_data_or_full_json:
+        full_json = message_data_or_full_json
+        message_data = message_data_or_full_json.get('data', {})
+    else:
+        full_json = message_data_or_full_json # Fallback
+        message_data = message_data_or_full_json
+
     lock_acquired = False
     clean_number = None
     
@@ -3621,46 +3630,77 @@ def process_message_logic(message_data, buffered_message_text=None):
         key_info = message_data.get('key', {})
         
         # ==============================================================================
-        # 🕵️‍♂️ SHERLOCK HOLMES DOS NÚMEROS (A Busca pelo 55...)
+        # 🕵️‍♂️ MAPEAMENTO DE LID (SOLUÇÃO DO BUG "RAFFA")
         # ==============================================================================
-        # 1. Tenta o senderPn (O número real, vindo do WhatsApp)
-        sender_number_full = key_info.get('senderPn')
         
-        # 2. SE FALHAR: Tenta o campo 'sender' (A Evolution costuma mandar o 55 aqui, mesmo se a key vier errada)
-        if not sender_number_full:
-            sender_number_full = message_data.get('sender')
-
-        # 3. SE FALHAR: Tenta participant (Usado em grupos/iOS)
-        if not sender_number_full:
-            sender_number_full = key_info.get('participant')
-
-        # 4. ÚLTIMO RECURSO: remoteJid (É aqui que mora o perigo do ID 71..., por isso deixamos por último)
-        if not sender_number_full:
-            sender_number_full = key_info.get('remoteJid')
-
-        # Se não achou nada ou é grupo, encerra.
-        if not sender_number_full or sender_number_full.endswith('@g.us'): return
+        # 1. Pega o ID que chegou (pode ser o LID 71... ou o número 55...)
+        incoming_jid = key_info.get('remoteJid', '')
         
-        # Limpa o número (Remove @s.whatsapp.net e :device_id se houver)
-        clean_number = sender_number_full.split('@')[0].split(':')[0]
-
-        # 🚨 VACINA ANTI-LID (A MUDANÇA CRÍTICA) 🚨
-        # Se o número começar com '7' E for muito longo (JIDs reais do BR têm 12 ou 13 dígitos),
-        # significa que é um ID Fantasma do WhatsApp. NÓS RECUSAMOS PROCESSAR.
-        if clean_number.startswith('7') and len(clean_number) > 14:
-            print(f"🚫 [Anti-Bug] ID Fantasma (LID) detectado: {clean_number}. Mensagem ignorada para proteger o banco.")
-            return
+        # 2. Tenta pegar o Número Real Explícito (A Verdade Absoluta)
+        sender_pn = key_info.get('senderPn') 
         
-        # Se passou daqui, o clean_number é confiável (Provavelmente 55...)
+        # Fallback: Se não veio no 'key', tenta na raiz (algumas versões da Evolution mandam aqui)
+        if not sender_pn:
+            sender_pn = full_json.get('sender')
+
+        real_number_clean = None
+        
+        # Define se é um ID "Louco" (LID do iOS/Web que começa com 7 e é longo)
+        is_lid = incoming_jid.endswith('@lid') or (incoming_jid.startswith('7') and len(incoming_jid) > 15)
+
+        # ACESSO AO BANCO DE MAPEAMENTO (Cria/Usa a coleção auxiliar)
+        # Nota: client_conversas e DB_NAME são suas variáveis globais
+        db_lids = client_conversas[DB_NAME]['lid_mappings']
+
+        # --- CENÁRIO A: Veio o Número Real (Momento de Aprender) ---
+        if sender_pn and '@' in sender_pn:
+            real_number_clean = sender_pn.split('@')[0]
+            
+            # Se recebemos o número real E o ID veio estranho (LID), SALVAMOS O MAPA!
+            if is_lid:
+                try:
+                    db_lids.update_one(
+                        {'_id': incoming_jid}, 
+                        {'$set': {'real_number': real_number_clean, 'last_seen': datetime.now()}},
+                        upsert=True
+                    )
+                    # print(f"🔗 [LID MAP] Vínculo salvo/atualizado: {incoming_jid} -> {real_number_clean}")
+                except Exception as e:
+                    print(f"⚠️ Erro ao salvar LID no banco: {e}")
+
+        # --- CENÁRIO B: NÃO veio o Número Real (O caso do erro "Raffael") ---
+        elif is_lid:
+            print(f"🔍 [LID MAP] Recebi ID Fantasma sem senderPn: {incoming_jid}. Buscando dono no banco...")
+            mapping = db_lids.find_one({'_id': incoming_jid})
+            
+            if mapping:
+                real_number_clean = mapping.get('real_number')
+                print(f"✅ [LID MAP] Dono encontrado: É o {real_number_clean}!")
+            else:
+                print(f"❌ [LID MAP] ERRO CRÍTICO: Não sei quem é o LID {incoming_jid}. O usuário nunca mandou mensagem com senderPn antes.")
+                return # Aborta, pois não sabemos pra quem responder
+
+        # --- CENÁRIO C: Mensagem normal (remoteJid já é o número, comum em Android) ---
+        elif incoming_jid and '@s.whatsapp.net' in incoming_jid:
+             real_number_clean = incoming_jid.split('@')[0]
+
+        # --- VALIDAÇÃO FINAL DO NÚMERO ---
+        if not real_number_clean:
+            # Se chegou aqui e ainda é None, é lixo, status ou grupo irrelevante
+            return 
+
+        # Agora a variável 'clean_number' tem o 55... CORRETO e seguro
+        clean_number = real_number_clean
+        sender_number_full = f"{clean_number}@s.whatsapp.net"
+        
         sender_name_from_wpp = message_data.get('pushName') or 'Cliente'
+        
         # ==============================================================================
-
-        # ==============================================================================
-        # 🛡️ LÓGICA DE "SALA DE ESPERA" (Atomicidade e Lock)
+        # 🛡️ LÓGICA DE "SALA DE ESPERA" (Atomicidade e Lock) - DAQUI PRA BAIXO É IGUAL
         # ==============================================================================
         now = datetime.now()
 
-        # 1. Garante que o cliente existe no banco (Agora com o ID CORRETO 55...)
+        # 1. Garante que o cliente existe no banco (Com o ID 55... Correto)
         conversation_collection.update_one(
             {'_id': clean_number},
             {'$setOnInsert': {'created_at': now, 'history': []}},
@@ -3684,7 +3724,8 @@ def process_message_logic(message_data, buffered_message_text=None):
                 if buffered_message_text not in message_buffer[clean_number]:
                     message_buffer[clean_number].insert(0, buffered_message_text)
             
-            timer = threading.Timer(4.0, _trigger_ai_processing, args=[clean_number, message_data])
+            # Passamos o full_json para garantir que o retry tenha os dados da raiz
+            timer = threading.Timer(4.0, _trigger_ai_processing, args=[clean_number, full_json])
             message_timers[clean_number] = timer
             timer.start()
             return 
@@ -3862,7 +3903,7 @@ def process_message_logic(message_data, buffered_message_text=None):
                 {'_id': clean_number},
                 {'$unset': {'processing': "", 'processing_started_at': ""}}
             )
-
+            
 if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
     print("\n=============================================")
     print("    CHATBOT WHATSAPP COM IA INICIADO COM AGENDA)")
