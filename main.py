@@ -165,6 +165,7 @@ def get_system_prompt():
                     Acessorios: Em geral. 
         FLUXO:
             REGRA:
+                Saber o nome do cliente.
                 Você pode converssar a vontade com o cliente e fazer amizade,
                 Demontre interesse genuino no cliente.
                 Trate ele como ele te trata mas sem má educação.
@@ -176,7 +177,7 @@ def get_system_prompt():
                 2. SEGMENTO: Trabalha com linha pesada mesmo?
                 3. FROTA: Qual o tamanho da frota? ("e quantos caminhões vocês tem na frota hoje?"), se ele disser faça um comentario sobre impressionado, ("eu nao tenho nenhum ja sou feliz, imagina quem tem esse tanto.kkkk)
                 4. MARCAS: Quais as marcas da frota? (Ex: "E qual a marca da frota, pergunto isso pra saber melhor o que posso te oferecer!")
-
+                5. FINALIZANDO: Voce já pegou todas as informações da Sdr, Diga de maneira educada que vai passar pra um vendedor atender ele, e agradeçe, diga que se todas as pessoas fosse assim como ele, o trabalho seria mais facil.
 """
     return prompt
 
@@ -357,27 +358,27 @@ def executar_profiler_cliente(contact_id):
         "nome": "",
         "cargo_ocupacao": "Ex: Dono de Frota, Motorista Autônomo, Comprador, Mecânico",
         "idade_faixa_estimada": "",
-        "estrutura_familiar_pessoal": "Ex: Tem filhos, casado, trabalha com o pai",
+        "estrutura_familiar_pessoal": "",
         
         "frota_marcas": "Ex: Volvo, Scania, Mercedes, DAF, Iveco, VW",
         "frota_modelos": "Ex: FH 540, R440, 113, Axor, Constellation, Meteor",
         "frota_porte": "Classifique: 1 (Autônomo), 2-5 (Pequena), 6-10 (Média), 11+ (Grande)",
         "frota_composicao": "CRÍTICO: Liste quantidade e modelo. Ex: '10 Scania 124, 1 Volvo FH, 5 Mercedes Atego'",
         
-        "pecas_mais_procuradas": "Histórico do que ele pede (Ex: Filtros, Kit Embreagem, Suspensão)",
-        "intencao_atual": "Ex: Cotação urgente, Apenas especulando preço, Compra programada",
+        "pecas_mais_procuradas": "",
+        "intencao_atual": "",
         
-        "perfil_comportamental": "Ex: Técnico, Apressado, Pechincheiro, Parceiro, Desconfiado",
-        "estilo_comunicacao_vocabulario": "Gírias usadas (QRA, QAP, Tapetão), Formal ou Simples",
+        "perfil_comportamental": "",
+        "estilo_comunicacao_vocabulario": "",
         "humor_gatilhos_riso": "O que fez ele rir ou descontrair na conversa",
         
         "principal_dor": "Ex: Preço alto, Peça parada, Demora na entrega, Qualidade ruim anterior",
-        "principais_desejos": "Ex: Agilidade, Originalidade, Prazo de pagamento",
+        "principais_desejos": "",
         "medos_receios": "Ex: Peça paralela quebrar, Caminhão ficar parado na estrada",
-        "agrados_preferencias": "O que agrada ele? (Ex: Frete grátis, Brinde, Desconto à vista)",
+        "agrados_preferencias": "O que agrada ele?",
         
-        "principais_objecoes": "O que ele usa para dizer não? (Ex: 'Achei mais barato', 'Vou ver com sócio')",
-        "gatilhos_de_venda_identificados": "O que faz ele fechar? (Ex: Urgência, Marca Premium, Preço)",
+        "principais_objecoes": "O que ele usa para dizer não?",
+        "gatilhos_de_venda_identificados": "O que faz ele fechar?",
         
         "observacoes_gerais_vendas": "Resumo estratégico para o vendedor humano (Vitão) ler rápido"
         }}
@@ -442,7 +443,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio_atual, nome_cliente):
                 instrucao = f"O cliente parou de responder faz {TEMPO_FOLLOWUP_1} min. Mande uma mensagem dando uma cutucada curta e descontraída. Tom de parceiro. EX: ai, é só voce me falar (sobre assunto que estava falando) pra (resolver assunto que estava converssando)"
             
             elif estagio_atual == 1: # Vai para o 2 (Urgência de Estoque)
-                instrucao = "O cliente sumiu faz 2 horas. Mande uma mensagem empática sobre a correria do dia a dia. Comente: 'Sei que você deve estar a mil aí, mas queria muito agilizar isso pra você testar nossa entrega/agilidade'. Pergunte de forma leve: 'Conseguimos retomar ou prefere que eu te chame mais tarde?'"
+                instrucao = "O cliente sumiu faz 2 horas. Mande uma mensagem empática sobre a correria do dia a dia. Comente: 'Sei que você deve estar a mil aí, mas queria muito agilizar pra você'. Pergunte de forma leve: 'Conseguimos retomar ou prefere que eu te chame mais tarde?'"
             
             elif estagio_atual == 2: # Vai para o 3 (Ultimato Educado)
                 instrucao = "Faz 24h sem resposta. Não cobre a venda. Use a técnica do 'Desapego Construtivo'. Diga algo como: 'não sei se seus fornecedores atuais já te atendem 100%, mas te garanto que ter a gente na manga vai te salvar uma grana ou tempo uma hora dessas'. Encerre deixando a porta aberta: 'Vou deixar você tranquilo aí, mas salva meu número. Precisou de cotação pra comparar ou peça difícil, é só dar um grito. Tmj!'"
@@ -667,38 +668,51 @@ def webhook():
         # 1. Verifica se é Áudio
         if message_content.get('audioMessage'):
             try:
-                print(f"🎤 Áudio recebido de {clean_number}. Processando...")
+                print(f"🎤 Áudio recebido de {clean_number}. Buscando dados...")
                 
-                # Pega o base64 (conteúdo bruto do áudio)
-                audio_base64 = message_content['audioMessage'].get('mediaKey') # Fallback
-                if 'mediaKey' in message_content['audioMessage']:
-                     # Nota: A Evolution geralmente manda o base64 no campo 'base64' se configurado, 
-                     # ou precisamos baixar. Assumindo que sua Evolution manda 'base64' no JSON global ou dentro da msg.
-                     # Se a Evolution não mandar base64 direto, use 'url'. 
-                     # Abaixo segue o padrão para base64 direto se disponível:
-                     audio_base64 = msg_data.get('base64') or message_content.get('audioMessage', {}).get('base64')
+                audio_data = None
+                
+                # TENTATIVA A: Pega BASE64 direto (se vier)
+                audio_base64 = msg_data.get('base64') or message_content.get('audioMessage', {}).get('base64')
+                
+                if audio_base64:
+                    audio_data = base64.b64decode(audio_base64)
+                
+                # TENTATIVA B: Se não tem Base64, BAIXA DA URL (Correção para o seu erro)
+                else:
+                    audio_url = message_content.get('audioMessage', {}).get('url')
+                    if audio_url:
+                        print(f"🌐 Baixando áudio da URL...")
+                        # Passamos a API KEY no header para garantir permissão
+                        headers_dl = {"apikey": EVOLUTION_API_KEY}
+                        response = requests.get(audio_url, headers=headers_dl, timeout=15)
+                        
+                        if response.status_code == 200:
+                            audio_data = response.content
+                        else:
+                            print(f"❌ Erro ao baixar áudio da URL: Status {response.status_code}")
 
-                # Se não tiver base64, tenta pegar texto normal (fallback)
-                if not audio_base64:
-                     user_msg = "[Áudio recebido, mas sem dados para transcrever]"
+                # Se conseguiu os dados (por A ou B), processa
+                if not audio_data:
+                     user_msg = "[Áudio recebido, mas falha no download dos dados]"
                 else:
                     # Salva arquivo temporário
-                    audio_data = base64.b64decode(audio_base64)
                     temp_path = f"/tmp/audio_{clean_number}_{int(time.time())}.ogg"
                     
                     with open(temp_path, 'wb') as f:
                         f.write(audio_data)
                     
-                    # Transcreve
-                    transcricao = transcrever_audio_gemini(temp_path)
-                    user_msg = f"[Cliente enviou Áudio]: {transcricao}"
+                    # Transcreve (Passando o ID para cobrar token certo)
+                    transcricao = transcrever_audio_gemini(temp_path, contact_id=clean_number)
+                    user_msg = f"[Transcrição de Áudio]: {transcricao}"
                     
-                    # Remove arquivo temp
-                    os.remove(temp_path)
+                    # Limpeza
+                    try: os.remove(temp_path)
+                    except: pass
 
             except Exception as e:
-                print(f"❌ Falha ao processar áudio: {e}")
-                user_msg = "[Erro ao ler áudio]"
+                print(f"❌ Falha crítica no processamento de áudio: {e}")
+                user_msg = "[Erro técnico ao ler áudio]"
 
         # 2. Se não for áudio, tenta Texto Normal
         if not user_msg:
