@@ -2668,7 +2668,7 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
              return "[Erro técnico ao ler áudio]"
         
 def send_whatsapp_message(number, text_message, delay_ms=1200): # <--- NOVO PARÂMETRO AQUI
-    INSTANCE_NAME = "chatbot" 
+    INSTANCE_NAME = "instancia_nova"
     clean_number = number.split('@')[0]
     
     payload = {
