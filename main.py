@@ -219,86 +219,83 @@ def extrair_tokens_da_resposta(response):
     except:
         return (0, 0)
 
-def agrupar_horarios_em_faixas(lista_horarios):
+def agrupar_horarios_em_faixas(lista_horarios, step=15):
     """
     Agrupa horários sequenciais de forma dinâmica.
-    Funciona para QUALQUER intervalo (10, 15, 30, 60 min).
-    Ex: ["08:00", "08:15", "08:30"] -> "das 08:00 às 08:45"
+    
+    Args:
+        lista_horarios (list): Lista de strings no formato ['HH:MM', ...]
+        step (int): O intervalo em minutos entre os slots (padrão 15).
+        
+    Returns:
+        str: Texto humanizado com as faixas de horário.
     """
-    # Se a lista estiver vazia, retorna direto
     if not lista_horarios:
         return "Nenhum horário disponível."
 
-    # 1. Pega o intervalo configurado lá em cima (15, 30, 60...)
-    # Isso torna o código universal para qualquer cliente.
-    step = INTERVALO_SLOTS_MINUTOS 
-
-    # 2. Converte tudo para minutos (inteiros) para fazer a matemática
+    # 1. Conversão e Sanitização
+    # Convertemos para minutos uma única vez para evitar processamento repetitivo de strings
     minutos = []
     for h in lista_horarios:
         try:
-            dt_t = datetime.strptime(h, '%H:%M')
-            m = dt_t.hour * 60 + dt_t.minute
+            h_split = h.split(':')
+            m = int(h_split[0]) * 60 + int(h_split[1])
             minutos.append(m)
-        except: continue
+        except (ValueError, IndexError):
+            continue
 
-    if not minutos: return ""
+    if not minutos:
+        return "Horários em formato inválido."
 
-    # Ordena para garantir que a sequência esteja certa
+    # 2. Ordenação Garantida
     minutos.sort()
 
     faixas = []
+    if not minutos: return ""
+
+    # 3. Algoritmo de Agrupamento (Sliding Window adaptado)
     inicio_faixa = minutos[0]
     anterior = minutos[0]
     count_seq = 1
 
-    # 3. Lógica de Varredura
     for atual in minutos[1:]:
-        # Verifica se o horário atual é exatamente o anterior + o intervalo (ex: 15 min)
         if atual == anterior + step:
-            # É uma sequência perfeita (08:00 -> 08:15)
             anterior = atual
             count_seq += 1
         else:
-            # Quebrou a sequência! (Pode ser o fim do turno da manhã de sábado, por exemplo)
-            # Calcula o "teto" do último horário válido
-            fim_faixa_real = anterior + step
-            
-            # Regra: Só agrupa se tiver 3 ou mais horários seguidos
-            if count_seq >= 3:
-                str_ini = f"{inicio_faixa // 60:02d}:{inicio_faixa % 60:02d}"
-                str_fim = f"{fim_faixa_real // 60:02d}:{fim_faixa_real % 60:02d}"
-                faixas.append(f"das {str_ini} às {str_fim}")
-            else:
-                # Se forem poucos horários (1 ou 2), lista eles soltos para não confundir
-                temp_m = inicio_faixa
-                while temp_m <= anterior:
-                    faixas.append(f"{temp_m // 60:02d}:{temp_m % 60:02d}")
-                    temp_m += step
-
-            # Reinicia a contagem para o próximo bloco (ex: turno da tarde)
+            # Fechamento de bloco por quebra de sequência
+            faixas.append(_formatar_bloco(inicio_faixa, anterior, step, count_seq))
+            # Reset para novo bloco
             inicio_faixa = atual
             anterior = atual
             count_seq = 1
 
-    # 4. Processa o último bloco que sobrou no loop
-    fim_faixa_real = anterior + step
-    if count_seq >= 3:
-        str_ini = f"{inicio_faixa // 60:02d}:{inicio_faixa % 60:02d}"
-        str_fim = f"{fim_faixa_real // 60:02d}:{fim_faixa_real % 60:02d}"
-        faixas.append(f"das {str_ini} às {str_fim}")
-    else:
-        temp_m = inicio_faixa
-        while temp_m <= anterior:
-            faixas.append(f"{temp_m // 60:02d}:{temp_m % 60:02d}")
-            temp_m += step
+    # 4. Processa o último bloco remanescente
+    faixas.append(_formatar_bloco(inicio_faixa, anterior, step, count_seq))
 
-    # 5. Monta o texto final humanizado
+    # 5. Formatação Humanizada (Join Grammar)
     if len(faixas) == 1:
         return faixas[0]
+    
+    return ", ".join(faixas[:-1]) + " e " + faixas[-1]
+
+def _formatar_bloco(inicio, fim, step, count):
+    """Função auxiliar interna para formatar a string do bloco."""
+    if count >= 3:
+        # Formata como faixa: "das 08:00 às 09:00"
+        # O fim real da faixa é o início do último slot + o step
+        fim_real = fim + step
+        str_ini = f"{inicio // 60:02d}:{inicio % 60:02d}"
+        str_fim = f"{fim_real // 60:02d}:{fim_real % 60:02d}"
+        return f"das {str_ini} às {str_fim}"
     else:
-        # Junta com vírgulas e um "e" no final
-        return ", ".join(faixas[:-1]) + " e " + faixas[-1]
+        # Lista horários individuais se não houver densidade suficiente
+        result = []
+        temp = inicio
+        while temp <= fim:
+            result.append(f"{temp // 60:02d}:{temp % 60:02d}")
+            temp += step
+        return ", ".join(result)
     
 class Agenda:
     def __init__(self, uri: str, db_name: str, collection_name: str):
@@ -1003,8 +1000,9 @@ def analisar_status_da_conversa(history):
 
 def executar_profiler_cliente(contact_id):
     """
-    AGENTE 'ESPIÃO' V4 (Filtro Estrito): 
-    Lê EXCLUSIVAMENTE as mensagens do USER. Ignora totalmente o Bot para evitar alucinação de perfil.
+    AGENTE 'ESPIÃO' V5 (Filtro Biográfico e Persistência): 
+    Lê EXCLUSIVAMENTE as mensagens do USER. 
+    Mantém dados consolidados e apenas enriquece o dossiê.
     """
     if conversation_collection is None or not GEMINI_API_KEY:
         return
@@ -1031,37 +1029,41 @@ def executar_profiler_cliente(contact_id):
 
         novo_checkpoint_ts = mensagens_novas[-1].get('ts')
 
-        # 2. Prepara o Texto (AGORA COM FILTRO DE ROLE ESTRITO)
+        # 2. Prepara o Texto (FILTRO ESTRITO: APENAS USER)
         txt_conversa_nova = ""
         for m in mensagens_novas:
-            # --- MUDANÇA AQUI: SÓ ENTRA SE FOR USER ---
+            # FILTRO DE SEGURANÇA: Só entra o que o cliente falou de fato
             if m.get('role') == 'user':
                 texto = m.get('text', '')
-                # Filtros de segurança extras (caso o user digite algo estranho ou testes)
+                # Remove mensagens de sistema ou comandos que possam ter sido salvos como user por erro
                 if texto and not texto.startswith("Chamando função") and not texto.startswith("[HUMAN"):
                     txt_conversa_nova += f"- Cliente disse: {texto}\n"
         
-        # Se após o filtro não sobrou nada (ex: só o bot falou nesse intervalo), 
-        # apenas atualiza o checkpoint e sai. Economiza tokens.
         if not txt_conversa_nova.strip():
             conversation_collection.update_one({'_id': contact_id}, {'$set': {'profiler_last_ts': novo_checkpoint_ts}})
             return
 
-        # 3. O Prompt do Engenheiro de Dados (Profiler)
+        # 3. O Prompt com Regras de Persistência
         prompt_profiler = f"""
         Você é um ANALISTA DE CONVERSA E PERFIL DE CLIENTE (PROFILER).
-
         Sua missão é analisar a conversa e ATUALIZAR o "Dossiê do Cliente" com foco em:
         - Vendas
-        - Preferências alimentares
+        - Preferências
         - Comportamento de compra
         - Relacionamento com a marca
 
-        PERFIL JÁ CONSOLIDADO (dados existentes):
+        PERFIL ATUAL (DADOS JÁ CONSOLIDADOS):
         {json.dumps(perfil_atual, ensure_ascii=False)}
 
-        NOVAS MENSAGENS (contexto recente da conversa):
+        NOVAS MENSAGENS DO CLIENTE:
         {txt_conversa_nova}
+
+        === REGRAS DE OURO DE PERSISTÊNCIA ===
+        1. DADOS BIOGRÁFICOS (nome, idade_faixa, estrutura_familiar, ocupacao_principal, fatores_de_decisao): 
+           - Se estes campos já estiverem preenchidos, NÃO OS ALTERE, a menos que o cliente tenha corrigido explicitamente uma informação anterior.
+        2. ENRIQUECIMENTO: Foque em preencher campos que estão vazios ("").
+        3. EVOLUÇÃO: Campos como "nivel_de_relacionamento_com_a_marca" ou "objecoes" podem ser atualizados para refletir o momento atual da conversa.
+        4. NÃO INVENTE: Se as novas mensagens não trouxerem dados novos para um campo, mantenha exatamente o que estava no Perfil Atual.
 
         === CAMPOS DO DOSSIÊ (máx. 15) ===
         Atualize apenas quando houver indícios claros na conversa.
@@ -1084,20 +1086,7 @@ def executar_profiler_cliente(contact_id):
         "observacoes_importantes": ""
         }}
 
-        === REGRAS DE ANÁLISE ===
-        - Não invente informações.
-        - Se não houver dados suficientes, mantenha o valor anterior.
-        - Priorize sinais implícitos (tom, urgência, hesitação).
-        - Considere contexto alimentar e decisão de compra.
-
-        === REGRAS DE HIGIENE ===
-        - Retorne APENAS o JSON final.
-        - JSON válido, sem comentários ou texto extra.
-        - Nunca ultrapasse os 10 campos definidos.
-        - Se houver recusa ou adiamento, registre o motivo em "principal_dor_problema".
-
-        SAÍDA OBRIGATÓRIA:
-        Somente o JSON atualizado.
+        RETORNE APENAS O JSON ATUALIZADO. SEM TEXTO EXTRA.
         """
 
         # 4. Chama o Gemini
@@ -1107,7 +1096,7 @@ def executar_profiler_cliente(contact_id):
         # 5. Processa o Resultado
         novo_perfil_json = json.loads(response.text)
         
-        # 6. Contabilidade
+        # 6. Contabilidade de Tokens
         in_tok, out_tok = extrair_tokens_da_resposta(response)
 
         # 7. Atualização no MongoDB
@@ -1125,7 +1114,7 @@ def executar_profiler_cliente(contact_id):
                 }
             }
         )
-        print(f"🕵️ [Profiler] Perfil atualizado (100% focado no Cliente).")
+        print(f"🕵️ [Profiler] Dossiê de {contact_id} atualizado com persistência de dados.")
 
     except Exception as e:
         print(f"⚠️ Erro no Agente Profiler: {e}")
@@ -1747,6 +1736,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - PROTOCOLO DE APRESENTAÇÃO (UX): 
                 A ferramenta retornará um campo chamado 'resumo_humanizado' (Ex: "das 08:00 às 11:30").
                 USE ESTE TEXTO NA SUA RESPOSTA. Não tente ler a lista bruta 'horarios_disponiveis' um por um, pois soa robótico. Confie no resumo humanizado.
+                FILTRO DE LUTAS: Se a intenção for agendar Luta ou Dança, antes de oferecer os horários da ferramenta, você deve cruzar a informação com a grade horária em [3 - DADOS DA EMPRESA]. Só ofereça horários que existam na grade de aulas.
 
         2. `fn_salvar_agendamento`: 
            - QUANDO USAR: É o "Salvar Jogo". Use APENAS no final, quando tiver Nome, CPF, Telefone, Serviço, Data, Hora e observação quando tiver confirmados pelo cliente.
@@ -1792,8 +1782,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         IDENTIDADE: Helena, 34 anos, mãe solo do Afonso(8), cristã, fitness, geração saude, curitibana no Alvorada; curte forró/reggae. Profissional divertida: agradece elogios, mas corta flertes/investidas com classe.
         ATITUDE: Você tem ORGULHO da academia. Você não apenas vende planos, você oferece a melhor experiência de vida. Fale com paixão.
         REGRA DE OURO: Nunca fale de um plano, equipamento, artes marcias ou serviços de forma seca. Use adjetivos que geram desejo e bem-estar (Ex: "ambiente climatizado", "energia lá em cima", "treino revigorante", "resultado real", "estrutura de ponta", "bem-star", "saude").
-        TOM DE VOZ: Entusiasmada, vibe "pra cima", geração saúde e super gente boa, poucas palavras pra se expressar.
-        VOCABULÁRIO: Use linguagem natural de internet ("vc", "pq", "td bem", "blz"). Use alongamentos simpáticos ("Oieee", "Ahhhh") e expressões de conexão ("Então...", "É assim...", "Viu"). Fale como uma maringaense local: informal, direta, mas sem gíria pesada..
+        TOM DE VOZ: Entusiasmada, vibe "pra cima", geração saúde e super gente boa, poucas palavras pra se expressar. NÃO USE EMOJIS, EMOTICONS , ROSTINHOS.
+        VOCABULÁRIO: Use linguagem natural de internet ("vc", "pq", "td bem", "blz"). Use alongamentos simpáticos ("Oieee", "Ahhhh") e expressões de conexão ("Então...", "É assim...", "Viu"). Fale como uma maringaense local: informal, direta, mas sem gíria pesada.. NÃO USE EMOJIS, EMOTICONS OU ROSTINHOS
         OBRIGAÇÃO: Foco total no AGENDAMENTO (Aula Experimental). Sua alma é a QUEBRA DE OBJEÇÕES: se o cliente hesitar ("depois", "caro", "tempo"), nunca aceite de primeira. Use argumentos de prioridade/saúde para reverter. Mostre interesse real na pessoa para vender sem parecer venda.
         [REGRAS VISUAIS E DE ESTILO]
         VALORIZAÇÃO DA MARCA: Nunca responda o preço, forçe uma aula experimental. Sempre valorize a qualidade ("Equipamentos novos", "Professores experientes").
@@ -1808,7 +1798,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             
             4. REGRA DO NOME (CRÍTICO): Use o nome do cliente APENAS UMA VEZ (logo após descobrir). Ficar repetindo gera estranheza e soa falso.
             
-            5. SEM EMOJIS: Mantenha a postura limpa, sóbria e direta. Zero carinhas ou figuras.
+            5. SEM EMOJIS: Nunca use Emojis, Emoticons, carinhas , rostinho, ou figurinhas. Mantenha a postura limpa, sóbria e direta. Zero carinhas ou figuras.
             
             6. DIREÇÃO (CTA): Nunca deixe a conversa morrer. Encerre SEMPRE com uma pergunta ou convite ("Vamos agendar?", "Ficou dúvida?") exeto em despedidas.
             
@@ -1832,7 +1822,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         - Pode converssar com a pessoa, dar atenção a ela!
         - Usar o PROTOCOLO DE RESGATE E OBJEÇÕES aabixo quando a pessoa não quer fechar.
         - Nunca passe os preços nem invente.
-        - Você NÃO usa emojis.
+        - Você NÃO usa emojis, EMOTICONS , ROSTINHOS.
         - Você é uma humana, pessoa fisica, se assuma em carne e osso.
         - Use os beneficios abaixo para vangloriar a nossa academia e mostrar pro cliente que vale a pena.
 
@@ -1886,6 +1876,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         # ---------------------------------------------------------
         NOME: Brooklyn Academia | SETOR: Saúde, Fitness, Artes-marcias e Bem-Estar
         META: Não vendemos apenas "treino", entregamos SAÚDE, LONGEVIDADE, AUTOESTIMA e NOVAS AMIZADES. O cliente tem que sentir que somos o lugar certo para transformar a rotina dele, num ambiente acolhedor onde ele se sente bem e faz parte da galera.
+        OBSERVAÇÕES IMPORTANTES: Se o cliente pedir um horário DE AGENDAMENTO de lutas ou dança que não coincide com a grade da aula, explique educadamente que a aula experimental acontece apenas nos dias e horários da turma. Ele nao pode agendar aulas de lutas fora dos horarios que ja acontecem.
         SERVIÇOS: 
         - *Musculação Completa* (Equipamentos novos e área de pesos livres).
         - *Personal Trainer* (Acompanhamento exclusivo).
@@ -2059,6 +2050,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
            - Se o cliente pediu "11:00" e não está no JSON -> DIGA QUE ESTÁ OCUPADO. Não tente "encaixar".
            - Se ja passou da hora atual suponha ou pergunte sobre o horario.
            - Você pode agrupar os horarios para ficar mais resumido exemplo: de x ate y, de x ate y e de x ate y.
+           - Se o serviço for Luta ou Dança, avise imediatamente: "Para as aulas de [Nome da Luta], nossos horários de treino são [Citar horários da grade]. Qual desses fica melhor para sua aula experimental?". Nunca assuma que qualquer horário da agenda serve para lutas.
 
         PASSO 2: COLETA E VALIDAÇÃO DE DADOS (CRÍTICO)
            - Horário escolhido é válido? -> Peça CPF.
@@ -2115,12 +2107,13 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         [SYSTEM CONFIGURATION]
 
         Tempo: {info_tempo_real} | SAUDAÇÃO: {saudacao}
-        ROLE: Membro da equipe (Humano), Atendente do Restaurante e Pizzaria Ilha dos Açores..
-        NOME: . (Aja como uma pessoa local, "manezinha" da ilha de Florianopolis, encarne um humano. Não diga que é uma Ia)
-        TOM: Use  Familiar, Descontraído, Educado, Direto e Sem Cerimônia.
-        VOCABULÁRIO: Use abreviaturas e siglas da internet ("vc", "pq", "blz","vdd"). Use expressões "manezinhas" de Florianópolis (ex: "Segura a onda", "Tás tolo?"), mas mantenha a clareza.
+        ROLE: Consultora de Bem-Estar, Anfitriã da Broklin Academia e atendente.
+        MISSÃO: Converter contatos em Agendamentos via RELACIONAMENTO. Não empurre planos; atue como consultora focada em descobrir o REAL MOTIVO do contato. O agendamento é consequência natural de conectar a dor do cliente à nossa solução e fazê-lo se sentir compreendido. Quando a pessoa se sente compreendida e ouvida, ela compra.
+        IDENTIDADE: Helena, 34 anos, mãe solo do Afonso(8), cristã, fitness, geração saude, curitibana no Alvorada; curte forró/reggae. Profissional divertida: agradece elogios, mas corta flertes/investidas com classe.
+        ATITUDE: Você tem ORGULHO da academia. Você não apenas vende planos, você oferece a melhor experiência de vida. Fale com paixão.
+        VOCABULÁRIO: Use abreviaturas e siglas da internet ("vc", "pq", "blz","vdd"), mas mantenha a clareza.
         ### Regra mestra, Nunca invente informaçoes que não estão no texto abaixo...
-        PROIBIDO EMOJIS NO MEIO DA CONVERSA.
+        PROIBIDO EMOJIS, EMOTICONS NO MEIO DA CONVERSA.
         TIME_CONTEXT: Use as variáveis de 'HOJE É' e 'HORA AGORA' acima para se situar no tempo.
             
         === SUAS FERRAMENTAS ===
@@ -2185,8 +2178,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         Exemplo bom : "{saudacao}! Tás bem?" . É exelente!
 
         CENÁRIO 1: O cliente apenas deu "Oi" ou saudação.
-        Você: "{saudacao}! Tás bem? "
-        (Nota: Curto, direto e com a gíria local "Tás bem?").
+        Você: "{saudacao}! Td bem? "
+        (Nota: Curto, direto e com a gíria local "Td bem?").
 
         CENÁRIO 2: O cliente já fez uma pergunta (Ex: "Quanto custa?").
         Você: De maneira valide a pergunta, e pergunte o nome de maneira fofa e educada.
@@ -2238,10 +2231,14 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
         elif call_name == "fn_salvar_agendamento":
             telefone_arg = args.get("telefone", "")
-            
             if telefone_arg == "CONFIRMADO_NUMERO_ATUAL":
                 telefone_arg = contact_id 
                 print(f"ℹ️ Placeholder 'CONFIRMADO_NUMERO_ATUAL' detectado. Usando o contact_id: {contact_id}")
+            
+            nome_cliente = args.get("nome", "")
+            servico_tipo = args.get("servico", "")
+            data_agendada = args.get("data", "")
+            hora_agendada = args.get("hora", "")
 
             resp = agenda_instance.salvar(
                 nome=args.get("nome", ""),
@@ -2253,6 +2250,22 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 owner_id=contact_id,
                 observacao=args.get("observacao", "")
             )
+
+            if resp.get("sucesso") and RESPONSIBLE_NUMBER:
+                msg_aviso_admin = (
+                    f"🔔 *NOVO AGENDAMENTO*\n\n"
+                    f"👤 *Cliente:* {nome_cliente}\n"
+                    f"📅 *Data:* {data_agendada}\n"
+                    f"⏰ *Horário:* {hora_agendada}\n"
+                    f"💪 *Serviço:* {servico_tipo}\n"
+                    f"📞 *Telefone:* {telefone_arg}\n"
+                    f"---------------------------\n"
+                )
+
+                destinatario_admin = f"{RESPONSIBLE_NUMBER}@s.whatsapp.net"
+                print(f"📢 Notificando administrador {RESPONSIBLE_NUMBER} sobre novo agendamento...")
+                send_whatsapp_message(destinatario_admin, msg_aviso_admin, delay_ms=500)
+
             return json.dumps(resp, ensure_ascii=False)
 
         elif call_name == "fn_excluir_agendamento":
@@ -3284,15 +3297,15 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                 
                 elif should_split:
                     print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}")
-                    paragraphs = [p.strip() for p in ai_reply.split('\n') if p.strip()]
+                    paragraphs = [p.strip() for p in re.split(r'(?<=[.,!?])\s+', ai_reply) if p.strip()]
                     
                     if not paragraphs: return
 
                     for i, para in enumerate(paragraphs):
-                        tempo_leitura = len(para) * 40 
-                        current_delay = 1000 + tempo_leitura
-                        if current_delay > 4000: current_delay = 4000 
-                        if i == 0: current_delay = 1500 
+                        tempo_leitura = len(para) * 30 
+                        current_delay = 800 + tempo_leitura
+                        if current_delay > 3000: current_delay = 3000 
+                        if i == 0: current_delay = 1200 
 
                         send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
                         time.sleep(current_delay / 1000)
