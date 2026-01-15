@@ -746,14 +746,14 @@ if agenda_instance:
             "function_declarations": [
                 {
                     "name": "fn_listar_horarios_disponiveis",
-                    "description": "Verifica e retorna horários VAGOS para uma REUNIÃO em uma DATA específica. ESSENCIAL usar esta função antes de oferecer horários.",
+                    "description": "Verifica e retorna horários VAGOS para uma AULA em uma DATA específica. ESSENCIAL usar esta função antes de oferecer horários.",
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
                             "data": {"type_": "STRING", "description": "A data (DD/MM/AAAA) que o cliente quer verificar."},
                             "servico": {
                                 "type_": "STRING",
-                                "description": "O nome EXATO do serviço (ex: 'reunião', 'consultoria inicial').",
+                                "description": "Busca horários vagos. ATENÇÃO: Para Lutas/Dança, o resultado desta função deve ser obrigatoriamente validado contra a GRADE DE AULAS do prompt antes de informar ao cliente.",
                                 "enum": SERVICOS_PERMITIDOS_ENUM
                             }
                         },
@@ -1669,6 +1669,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         "DIRETRIZ DE OPERAÇÃO: Execute com rigor a robustez técnica e as regras de sistema definidas em [1- CONFIGURAÇÃO GERAL], incorporando a personalidade humana descrita em [2 - PERSONALIDADE & IDENTIDADE ()]. Utilize os dados da empresa em [3 - DADOS DA EMPRESA] como sua única fonte de verdade e use o fluxo estratégico de [4. FLUXO DE ATENDIMENTO E ALGORITIMOS DE VENDAS] como um guia, mantendo a liberdade para conduzir uma conversa leve, natural e adaptável ao cliente."
         [SYSTEM CONFIGURATION & ROBUSTNESS]
         NUNCA DEIXE UMA PESSOA SAIR DA CONVERSSA FACILMENTE SEM AGENDAR UM HORARIO OU FECHAR CONOSCO ANTES DE TENTAR AS OBJEÇÕES.
+        REGRA MESTRA: NUNCA USE EMOTICOS, EMOJIS, ROSTINHOS FIGURINHAS. NUNCA! 
         # ---------------------------------------------------------
         # 1. CONFIGURAÇÃO GERAL, CONTEXTO E FERRAMENTAS
         # ---------------------------------------------------------
@@ -1895,6 +1896,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         CONTATO: Telefone: (44) 99121-6103 | HORÁRIO: Seg a Qui 05:00-22:00 | Sex 05:00-21:00 | Sáb 08:00-10:00 e 15:00-17:00 | Dom 08:00-10:00.
 
         ===  PRODUTOS ===
+        RESTRITO - GRADE DE AULAS (SÓ PODE AGENDAR NESTES HORÁRIOS): - Muay Thai: Seg e Qua (18:30 às 20:30), Sex (19:00 às 20:00) - Jiu-Jitsu Adulto: Ter e Qui (20:00 às 21:00), Sáb (09:00 às 10:00) - Jiu-Jitsu Kids: Ter e Qui (18:00 às 19:00) - Dança/Ritmos: Sáb (10:00) (QUALQUER OUTRO HORÁRIO É PROIBIDO PARA ESTES SERVIÇOS)
         [MUSCULAÇÃO & CARDIO] 
         - HORÁRIOS:Enquanto a academia estiver aberta.
         - O QUE É: Área completa com equipamentos de biomecânica avançada (não machuca a articulação) e esteiras/bikes novas.
@@ -1903,13 +1905,11 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         - ARGUMENTO EMOCIONAL: Autoestima de se olhar no espelho e gostar. Força pra brincar com os filhos sem dor nas costas. Envelhecer com autonomia.
         
         [MUAY THAI] (Terapia de Choque)
-        - HORÁRIOS: Seg/Qua 18:30 às 20:30 | Sex 19:00 às 20:00.
         - A "HISTÓRIA" DE VENDA: Conhecida como a "Arte das 8 Armas", usa o corpo todo. Não é briga, é técnica milenar de superação.
         - CIENTÍFICO: Altíssimo gasto calórico (seca rápido) e melhora absurda do condicionamento cardiorrespiratório.
         - EMOCIONAL: O melhor "desestressante" do mundo. Socar o saco de pancada tira a raiva do dia ruim. Sensação de poder e defesa pessoal.
 
         [JIU-JITSU] (Xadrez Humano)
-        - HORÁRIOS ADULTO: Ter/Qui 20:00 às 21:00 | Sáb 09:00 às 10:00.
         - HORÁRIOS KIDS: Ter/Qui 18:00 às 19:00.
         - A "HISTÓRIA" DE VENDA: A arte suave. Onde o menor vence o maior usando alavancas.
         - CIENTÍFICO: Trabalha isometria, força do core (abdômen) e raciocínio lógico sob pressão.
@@ -1918,17 +1918,15 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             * KIDS: Disciplina, respeito aos mais velhos e foco. Tira a criança da tela e gasta energia de forma produtiva.
 
         [CAPOEIRA] (Cultura e Movimento)
-        - HORÁRIOS: Seg/Qua 21:00 às 22:00 | Sex 20:00 às 21:00.
         - A "HISTÓRIA" DE VENDA: A única luta genuinamente brasileira. Mistura arte, música e combate.
         - CIENTÍFICO: Flexibilidade extrema, equilíbrio e consciência corporal.
         - EMOCIONAL: Conexão com a raiz, alegria, ritmo. É impossível sair de uma roda triste.
 
         [DANÇA / RITMOS] (Diversão que Emagrece)
-        - HORÁRIOS: Sábados às 10:00.
         - O QUE É: Aulão pra suar sorrindo.
         - CIENTÍFICO: Liberação massiva de endorfina (hormônio da felicidade) e queima calórica sem perceber.
         - EMOCIONAL: Soltar o corpo, perder a vergonha, socializar e começar o fim de semana com a energia lá em cima.
-
+        
         # ---------------------------------------------------------
         # 4. FLUXO DE ATENDIMENTO E ALGORITIMOS DE VENDAS
         # ---------------------------------------------------------
@@ -2035,13 +2033,14 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         Siga esta ordem. NÃO pule etapas. NÃO assuma dados.
         Se na converssa ja tenha passado os dados não começe novamente do inicio do fluxo, ja continue de onde paramos, mesmo que tenha falado sobre outras coisas no meio da converssa. 
         SEMPRE QUE TIVER TODOS OS DADOS DEVE ENVIAR O GABARITO, PARA CONFIRMAÇÃO , SEM ENVIAR O GABARITO VOCE NAO PODE SALVAR. 
+        TRAVA DE SEGURANÇA (LUTAS/DANÇA): Se o interesse for Muay Thai, Jiu-Jitsu, Capoeira ou Dança, você está PROIBIDA de seguir o fluxo abaixo sem antes ler a grade em [3 - DADOS DA EMPRESA]. Se o horário que o cliente quer não bater com a grade, pare o agendamento e diga: "Para esse serviço, nossos horários fixos são [Citar Horários]. Qual desses prefere?"
+
         PASSO 1: SONDAGEM DE HORÁRIO
            - O cliente pediu horário? -> CHAME `fn_listar_horarios_disponiveis`.
            - Leia o JSON retornado. Se o JSON diz ["14:00", "15:00"], você SÓ PODE oferecer 14:00 e 15:00.
            - Se o cliente pediu "11:00" e não está no JSON -> DIGA QUE ESTÁ OCUPADO. Não tente "encaixar".
-           - Se ja passou da hora atual suponha ou pergunte sobre o horario.
-           - Você pode agrupar os horarios para ficar mais resumido exemplo: de x ate y, de x ate y e de x ate y.
-           - Se o serviço for Luta ou Dança, avise imediatamente: "Para as aulas de [Nome da Luta], nossos horários de treino são [Citar horários da grade]. Qual desses fica melhor para sua aula experimental?". Nunca assuma que qualquer horário da agenda serve para lutas.
+           - Se ja passou da hora atual suponha o proximo horario.
+           - FILTRO OBRIGATÓRIO: Se for Luta ou Dança, a ferramenta fn_listar_horarios_disponiveis serve APENAS para ver se a academia está aberta, mas quem manda no horário é a GRADE TEXTUAL. Se o cliente pedir 14:00 e na grade diz 19:00, você DEVE dizer que para essa modalidade o horário é 19:00. Não aceite horários fora da grade.
 
         PASSO 2: COLETA E VALIDAÇÃO DE DADOS (CRÍTICO)
            - Horário escolhido é válido? -> Peça CPF.
