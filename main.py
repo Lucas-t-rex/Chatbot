@@ -57,8 +57,32 @@ FOLGAS_DIAS_SEMANA = [] # Folga Domingo
 MAPA_DIAS_SEMANA_PT = { 5: "sábado", 6: "domingo" }
 
 MAPA_SERVICOS_DURACAO = {
-    "aula experimental": 60
+    "musculação": 60,
+    "muay thai": 60,
+    "jiu-jitsu": 60,
+    "jiu-jitsu kids": 60,
+    "capoeira": 60,
+    "dança": 60
 }
+
+GRADE_HORARIOS_SERVICOS = {
+    "muay thai": {
+        0: ["18:30"], 2: ["18:30"], 4: ["19:00"] # Seg, Qua, Sex
+    },
+    "jiu-jitsu": {
+        1: ["20:00"], 3: ["20:00"], 5: ["09:00"] # Ter, Qui, Sáb
+    },
+    "jiu-jitsu kids": {
+        1: ["18:00"], 3: ["18:00"] # Ter e Qui
+    },
+    "capoeira": {
+        0: ["21:00"], 2: ["21:00"], 4: ["20:00"] # Seg, Qua, Sex
+    },
+    "dança": {
+        5: ["10:00"] # Sábado
+    }
+}
+
 LISTA_SERVICOS_PROMPT = ", ".join(MAPA_SERVICOS_DURACAO.keys())
 SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
 
@@ -677,19 +701,26 @@ class Agenda:
         if folga:
             return {"erro": f"Desculpe, não trabalhamos aos {folga}s. O dia {data_str} está indisponível."}
 
-        agora_fuso = datetime.now(FUSO_HORARIO)
-        agora = agora_fuso.replace(tzinfo=None)
-        duracao_minutos = self._get_duracao_servico(servico_str)
+        servico_key = servico_str.lower().strip()
+        dia_semana = dt.weekday()
+        
+        # --- NOVA LÓGICA DE FILTRO POR GRADE ---
+        # Se o serviço estiver na grade (Lutas/Dança), usamos apenas os horários dela
+        if servico_key in GRADE_HORARIOS_SERVICOS:
+            slots_para_testar = GRADE_HORARIOS_SERVICOS[servico_key].get(dia_semana, [])
+            if not slots_para_testar:
+                return {"erro": f"Não temos aula de {servico_str} disponível neste dia da semana."}
+        else:
+            # Se for musculação ou outro, usa o horário geral da academia
+            slots_para_testar = gerar_slots_de_trabalho(INTERVALO_SLOTS_MINUTOS, dt)
 
-        if duracao_minutos is None:
-            return {"erro": f"Serviço '{servico_str}' não reconhecido. Os serviços válidos são: {LISTA_SERVICOS_PROMPT}"}
-
+        agora = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
+        duracao_minutos = self._get_duracao_servico(servico_key) or 60
         agendamentos_do_dia = self._buscar_agendamentos_do_dia(dt)
         horarios_disponiveis = []
-        slots_de_inicio_validos = gerar_slots_de_trabalho(INTERVALO_SLOTS_MINUTOS, dt)
 
-        # 1. Loop Matemático (Encontra os horários)
-        for slot_hora_str in slots_de_inicio_validos:
+        # 1. Loop de Verificação
+        for slot_hora_str in slots_para_testar:
             slot_dt_completo = datetime.combine(dt.date(), str_to_time(slot_hora_str))
 
             if slot_dt_completo < agora:
@@ -708,15 +739,15 @@ class Agenda:
                 horarios_disponiveis.append(slot_hora_str)
         
         if not horarios_disponiveis:
-            resumo_humanizado = "Não há horários livres nesta data."
+            resumo_humanizado = "Não há horários livres para este serviço nesta data."
         else:
             texto_faixas = agrupar_horarios_em_faixas(horarios_disponiveis, INTERVALO_SLOTS_MINUTOS)
-            resumo_humanizado = f"Tenho estes horários livres: {texto_faixas}."
+            resumo_humanizado = f"Para {servico_str}, tenho estes horários: {texto_faixas}."
+            
         return {
             "sucesso": True,
             "data": dt.strftime('%d/%m/%Y'),
             "servico_consultado": servico_str,
-            "duracao_calculada_min": duracao_minutos,
             "resumo_humanizado": resumo_humanizado,
             "horarios_disponiveis": horarios_disponiveis
         }
