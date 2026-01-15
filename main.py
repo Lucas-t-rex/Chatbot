@@ -891,7 +891,7 @@ if agenda_instance:
                 },
                 {
                     "name": "fn_validar_cpf",
-                    "description": "Valida se um número de CPF fornecido pelo usuário é matematicamente real e válido. Use isso sempre que o usuário fornecer um número que pareça um CPF.",
+                    "description": "Valida se um número de CPF fornecido pelo usuário é matematicamente real e válido. Use isso sempre que o usuário fornecer um número que pareça um CPF. hame esta função internamente quando o cliente digitar o documento.",
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
@@ -1748,6 +1748,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             5. REGRA DO "JÁ PASSOU" (CRÍTICO): Se o cliente pedir um horário para HOJE, compare com a HORA AGORA ({hora_fmt}). Se ele pedir 09:00 e agora são 10:00. Assuma que é a data futura disponivel. NÃO CRIE O GABARITO COM HORÁRIO PASSADO.
 
         # FERRAMENTAS DO SISTEMA (SYSTEM TOOLS)
+        Você NÃO é um programador. Você nunca escreve "print()", "default_api" ou nomes de funções no texto.
+        Se você decidir usar uma ferramenta, você deve acioná-la SILENCIOSAMENTE através do sistema de "Function Calling".
         Você controla o sistema. NÃO narre ("Vou agendar"), CHAME a função.
         ###INFORMAÇÕES ABAIXO SÃO AS MAIS IMPORTANTES.
 
@@ -2411,7 +2413,7 @@ safety_settings = [
 
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name, retry_depth=0): 
     """
-    (VERSÃO FINAL - CORRIGIDA ERRO DE ESCOPO RE)
+    VERSÃO COM TRAVA DE SEGURANÇA ANTI-CÓDIGO (Limpador de Alucinação)
     """
     global modelo_ia 
 
@@ -2424,7 +2426,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         if not n: return None
         s = str(n).strip()
         if not s: return None
-        # O 're' aqui vai usar o import global do topo do arquivo
         parts = [p for p in re.split(r'\s+', s) if p]
         if len(parts) >= 2 and parts[0].lower() == parts[1].lower():
             return parts[0]
@@ -2457,8 +2458,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         history_from_db = convo_data.get('history', [])
         perfil_cliente_dados = convo_data.get('client_profile', {})
         janela_recente = history_from_db[-15:] 
-        qtd_msg_enviadas = len(janela_recente)
-        print(f"📉 [METRICA] Janela Deslizante: Enviando apenas as últimas {qtd_msg_enviadas} mensagens para o Prompt.")
         
         for m in janela_recente:
             role_name = "Cliente" if m.get('role') == 'user' else ""
@@ -2471,10 +2470,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             if role == 'assistant': role = 'model'
             if 'text' in msg and not msg['text'].startswith("Chamando função"):
                 old_history_gemini_format.append({'role': role, 'parts': [msg['text']]})
-
-    tipo_prompt = "FINAL (Vendas)" if known_customer_name else "GATE (Captura)"
-    print(f"\n[🔍 DEBUG PROMPT] O Python vai usar o prompt: {tipo_prompt}")
-    print(f"[🔍 DEBUG NOME] O nome conhecido no início da função é: '{known_customer_name}'")
 
     system_instruction = get_system_prompt_unificado(
         saudacao, 
@@ -2496,35 +2491,24 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             )
             
             chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
-            
-            if attempt > 0:
-                print(f"🔁 Tentativa {attempt+1} de gerar resposta para {log_display}...")
-            else:
-                if retry_depth > 0:
-                    print(f"🔥 [VIDA EXTRA] Tentando gerar resposta novamente do ZERO para {log_display}...")
-                else:
-                    print(f"Enviando para a IA: '{user_message}' (De: {log_display})")
-            
             resposta_ia = chat_session.send_message(user_message)
             
             turn_input = 0
             turn_output = 0
-            
             t_in, t_out = extrair_tokens_da_resposta(resposta_ia)
             turn_input += t_in
             turn_output += t_out
 
+            # --- LOOP DE CHAMADA DE FERRAMENTAS ---
             while True:
                 if not resposta_ia.candidates:
-                    print(f"⚠️ AVISO: A IA retornou vazio (Safety/Bug) na tentativa {attempt+1}.")
                     raise Exception("Resposta vazia da IA (Candidates Empty).")
 
                 cand = resposta_ia.candidates[0]
-                
                 func_call = None
                 try:
                     func_call = cand.content.parts[0].function_call
-                except Exception:
+                except:
                     func_call = None
 
                 if not func_call or not getattr(func_call, "name", None):
@@ -2533,53 +2517,33 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 call_name = func_call.name
                 call_args = {key: value for key, value in func_call.args.items()}
                 
-                log_info(f"🔧 IA chamou a função: {call_name} com args: {call_args}")
                 append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
-
                 resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
-                log_info(f"📤 Resultado da função: {resultado_json_str}")
 
+                # Hot-swap de contexto se capturar o nome
                 if call_name == "fn_capturar_nome":
-                    try:
-                        res_data = json.loads(resultado_json_str)
-                        nome_salvo = res_data.get("nome_salvo") or res_data.get("nome_extraido") 
-                        
-                        if nome_salvo:
-                            print(f"🔄 Troca de Contexto: Nome '{nome_salvo}' salvo! Reiniciando com Prompt de Vendas...")
-                            return gerar_resposta_ia_com_tools(
-                                contact_id, 
-                                sender_name, 
-                                user_message, 
-                                known_customer_name=nome_salvo,
-                                retry_depth=retry_depth
-                            )
-                    except Exception as e:
-                        print(f"⚠️ Erro ao tentar reiniciar fluxo (hot-swap): {e}")
-                
+                    res_data = json.loads(resultado_json_str)
+                    nome_salvo = res_data.get("nome_salvo") or res_data.get("nome_extraido")
+                    if nome_salvo:
+                        return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_salvo, retry_depth=retry_depth)
+
+                # Intervenção humana imediata
                 try:
                     res_data = json.loads(resultado_json_str)
                     if res_data.get("tag_especial") == "[HUMAN_INTERVENTION]":
                         msg_intervencao = f"[HUMAN_INTERVENTION] Motivo: {res_data.get('motivo', 'Solicitado.')}"
-                        
-                        save_conversation_to_db(
-                            contact_id, 
-                            sender_name, 
-                            known_customer_name, 
-                            turn_input, 
-                            turn_output, 
-                            ultima_msg_gerada=msg_intervencao
-                        )
+                        save_conversation_to_db(contact_id, sender_name, known_customer_name, turn_input, turn_output, ultima_msg_gerada=msg_intervencao)
                         return msg_intervencao
                 except: pass
 
                 resposta_ia = chat_session.send_message(
                     [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
                 )
-                
-                t_in_tool, t_out_tool = extrair_tokens_da_resposta(resposta_ia)
-                turn_input += t_in_tool
-                turn_output += t_out_tool
+                ti, to = extrair_tokens_da_resposta(resposta_ia)
+                turn_input += ti
+                turn_output += to
 
+            # --- CAPTURA DO TEXTO FINAL ---
             ai_reply_text = ""
             try:
                 ai_reply_text = resposta_ia.text
@@ -2587,64 +2551,46 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 try:
                     ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
                 except:
-                    print(f"⚠️ AVISO: Resposta vazia da IA na tentativa {attempt+1}. Forçando nova tentativa...")
-                    if attempt < max_retries - 1:
-                        time.sleep(1.5) 
-                        continue 
-                    else:
-                        raise Exception("Todas as tentativas falharam e retornaram vazio.")
+                    if attempt < max_retries - 1: continue
+                    else: raise Exception("Falha ao obter texto da resposta.")
 
-            # --- INTERCEPTOR DE ALUCINAÇÃO ---
-            if "fn_capturar_nome" in ai_reply_text and "nome_extraido" in ai_reply_text:
-                print(f"🛡️ INTERCEPTOR ATIVADO: A IA tentou enviar código pro Zap: '{ai_reply_text}'")
+            # ======================================================================
+            # 🛡️ [LIMPADOR DE ALUCINAÇÃO] - REMOVE CÓDIGO TÉCNICO DO CHAT
+            # ======================================================================
+            offending_terms = ["print(", "fn_", "default_api", "function_call", "api."]
+            if any(term in ai_reply_text for term in offending_terms):
+                print(f"🛡️ BLOQUEIO DE CÓDIGO ATIVADO para {contact_id}: {ai_reply_text}")
+                linhas = ai_reply_text.split('\n')
+                # Filtra apenas as linhas que NÃO possuem termos técnicos
+                linhas_limpas = [l for l in linhas if not any(term in l for term in offending_terms)]
+                ai_reply_text = "\n".join(linhas_limpas).strip()
                 
-                # --- CORREÇÃO AQUI: Removemos o 'import re' daqui de dentro ---
-                # O 're' agora vem do topo do arquivo (Global)
+                # Se a limpeza apagou tudo, gera um fallback humano amigável
+                if not ai_reply_text:
+                    ai_reply_text = "Certinho! Pode me passar seu CPF para eu validar aqui?"
+            # ======================================================================
+
+            # --- INTERCEPTOR DE NOME (BACKUP) ---
+            if "fn_capturar_nome" in ai_reply_text:
                 match = re.search(r"nome_extraido=['\"]([^'\"]+)['\"]", ai_reply_text)
-                
                 if match:
-                    nome_forçado = match.group(1)
-                    print(f"🔧 Extração manual de nome realizada: {nome_forçado}")
-                    handle_tool_call("fn_capturar_nome", {"nome_extraido": nome_forçado}, contact_id)
-                    return gerar_resposta_ia_com_tools(
-                        contact_id, 
-                        sender_name, 
-                        user_message, 
-                        known_customer_name=nome_forçado, 
-                        retry_depth=retry_depth
-                    )
-                else:
-                    ai_reply_text = "Entendi! E como posso te ajudar agora?"
-            # ---------------------------------
+                    nome_f = match.group(1)
+                    handle_tool_call("fn_capturar_nome", {"nome_extraido": nome_f}, contact_id)
+                    return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_f, retry_depth=retry_depth)
 
             save_conversation_to_db(contact_id, sender_name, known_customer_name, turn_input, turn_output, ai_reply_text)
-
             return ai_reply_text
 
         except Exception as e:
             print(f"❌ Erro na tentativa {attempt+1}: {e}")
-            
-            if "429" in str(e) or "Quota" in str(e):
-                print("⏳ Limite de cota atingido. Esperando 20 segundos para tentar de novo...")
-                time.sleep(20) 
-            
+            if "429" in str(e): time.sleep(10)
             if attempt < max_retries - 1:
-                time.sleep(2) 
-                continue 
+                time.sleep(2)
+                continue
             else:
                 if retry_depth == 0:
-                    print("🚨 Esgotou as 3 tentativas iniciais. REINICIANDO O PROCESSO DO ZERO (Vida Extra)...")
-                    time.sleep(3)
-                    return gerar_resposta_ia_com_tools(
-                        contact_id, 
-                        sender_name, 
-                        user_message, 
-                        known_customer_name, 
-                        retry_depth=1
-                    )
-                else:
-                    print("💀 Falha total após Vida Extra. Enviando fallback silencioso.")
-                    return "Teve algum problema na mensagem do whats, pode mandar de novo ?"
+                    return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name, retry_depth=1)
+                return "Teve um probleminha na conexão, pode mandar de novo? 😅"
     
     return "Erro crítico de comunicação."
 
