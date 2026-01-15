@@ -2646,7 +2646,7 @@ def send_whatsapp_message(number, text_message, delay_ms=1200): # <--- NOVO PAR�
     payload = {
         "number": clean_number, 
         "textMessage": {
-            "text": text_message
+            "text": mensagem_limpa
         },
         "options": {
             "delay": delay_ms,     # <--- USA A VARIÁVEL DINÂMICA
