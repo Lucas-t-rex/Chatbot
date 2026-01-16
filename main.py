@@ -79,7 +79,7 @@ GRADE_HORARIOS_SERVICOS = {
         0: ["21:00"], 2: ["21:00"], 4: ["20:00"] # Seg, Qua, Sex
     },
     "dança": {
-        5: ["10:00"] # Sábado
+        5: ["9:00"] # Sábado
     }
 }
 
@@ -519,6 +519,19 @@ class Agenda:
              return {"erro": f"Não é possível agendar. O horário {data_str} às {hora} já passou."}
 
         duracao_minutos = self._get_duracao_servico(servico)
+        # --- [NOVA TRAVA] VALIDAÇÃO RIGOROSA DA GRADE ---
+        servico_key = servico.lower().strip()
+        
+        # Se o serviço tem horário fixo (está na grade), VERIFICA SE O HORÁRIO BATE
+        if servico_key in GRADE_HORARIOS_SERVICOS:
+            dia_semana = dt.weekday() # 0=Seg, 4=Sex...
+            horarios_permitidos = GRADE_HORARIOS_SERVICOS[servico_key].get(dia_semana, [])
+            
+            # Se a hora que o cliente quer não está na lista permitida do dia
+            if hora_str not in horarios_permitidos:
+                msg_grade = ", ".join(horarios_permitidos) if horarios_permitidos else "não tem aula neste dia"
+                return {"erro": f"Impossível agendar {servico} às {hora_str}. A grade oficial para esta data é: {msg_grade}."}
+        # ------------------------------------------------
         if duracao_minutos is None:
             return {"erro": f"Serviço '{servico}' não reconhecido. Os serviços válidos são: {LISTA_SERVICOS_PROMPT}"}
 
@@ -1593,7 +1606,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         hora_float = agora.hour + (agora.minute / 60.0)
         
         status_casa = "FECHADO"
-        mensagem_status = "🔴 ESTAMOS FECHADOS AGORA."
+        mensagem_status = "Fechado."
         
         # Busca os blocos de hoje (ex: Sábado tem 2 blocos: [08-10, 15-17])
         blocos_hoje = BLOCOS_DE_TRABALHO.get(dia_sem, [])
@@ -1607,7 +1620,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             if h_ini <= hora_float < h_fim:
                 esta_aberto = True
                 status_casa = "ABERTO"
-                mensagem_status = "🟢 ESTAMOS ABERTOS E TREINANDO AGORA!"
+                mensagem_status = "Status atual: ABERTO (Pode convidar para vir agora se for musculação)."
                 break
         
         # Tratamento especial para o INTERVALO DO SÁBADO (Dia 5)
@@ -1621,7 +1634,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 
                 if fim_manha <= hora_float < inicio_tarde:
                     status_casa = "FECHADO_INTERVALO_SABADO"
-                    mensagem_status = f"🔴 ESTAMOS NO INTERVALO DE SÁBADO. Voltamos às {blocos_hoje[1]['inicio']}."
+                    mensagem_status = f"Status atual: Pausa de almoço. Voltamos às {blocos_hoje[1]['inicio']}."
 
         # --- FIM DO CÁLCULO ---
 
@@ -1665,7 +1678,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             f"HOJE É: {dia_sem_str}, {data_hoje_fmt} | HORA: {hora_fmt}\n"
             f"=== STATUS ATUAL DA ACADEMIA (LEI ABSOLUTA) ===\n"
             f"STATUS: {status_casa}\n"
-            f"MENSAGEM AO CLIENTE: {mensagem_status}\n"
+            f"CONTEXTO: {mensagem_status}\n"
             f"===========================================\n"
             f"=== MAPA DE DATAS ===\n{calendario_completo}\n"
         )
@@ -1704,7 +1717,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         # 1. CONFIGURAÇÃO GERAL, CONTEXTO E FERRAMENTAS
         # ---------------------------------------------------------
             # VARIÁVEIS DE SISTEMA
-            {info_tempo_real} | SAUDAÇÃO: {saudacao} | CLIENT_PHONE_ID: {clean_number}
+            Tempo agora: {info_tempo_real} | SAUDAÇÃO: {saudacao} | CLIENT_PHONE_ID: {clean_number}
             {prompt_name_instruction}
             >> LISTA DE SERVIÇOS E DURAÇÃO (EM MINUTOS):
             {MAPA_SERVICOS_DURACAO}
@@ -2044,7 +2057,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
             PASSO 4: PORTAS ABERTAS (Despedida Elegante)
             -> Se recusar mesmo o grátis: Aceite com classe. Não seja chata.
-            -> Exemplo: "Entendi! Cada um tem seu tempo. Mas ó, quando decidires priorizar tua saúde, a Brooklyn tá aqui de portas abertas te esperando. Se cuida!"
+            -> Exemplo: "Claro! Cada um tem seu tempo. Mas ó, quando decidires priorizar tua saúde, a Brooklyn tá aqui de portas abertas te esperando. Se cuida!"
 
             REGRA CRÍTICA: Respeite a ordem. Só dê tchau (Passo 4) depois de tentar oferecer a Aula Grátis (Passo 3).
 
@@ -2662,7 +2675,12 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
 
 def remove_emojis(text):
     if not text: return ""
-    return re.sub(r'[\U00010000-\U0010ffff]', '', text).strip()
+    return re.sub(
+        r'[\U00010000-\U0010ffff'   # Cobre TODOS os emojis "novos" (rostinhos, bonecos, fogo, foguete)
+        r'\u2600-\u26ff'            # Cobre símbolos antigos (Sol ☀️, nuvem ☁️)
+        r'\u2700-\u27bf'            # Cobre Dingbats (AQUI MORA O ✅, o ❤, a ✂️)
+        r'\ufe0f]'                  # Cobre caracteres invisíveis de formatação
+        , '', text).strip()
         
 def send_whatsapp_message(number, text_message, delay_ms=1200): # <--- NOVO PARÂMETRO AQUI
     INSTANCE_NAME = "chatbot"
