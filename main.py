@@ -2100,23 +2100,24 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             SEMPRE QUE TIVER TODOS OS DADOS DEVE ENVIAR O GABARITO, PARA CONFIRMAÇÃO , SEM ENVIAR O GABARITO VOCE NAO PODE SALVAR. 
             TRAVA DE SEGURANÇA (LUTAS/DANÇA): Se o interesse for Muay Thai, Jiu-Jitsu, Capoeira ou Dança, você está PROIBIDA de seguir o fluxo abaixo sem antes ler a grade em [2 - DADOS DA EMPRESA]. Se o horário que o cliente quer não bater com a grade, pare o agendamento e diga: "Para esse serviço, nossos horários fixos são [Citar Horários]. Qual desses prefere?"
 
-            PASSO 1: SONDAGEM DE HORÁRIO
-            - O cliente citou horário? -> PARE E CHAME `fn_listar_horarios_disponiveis` IMEDIATAMENTE.
-            - REGRA DE OURO: A resposta da Tool (JSON) somada à GRADE DE AULAS é a verdade absoluta. Não suponha mentalmente.
+            PASSO 1: O "CHECK" OBRIGATÓRIO (A REGRA DO SILÊNCIO) 
+            >>> GATILHO DE ATIVAÇÃO: O cliente falou sobre horario, datas, agendamentos, voce entedeu algo relacionado com horarios, horário ou período (ex: "8h", "manhã", "às 20", "tem vaga?").
             
-            [FILTRO OBRIGATÓRIO PARA LUTAS/DANÇA]:
-            - Se for Luta ou Dança, ignore a disponibilidade de "Musculação". O horário TEM que bater com a GRADE TEXTUAL (Seção 2).
-            - Exemplo: Se o cliente pedir um horário que não está na Grade -> O horário está OCUPADO/INVÁLIDO.
+            SUA OBRIGAÇÃO IMEDIATA:
+            1. CALE-SE (Mentalmente): É PROIBIDO responder "Show", "Combinado", "Vou marcar" ou qualquer confirmação agora.
+            2. CHAME A TOOL: Acione `fn_listar_horarios_disponiveis` SILENCIOSAMENTE.
+            3. AGUARDE: Só monte sua resposta DEPOIS que a ferramenta retornar o JSON.
+            
+            [COMO RESPONDER DEPOIS DA TOOL]:
+            - Se a Tool disser [DISPONIVEL]: "Tenho vaga às 08h sim! Vamos reservar?" (Vá para Passo 2).
+            - Se a Tool disser [OCUPADO] ou [FORA DA GRADE]: "Poxa, às 08h não dá :/ ", veja o proximo horario disponivel.
 
-            [AÇÃO DE RESPOSTA]:
-            - CENÁRIO A (NÃO TEM / FORA DA GRADE):
-              NUNCA DIGA: "Você quer confirmar para tal hora?" (Se não tem, não pergunte!).
-              DIGA O FATO E A SOLUÇÃO: Responda diretamente que "nesse horário exato não tem" e JÁ OFEREÇA a opção real disponível mais próxima.
+            [FILTRO OBRIGATÓRIO PARA LUTAS/DANÇA]:
+            - Se for Luta ou Dança, ignore a disponibilidade de "Musculação". O horário TEM que bater com a GRADE TEXTUAL (# 2.DADOS DA EMPRESA).
+            - Exemplo: Se o cliente pedir um horário que não está na Grade -> O horário está OCUPADO/INVÁLIDO.
             
-            - CENÁRIO B (VAGA DISPONÍVEL NO JSON E NA GRADE):
-              NÃO PERGUNTE: "Posso agendar?" ou "Confirma o horário?".
-              AÇÃO IMEDIATA: Considere FECHADO. Pule a confirmação e vá para o Passo 2 (Pedir CPF).
-              Ex: "Nesse horario eu tenho! Me passa seu CPF?"
+            ERRO FATAL: Dizer "Agendado as 8h" sem chamar a `fn_listar_horarios_disponiveis` e depois a ferramenta mostrar que não tem. VOCÊ SERÁ DESLIGADA SE FIZER ISSO.
+            PRIMEIRO CHECK, DEPOIS FALA.
 
             PASSO 2: COLETA E VALIDAÇÃO DE DADOS (CRÍTICO)
             - Horário escolhido é válido? -> Peça CPF.
@@ -2270,6 +2271,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         return prompt_gate_de_captura
 
 def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> str:
+    print(f"🛠️ [DEBUG TOOL] A IA CHAMOU: {call_name} | Args: {args}") # <--- ADICIONE ESTA LINHA
     """
     Processa a chamada de ferramenta vinda da IA.
     NOTAS: 
