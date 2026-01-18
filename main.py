@@ -1592,7 +1592,7 @@ def verificar_lembretes_agendados():
     except Exception as e:
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
 
-def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None, is_name_transition: bool = False) -> str:
+def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None, transition_stage: int = 0) -> str:
     try:
         fuso = pytz.timezone('America/Sao_Paulo')
         agora = datetime.now(fuso)
@@ -1688,7 +1688,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             known_customer_name = palavras[0].capitalize()
         else:
             known_customer_name = " ".join([p.capitalize() for p in palavras])
-        if is_name_transition:
+        if transition_stage == 0:
             prompt_name_instruction = f"""
             O nome do cliente JÁ FOI CAPTURADO e é: {known_customer_name}. 
             === ANÁLISE DE CONTINUIDADE (CRÍTICO) ===
@@ -2489,15 +2489,17 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     old_history_gemini_format = []
     perfil_cliente_dados = {}
 
-    is_name_transition = False # Começa falso
+    # === [LÓGICA DE ESTÁGIOS] ===
+    # Padrão: Se não tem campo no banco, assume 0 (Significa: Tem nome, mas nunca se apresentou)
+    current_stage = 0 
     
-    if convo_data:
-        # Verifica no banco se a flag 'name_transition_done' já é verdadeira
-        transition_done = convo_data.get('name_transition_done', False)
-        
-        # Se temos um nome conhecido, MAS a flag diz que nunca fizemos a transição...
-        if known_customer_name and not transition_done:
-            is_name_transition = True # ATIVA O MODO TRANSIÇÃO!
+    if convo_data and known_customer_name:
+        current_stage = convo_data.get('name_transition_stage', 0)
+    
+    # Se não tem nome, o estágio é irrelevante (vai usar gatekeeper).
+    # Se tem nome, passamos o estágio (0 ou 1) para o prompt decidir o texto.
+    stage_to_pass = current_stage
+    # ============================
     
     if convo_data:
         history_from_db = convo_data.get('history', [])
@@ -2516,6 +2518,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             if 'text' in msg and not msg['text'].startswith("Chamando função"):
                 old_history_gemini_format.append({'role': role, 'parts': [msg['text']]})
 
+    # Passa o ESTÁGIO NUMÉRICO para o prompt
     system_instruction = get_system_prompt_unificado(
         saudacao, 
         horario_atual,
@@ -2523,7 +2526,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         contact_id,
         historico_str=historico_texto_para_prompt,
         client_profile_json=perfil_cliente_dados,
-        is_name_transition=is_name_transition
+        transition_stage=stage_to_pass # <--- Passando Inteiro (0 ou 1)
     )
 
     max_retries = 3 
@@ -2557,6 +2560,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 except:
                     func_call = None
 
+                # SE NÃO TIVER FUNÇÃO (É TEXTO), SAI DO LOOP
                 if not func_call or not getattr(func_call, "name", None):
                     break 
 
@@ -2566,11 +2570,12 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
                 resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
 
-                # Hot-swap de contexto se capturar o nome
+                # SE CAPTUROU NOME: Reinicia o processo. 
                 if call_name == "fn_capturar_nome":
-                    res_data = json.loads(resultado_json_str)
-                    nome_salvo = res_data.get("nome_salvo") or res_data.get("nome_extraido")
+                    rd = json.loads(resultado_json_str)
+                    nome_salvo = rd.get("nome_salvo") or rd.get("nome_extraido")
                     if nome_salvo:
+                        # Recursividade: Reinicia. O banco ainda não tem estágio, então vai assumir 0.
                         return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_salvo, retry_depth=retry_depth)
 
                 # Intervenção humana imediata
@@ -2590,14 +2595,15 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 turn_output += to
 
             # ======================================================================
-            # 📍 ATUALIZAÇÃO DO BANCO FORA DO LOOP (Correção Aplicada)
+            # [ATUALIZAÇÃO DE ESTÁGIO]
+            # Se estávamos no Estágio 0 e respondemos (saímos do loop), evoluímos para 1.
             # ======================================================================
-            if is_name_transition:
+            if known_customer_name and stage_to_pass == 0:
                 conversation_collection.update_one(
                     {'_id': contact_id},
-                    {'$set': {'name_transition_done': True}}
+                    {'$set': {'name_transition_stage': 1}} # <--- EVOLUI PARA 1 (Manutenção)
                 )
-                print(f"✅ [DB] Transição de nome concluída e salva para {log_display}.")
+                print(f"✅ [ESTÁGIO] Cliente {log_display} atualizado de 0 para 1.")
             # ======================================================================
 
             # --- CAPTURA DO TEXTO FINAL ---
