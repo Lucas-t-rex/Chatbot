@@ -1692,16 +1692,22 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         if transition_stage == 0 and not is_recursion:
             prompt_name_instruction = f"""
             ATENÇÃO MÁXIMA: O nome do cliente foi capturado AGORA: {known_customer_name}.
-            SUA TAREFA PRIORITÁRIA É ANALISAR O [HISTÓRICO RECENTE] ACIMA.
+            SUA TAREFA: OLHE O [HISTÓRICO RECENTE] IMEDIATAMENTE ANTERIOR AO NOME.
             PROCESSO DE DECISÃO BINÁRIA (SIM/NÃO):
             Pergunte a si mesma: "Nas mensagens ANTERIORES ao nome, o cliente fez alguma pergunta sobre PREÇO, LOCALIZAÇÃO, HORÁRIO ou MODALIDADE?"
             
-            >>> CAMINHO A (EXISTE PERGUNTA PENDENTE, FAÇA NESTA SEQUENCIA):
-                Se o cliente perguntou "Onde fica?", "Quanto custa?", "Tem luta?":
+            O cliente deixou algo "pendente"?
+            1. Fez uma PERGUNTA? (Preço, Local, Horário)?
+            2. OU Declarou uma INTENÇÃO? (Ex: "Quero agendar", "Quero marcar", "Vim pela musculação")?
+            
+            >>> CAMINHO A (EXISTE "DÍVIDA" DE RESPOSTA):
+                Gatilho: Se ele disse "Quero agendar musculação", "Onde fica?", "Quanto custa?":
                 1. Saúde: "Muuuito prazer, {known_customer_name}!"
-                2. RESPOSTA OBRIGATORIA: Entregue a informação técnica IMEDIATAMENTE (Endereço, Preço ou Horário).
-                4. FINALIZAÇÃO: Faça uma pergunta que envolve a pergunta dele!
-                (PROIBIDO perguntar "Já treina?" neste cenário. A prioridade é a dúvida dele).
+                2. AÇÃO IMEDIATA = RESPONDER (CRÍTICO):
+                    - Se ele falou alguma coisa que ficou pendente, ou sem resposta : responda imediatamente.
+                    - Se ele pediu para AGENDAR: Pule a sondagem e pergunte o DIA/HORÁRIO. ("Vamos marcar essa aula então! Que dia fica bom pra você?")
+                    - Se ele fez PERGUNTA: Responda a dúvida técnica.
+                (PROIBIDO perguntar "Já treina?" neste cenário. Ele já disse o que quer, atenda o pedido dele).
 
             >>> CAMINHO B (NÃO TEM PERGUNTA, SÓ "OI"):
                 Se o histórico for apenas "Oi", "Boa tarde", "Quero saber mais":
@@ -2113,7 +2119,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             === FLUXO DE AGENDAMENTO ===
 
             ATENÇÃO: Você é PROIBIDA de assumir que um horário está livre sem checar a Tool `fn_listar_horarios_disponiveis`.
-            ATENÇÃO VOCE NAO AGENDA 2 OU MAIS HORARIOS AO MESMO TEMPO ! NUNCA TENTE AGENDAR 2 OU MAIS HORARIOS JUNTOS!
+            REGRA DE OURO (CASAIS/GRUPOS): Se forem 2+ pessoas, É PROIBIDO processar junto; avise "vamos um de cada vez", finalize 100% o primeiro agendamento e SÓ DEPOIS peça os dados do próximo.
             SEMPRE QUE UMA PESSOA MENCIONAR HORARIOS CHAME `fn_listar_horarios_disponiveis`
             Siga esta ordem. NÃO pule etapas. NÃO assuma dados.
             Se na converssa ja tenha passado os dados não começe novamente do inicio do fluxo, ja continue de onde paramos, mesmo que tenha falado sobre outras coisas no meio da converssa. 
