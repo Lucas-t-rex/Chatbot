@@ -1688,7 +1688,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             known_customer_name = palavras[0].capitalize()
         else:
             known_customer_name = " ".join([p.capitalize() for p in palavras])
-            
+
         if transition_stage == 0 and not is_recursion:
             prompt_name_instruction = f"""
             O nome do cliente JÁ FOI CAPTURADO e é: {known_customer_name}. 
@@ -2228,6 +2228,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 - Objeto, Verbo ou "Teste": NÃO SALVE. Pergunte novamente com tato ("Isso é apelido? Como te chamo mesmo?"). GUIDE_ONLY: Use como regra lógica, mas mantenha a conversa fluida.
 
         === MODELOS DE CONVERSA (GUIA DE TOM) === Zero textão. Seja breve, estilo chat de whatsapp.
+            REGRA: se o cliente perguntou se voce esta bem, voce deve responder positivamente.
 
             CENÁRIO 1: RECIPROCIDADE (O CLIENTE PERGUNTOU DE VOCÊ).
                 CASO 1: SAUDAÇÃO SIMPLES (NÍVEL 1)
@@ -2493,15 +2494,12 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     old_history_gemini_format = []
     perfil_cliente_dados = {}
 
-    # === [LÓGICA DE ESTÁGIOS] ===
-    # Padrão: Se não tem campo no banco, assume None
-    current_stage = -1
-    
+    # === [LÓGICA DE ESTÁGIOS - APENAS LEITURA] ===
+    # A atualização agora é feita lá fora, no process_message_logic
+    current_stage = 0
     if convo_data and known_customer_name:
         current_stage = convo_data.get('name_transition_stage', 0)
     
-    # Se não tem nome, o estágio é irrelevante (vai usar gatekeeper).
-    # Se tem nome, passamos o estágio (0 ou 1) para o prompt decidir o texto.
     stage_to_pass = current_stage
     # ============================
     
@@ -2597,19 +2595,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 turn_input += ti
                 turn_output += to
 
-            # ======================================================================
-            # [LÓGICA DE EVOLUÇÃO DE ESTÁGIO 0 -> 1]
-            # Se estávamos no Estágio 0 e respondemos (saímos do loop), evoluímos para 1.
-            # ======================================================================
-            if known_customer_name and stage_to_pass == 0 and not is_recursion:
-                conversation_collection.update_one(
-                    {'_id': contact_id},
-                    {'$set': {'name_transition_stage': 1}} # <--- SALVA O ESTÁGIO 1 (Manutenção)
-                )
-                print(f"✅ [ESTÁGIO] Cliente {log_display} atualizado de 0 para 1.")
-            # ======================================================================
-
-            # --- CAPTURA DO TEXTO FINAL ---
             ai_reply_text = resposta_ia.text
             
             # Limpador de alucinação
@@ -3268,6 +3253,15 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
 
         # Pega o nome para passar pra IA
         known_customer_name = convo_status.get('customer_name') if convo_status else None
+
+        current_stage = convo_status.get('name_transition_stage', 0)
+        
+        if known_customer_name and current_stage == 0:
+            conversation_collection.update_one(
+                {'_id': clean_number},
+                {'$set': {'name_transition_stage': 1}}
+            )
+            print(f"🔒 [ESTÁGIO] Cliente {clean_number} respondeu após capturar nome. Evoluindo para Estágio 1 (Manutenção).")
         
         log_info(f"[DEBUG RASTREIO | PONTO 2] Conteúdo final para IA (Cliente {clean_number}): '{user_message_content}'")
 
