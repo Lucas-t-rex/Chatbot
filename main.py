@@ -2385,7 +2385,10 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 if conversation_collection is not None:
                     conversation_collection.update_one(
                         {'_id': contact_id},
-                        {'$set': {'customer_name': nome_limpo}}, # <-- Agora salva o nome limpo
+                        {'$set': {
+                            'customer_name': nome_limpo,
+                            'name_transition_stage': 0 # <--- DEFINE ESTÁGIO 0 AQUI
+                        }}, 
                         upsert=True
                     )
                 return json.dumps({"sucesso": True, "nome_salvo": nome_limpo}, ensure_ascii=False)
@@ -2490,8 +2493,8 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     perfil_cliente_dados = {}
 
     # === [LÓGICA DE ESTÁGIOS] ===
-    # Padrão: Se não tem campo no banco, assume 0 (Significa: Tem nome, mas nunca se apresentou)
-    current_stage = 0 
+    # Padrão: Se não tem campo no banco, assume None
+    current_stage = 0
     
     if convo_data and known_customer_name:
         current_stage = convo_data.get('name_transition_stage', 0)
@@ -2575,7 +2578,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     rd = json.loads(resultado_json_str)
                     nome_salvo = rd.get("nome_salvo") or rd.get("nome_extraido")
                     if nome_salvo:
-                        # Recursividade: Reinicia. O banco ainda não tem estágio, então vai assumir 0.
                         return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_salvo, retry_depth=retry_depth)
 
                 # Intervenção humana imediata
@@ -2595,31 +2597,21 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 turn_output += to
 
             # ======================================================================
-            # [ATUALIZAÇÃO DE ESTÁGIO]
+            # [LÓGICA DE EVOLUÇÃO DE ESTÁGIO 0 -> 1]
             # Se estávamos no Estágio 0 e respondemos (saímos do loop), evoluímos para 1.
             # ======================================================================
             if known_customer_name and stage_to_pass == 0:
                 conversation_collection.update_one(
                     {'_id': contact_id},
-                    {'$set': {'name_transition_stage': 1}} # <--- EVOLUI PARA 1 (Manutenção)
+                    {'$set': {'name_transition_stage': 1}} # <--- SALVA O ESTÁGIO 1 (Manutenção)
                 )
                 print(f"✅ [ESTÁGIO] Cliente {log_display} atualizado de 0 para 1.")
             # ======================================================================
 
             # --- CAPTURA DO TEXTO FINAL ---
-            ai_reply_text = ""
-            try:
-                ai_reply_text = resposta_ia.text
-            except:
-                try:
-                    ai_reply_text = resposta_ia.candidates[0].content.parts[0].text
-                except:
-                    if attempt < max_retries - 1: continue
-                    else: raise Exception("Falha ao obter texto da resposta.")
-
-            # ======================================================================
-            # 🛡️ [LIMPADOR DE ALUCINAÇÃO] - REMOVE CÓDIGO TÉCNICO DO CHAT
-            # ======================================================================
+            ai_reply_text = resposta_ia.text
+            
+            # Limpador de alucinação
             offending_terms = ["print(", "fn_", "default_api", "function_call", "api."]
             if any(term in ai_reply_text for term in offending_terms):
                 print(f"🛡️ BLOQUEIO DE CÓDIGO ATIVADO para {log_display}: {ai_reply_text}")
