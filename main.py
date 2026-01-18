@@ -1592,7 +1592,7 @@ def verificar_lembretes_agendados():
     except Exception as e:
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
 
-def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None, transition_stage: int = 0) -> str:
+def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None, transition_stage: int = 0, is_recursion: bool = False) -> str:
     try:
         fuso = pytz.timezone('America/Sao_Paulo')
         agora = datetime.now(fuso)
@@ -1688,7 +1688,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             known_customer_name = palavras[0].capitalize()
         else:
             known_customer_name = " ".join([p.capitalize() for p in palavras])
-        if transition_stage == 0:
+            
+        if transition_stage == 0 and not is_recursion:
             prompt_name_instruction = f"""
             O nome do cliente JÁ FOI CAPTURADO e é: {known_customer_name}. 
             === ANÁLISE DE CONTINUIDADE (CRÍTICO) ===
