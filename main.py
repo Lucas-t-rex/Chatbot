@@ -2449,7 +2449,7 @@ safety_settings = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
-def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name, retry_depth=0): 
+def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name, retry_depth=0, is_recursion=False): 
     """
     VERSÃO COM TRAVA DE SEGURANÇA ANTI-CÓDIGO (Limpador de Alucinação)
     """
@@ -2492,12 +2492,17 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     old_history_gemini_format = []
     perfil_cliente_dados = {}
 
-    # === LÓGICA DA ESCADA ===
-    # Se tem nome, pegamos o estágio. Se não tiver estágio gravado, assume 0.
-    stage_to_pass = 0 
+    # === [LÓGICA DE ESTÁGIOS] ===
+    # Padrão: Se não tem campo no banco, assume None
+    current_stage = -1
+    
     if convo_data and known_customer_name:
-        stage_to_pass = convo_data.get('name_transition_stage', 0)
-
+        current_stage = convo_data.get('name_transition_stage', 0)
+    
+    # Se não tem nome, o estágio é irrelevante (vai usar gatekeeper).
+    # Se tem nome, passamos o estágio (0 ou 1) para o prompt decidir o texto.
+    stage_to_pass = current_stage
+    # ============================
     
     if convo_data:
         history_from_db = convo_data.get('history', [])
@@ -2573,7 +2578,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     rd = json.loads(resultado_json_str)
                     nome_salvo = rd.get("nome_salvo") or rd.get("nome_extraido")
                     if nome_salvo:
-                        return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_salvo, retry_depth=retry_depth)
+                        return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_salvo, retry_depth=retry_depth, is_recursion=True)
 
                 # Intervenção humana imediata
                 try:
@@ -2595,7 +2600,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             # [LÓGICA DE EVOLUÇÃO DE ESTÁGIO 0 -> 1]
             # Se estávamos no Estágio 0 e respondemos (saímos do loop), evoluímos para 1.
             # ======================================================================
-            if known_customer_name and stage_to_pass == 0:
+            if known_customer_name and stage_to_pass == 0 and not is_recursion:
                 conversation_collection.update_one(
                     {'_id': contact_id},
                     {'$set': {'name_transition_stage': 1}} # <--- SALVA O ESTÁGIO 1 (Manutenção)
@@ -2626,7 +2631,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 if match:
                     nome_f = match.group(1)
                     handle_tool_call("fn_capturar_nome", {"nome_extraido": nome_f}, contact_id)
-                    return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_f, retry_depth=retry_depth)
+                    return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_f,  is_recursion=True)
 
             save_conversation_to_db(contact_id, sender_name, known_customer_name, turn_input, turn_output, ai_reply_text)
             return ai_reply_text
