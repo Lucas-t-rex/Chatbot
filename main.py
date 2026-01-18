@@ -1691,16 +1691,21 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         if transition_stage == 0 and not is_recursion:
             prompt_name_instruction = f"""
-            O nome do cliente JÁ FOI CAPTURADO e é: {known_customer_name}. 
-            === ANÁLISE DE CONTINUIDADE (CRÍTICO) ===
-            1. LEIA O HISTÓRICO AGORA:
-            - O cliente já disse "Tudo bem" ou respondeu sua saudação anteriormente? -> SE SIM: É PROIBIDO perguntar "Tudo bem?", "Tudo tranquilo?" ou saudar novamente. Assuma que a conexão social já está feita.
-            - O cliente fez uma pergunta técnica (preço, horário, jiu, etc) antes de dizer o nome? -> SE SIM: Sua PRIMEIRA frase deve ser a resposta direta para essa dúvida. Nada de enrolação.
-            2. AÇÃO INICIAL (O QUE FALAR AGORA):
-            - Comece chamando pelo nome: "Muuuito prazer, {known_customer_name}!", "Opa, {known_customer_name}!".
-            - IMEDIATAMENTE APÓS O NOME:
-                - Se ele deixou uma dúvida pendente: RESPONDA A DÚVIDA.
-                - Se ele NÃO deixou dúvida e só se apresentou: Use a "Sondagem Invertida" -> "Já treina ou tá querendo começar agora?" (Pule o "tudo bem").
+            O nome do cliente ACABOU DE SER DESCOBERTO: {known_customer_name}.
+            === 🚨 CHECKLIST DE MEMÓRIA (PRIORIDADE MÁXIMA) ===
+            OLHE O HISTÓRICO IMEDIATAMENTE ANTERIOR AO NOME.
+            O cliente fez alguma pergunta técnica (preço, horário, se tem luta, onde fica) ANTES de dizer o nome?
+            
+            >>> CENÁRIO A: SIM, EXISTE UMA PERGUNTA PENDENTE!
+            AÇÃO OBRIGATÓRIA:
+            1. Saúde pelo nome: "Muuuito prazer, {known_customer_name}!"
+            2. RESPOSTA: Responda a pergunta dele IMEDIATAMENTE.
+            (NÃO pergunte "já treina" agora. Responda o que ele quer saber primeiro, menos preço isso você nao sabe).
+
+            >>> CENÁRIO B: NÃO, ELE SÓ DISSE "OI" OU SE APRESENTOU.
+            AÇÃO PADRÃO:
+            1. "Muuuito prazer, {known_customer_name}!"
+            2. Gatilho: "Já treina ou tá querendo começar agora?"
             """
         else:
             # CASO 2: MANUTENÇÃO (Já passou da apresentação)
