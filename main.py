@@ -2589,14 +2589,16 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 turn_input += ti
                 turn_output += to
 
-
+            # ======================================================================
+            # 📍 ATUALIZAÇÃO DO BANCO FORA DO LOOP (Correção Aplicada)
+            # ======================================================================
             if is_name_transition:
                 conversation_collection.update_one(
                     {'_id': contact_id},
                     {'$set': {'name_transition_done': True}}
                 )
                 print(f"✅ [DB] Transição de nome concluída e salva para {log_display}.")
-
+            # ======================================================================
 
             # --- CAPTURA DO TEXTO FINAL ---
             ai_reply_text = ""
@@ -2609,9 +2611,12 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     if attempt < max_retries - 1: continue
                     else: raise Exception("Falha ao obter texto da resposta.")
 
+            # ======================================================================
+            # 🛡️ [LIMPADOR DE ALUCINAÇÃO] - REMOVE CÓDIGO TÉCNICO DO CHAT
+            # ======================================================================
             offending_terms = ["print(", "fn_", "default_api", "function_call", "api."]
             if any(term in ai_reply_text for term in offending_terms):
-                print(f"🛡️ BLOQUEIO DE CÓDIGO ATIVADO para {contact_id}: {ai_reply_text}")
+                print(f"🛡️ BLOQUEIO DE CÓDIGO ATIVADO para {log_display}: {ai_reply_text}")
                 linhas = ai_reply_text.split('\n')
                 # Filtra apenas as linhas que NÃO possuem termos técnicos
                 linhas_limpas = [l for l in linhas if not any(term in l for term in offending_terms)]
@@ -2620,7 +2625,9 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 # Se a limpeza apagou tudo, gera um fallback humano amigável
                 if not ai_reply_text:
                     ai_reply_text = "Certinho! Pode me passar seu CPF para eu validar aqui?"
+            # ======================================================================
 
+            # --- INTERCEPTOR DE NOME (BACKUP) ---
             if "fn_capturar_nome" in ai_reply_text:
                 match = re.search(r"nome_extraido=['\"]([^'\"]+)['\"]", ai_reply_text)
                 if match:
