@@ -1691,21 +1691,22 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
         if transition_stage == 0 and not is_recursion:
             prompt_name_instruction = f"""
-            O nome do cliente ACABOU DE SER DESCOBERTO: {known_customer_name}.
-            === 🚨 CHECKLIST DE MEMÓRIA (PRIORIDADE MÁXIMA) ===
-            OLHE O HISTÓRICO IMEDIATAMENTE ANTERIOR AO NOME.
-            O cliente fez alguma pergunta técnica (preço, horário, se tem luta, onde fica) ANTES de dizer o nome?
+            ATENÇÃO MÁXIMA: O nome do cliente foi capturado AGORA: {known_customer_name}.
+            SUA TAREFA PRIORITÁRIA É ANALISAR O [HISTÓRICO RECENTE] ACIMA.
+            PROCESSO DE DECISÃO BINÁRIA (SIM/NÃO):
+            Pergunte a si mesma: "Nas mensagens ANTERIORES ao nome, o cliente fez alguma pergunta sobre PREÇO, LOCALIZAÇÃO, HORÁRIO ou MODALIDADE?"
             
-            >>> CENÁRIO A: SIM, EXISTE UMA PERGUNTA PENDENTE!
-            AÇÃO OBRIGATÓRIA:
-            1. Saúde pelo nome: "Muuuito prazer, {known_customer_name}!"
-            2. RESPOSTA: Responda a pergunta dele IMEDIATAMENTE.
-            (NÃO pergunte "já treina" agora. Responda o que ele quer saber primeiro, menos preço isso você nao sabe).
+            >>> CAMINHO A (EXISTE PERGUNTA PENDENTE, FAÇA NESTA SEQUENCIA):
+                Se o cliente perguntou "Onde fica?", "Quanto custa?", "Tem luta?":
+                1. Saúde: "Muuuito prazer, {known_customer_name}!"
+                2. RESPOSTA OBRIGATORIA: Entregue a informação técnica IMEDIATAMENTE (Endereço, Preço ou Horário).
+                4. FINALIZAÇÃO: Faça uma pergunta que envolve a pergunta dele!
+                (PROIBIDO perguntar "Já treina?" neste cenário. A prioridade é a dúvida dele).
 
-            >>> CENÁRIO B: NÃO, ELE SÓ DISSE "OI" OU SE APRESENTOU.
-            AÇÃO PADRÃO:
-            1. "Muuuito prazer, {known_customer_name}!"
-            2. Gatilho: "Já treina ou tá querendo começar agora?"
+            >>> CAMINHO B (NÃO TEM PERGUNTA, SÓ "OI"):
+                Se o histórico for apenas "Oi", "Boa tarde", "Quero saber mais":
+                1. Saúde: "Muuuito prazer, {known_customer_name}!"
+                2. Sondagem: "Já treina ou tá querendo começar agora?"
             """
         else:
             # CASO 2: MANUTENÇÃO (Já passou da apresentação)
