@@ -2492,17 +2492,12 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     old_history_gemini_format = []
     perfil_cliente_dados = {}
 
-    # === [LÓGICA DE ESTÁGIOS] ===
-    # Padrão: Se não tem campo no banco, assume None
-    current_stage = 0
-    
+    # === LÓGICA DA ESCADA ===
+    # Se tem nome, pegamos o estágio. Se não tiver estágio gravado, assume 0.
+    stage_to_pass = 0 
     if convo_data and known_customer_name:
-        current_stage = convo_data.get('name_transition_stage', 0)
-    
-    # Se não tem nome, o estágio é irrelevante (vai usar gatekeeper).
-    # Se tem nome, passamos o estágio (0 ou 1) para o prompt decidir o texto.
-    stage_to_pass = current_stage
-    # ============================
+        stage_to_pass = convo_data.get('name_transition_stage', 0)
+
     
     if convo_data:
         history_from_db = convo_data.get('history', [])
