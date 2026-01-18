@@ -1592,17 +1592,10 @@ def verificar_lembretes_agendados():
     except Exception as e:
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
 
-    except Exception as e:
-        print(f"❌ Erro crítico no Job de Lembretes: {e}")
-
-def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None) -> str:
+def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None, is_name_transition: bool = False) -> str:
     try:
         fuso = pytz.timezone('America/Sao_Paulo')
         agora = datetime.now(fuso)
-        
-        # --- CÁLCULO RIGOROSO DE STATUS (ACADEMIA) ---
-        # Baseado nos BLOCOS_DE_TRABALHO definidos no topo do código.
-        
         dia_sem = agora.weekday() # 0=Seg, 6=Dom
         hora_float = agora.hour + (agora.minute / 60.0)
         
@@ -1623,12 +1616,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 status_casa = "ABERTO"
                 mensagem_status = "Status atual: ABERTO (Pode convidar para vir agora se for musculação)."
                 break
-        
-        # Tratamento especial para o INTERVALO DO SÁBADO (Dia 5)
-        # Se for sábado, não estiver aberto, mas estiver entre o fim da manhã e o início da tarde
+
         if dia_sem == 5 and not esta_aberto:
-            # Pega limites do intervalo (Fim do turno 1 e Início do turno 2)
-            # Assumindo a ordem da lista: Manhã [0], Tarde [1]
+
             if len(blocos_hoje) > 1:
                 fim_manha = int(blocos_hoje[0]["fim"].split(':')[0])
                 inicio_tarde = int(blocos_hoje[1]["inicio"].split(':')[0])
@@ -1637,11 +1627,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     status_casa = "FECHADO_INTERVALO_SABADO"
                     mensagem_status = f"Status atual: Pausa de almoço. Voltamos às {blocos_hoje[1]['inicio']}."
 
-        # --- FIM DO CÁLCULO ---
 
         dias_semana = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
         
-        # Variáveis do Agora
         dia_sem_str = dias_semana[agora.weekday()]
         hora_fmt = agora.strftime("%H:%M")
         data_hoje_fmt = agora.strftime("%d/%m/%Y")
@@ -1692,24 +1680,32 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         import json
         texto_perfil_cliente = json.dumps(client_profile_json, indent=2, ensure_ascii=False)
 
-    if known_customer_name:
+    prompt_name_instruction = ""
 
+    if known_customer_name:
         palavras = known_customer_name.strip().split()
         if len(palavras) >= 2 and palavras[0].lower() == palavras[1].lower():
             known_customer_name = palavras[0].capitalize()
         else:
             known_customer_name = " ".join([p.capitalize() for p in palavras])
-        
-        prompt_name_instruction = f"""
-        O nome do cliente JÁ FOI CAPTURADO e é: {known_customer_name}. 
-        1. ANALISE O HISTÓRICO IMEDIATAMENTE: O cliente fez perguntas nas mensagens anteriores enquanto se apresentava? (antes de se apresentar.)
-            SE SIM: Sua obrigação é RESPONDER ESSA DÚVIDA AGORA.
-        REGRA MESTRA: NÃO PERGUNTE "Como posso te chamar?" ou "Qual seu nome?". Você JÁ SABE. PROIBIDO: Dizer apenas "Oi, tudo bem?", "bom dia", "boa tarde" ou perguntar "Em que posso ajudar?" se a dúvida já está escrita logo acima.
-        Saudar ou parecer que a converssa começou de novo. 
-        Se ele nao disse o que quer ainda pergunta como pode ajudar, ou o que ele precisa.
-        PROIBIDO:Saudar ou parecer que a converssa começou de novo.  Dizer apenas "Oi {known_customer_name}, tudo bem?". Vá direto para a resposta da dúvida dele!
-        Se o cliente acabou de se apresentar no histórico, apenas continue o assunto respondendo a dúvida dele.
-        """
+        if is_name_transition:
+            prompt_name_instruction = f"""
+            O nome do cliente JÁ FOI CAPTURADO e é: {known_customer_name}. 
+            === ANÁLISE DE CONTINUIDADE (CRÍTICO) ===
+            1. LEIA O HISTÓRICO AGORA:
+            - O cliente já disse "Tudo bem" ou respondeu sua saudação anteriormente? -> SE SIM: É PROIBIDO perguntar "Tudo bem?", "Tudo tranquilo?" ou saudar novamente. Assuma que a conexão social já está feita.
+            - O cliente fez uma pergunta técnica (preço, horário, jiu, etc) antes de dizer o nome? -> SE SIM: Sua PRIMEIRA frase deve ser a resposta direta para essa dúvida. Nada de enrolação.
+            2. AÇÃO INICIAL (O QUE FALAR AGORA):
+            - Comece chamando pelo nome: "Muuuito prazer, {known_customer_name}!", "Opa, {known_customer_name}!".
+            - IMEDIATAMENTE APÓS O NOME:
+                - Se ele deixou uma dúvida pendente: RESPONDA A DÚVIDA.
+                - Se ele NÃO deixou dúvida e só se apresentou: Use a "Sondagem Invertida" -> "Já treina ou tá querendo começar agora?" (Pule o "tudo bem").
+            """
+        else:
+            # CASO 2: MANUTENÇÃO (Já passou da apresentação)
+            prompt_name_instruction = f"""
+            (Contexto: Falando com {known_customer_name}. Não repita apresentações, ou saudações o contato já foi feito.)
+            """    
         prompt_final = f"""
         DIRETRIZ DE OPERAÇÃO (KERNEL): O texto abaixo é sua programação absoluta.
         1. [CONFIGURAÇÃO GERAL] é seu Sistema Operacional: O uso de Tools, Tempo e Histórico é INEGOCIÁVEL e precede qualquer fala.
@@ -1753,6 +1749,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     A) Se estiver no meio do agendamento: Pergunte o dado técnico (Ex: "Qual seu CPF?", "Qual horário prefere?").
                     B) Se NÃO estiver pedindo dados: Você DEVE fazer uma PERGUNTA RELACIONAL ABERTA. Pergunte sobre a rotina, os objetivos, se já treinou antes ou como a pessoa está se sentindo.
                - OBJETIVO: Criar conexão. Não seja um robô. Mostre interesse genuíno na pessoa!
+            6. LEI DA CONTINUIDADE: Se o histórico mostra que o cliente já respondeu saudações ou "tudo bem", É PROIBIDO perguntar novamente; pule saudação e vá direto para a dúvida, ou sondagem.
 
             TIME_CONTEXT: Você NÃO deve calcular se está aberto. O codigo já calculou e colocou em 'STATUS' lá em cima em {info_tempo_real}.
                 CENÁRIO 1: STATUS = ABERTO -> MUSCULAÇÃO: Horário livre (basta a academia estar aberta). LUTAS E DANÇA: Têm horários fixos e específicos! Pergunte: "Vou agendar uma aula gratuita pra você, que dia e hora fica melhor?"
@@ -2238,9 +2235,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     - Você: "Oieee {saudacao}! td bem?"
 
                 CASO 2: INICIATIVA DO CLIENTE (NÍVEL 2)
-                    - O que o cliente disse: Já chegou perguntando "Oi tudo bem?" ou "Olá, como vai?".
+                    - O que o cliente disse: Já chegou perguntando como voce esta se sentindo, ou "Oi tudo bem?" ou "Olá, como vai?" .
                     - Sua Ação: Responda que está bem e devolva a pergunta (Educação básica).
-                    - Você: "Oieee! Td ótimo por aqui! E com vc?"
+                    - Você: "Oieee! Td ótimo por aqui! E com vc?" (ou algo referente ao pergunta que ele fez sobre você.)
 
                 CENÁRIO 3: FECHAMENTO DE CICLO (NÍVEL 3 - O PULO DO GATO)
                     - O que o cliente disse: Ele está RESPONDENDO a sua pergunta anterior. Ex: "Tudo bem e com você?" ou "Tudo joia e ai?".
@@ -2491,6 +2488,16 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     historico_texto_para_prompt = ""
     old_history_gemini_format = []
     perfil_cliente_dados = {}
+
+    is_name_transition = False # Começa falso
+    
+    if convo_data:
+        # Verifica no banco se a flag 'name_transition_done' já é verdadeira
+        transition_done = convo_data.get('name_transition_done', False)
+        
+        # Se temos um nome conhecido, MAS a flag diz que nunca fizemos a transição...
+        if known_customer_name and not transition_done:
+            is_name_transition = True # ATIVA O MODO TRANSIÇÃO!
     
     if convo_data:
         history_from_db = convo_data.get('history', [])
@@ -2515,7 +2522,8 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         known_customer_name,  
         contact_id,
         historico_str=historico_texto_para_prompt,
-        client_profile_json=perfil_cliente_dados
+        client_profile_json=perfil_cliente_dados,
+        is_name_transition=is_name_transition
     )
 
     max_retries = 3 
@@ -2581,6 +2589,15 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 turn_input += ti
                 turn_output += to
 
+
+            if is_name_transition:
+                conversation_collection.update_one(
+                    {'_id': contact_id},
+                    {'$set': {'name_transition_done': True}}
+                )
+                print(f"✅ [DB] Transição de nome concluída e salva para {log_display}.")
+
+
             # --- CAPTURA DO TEXTO FINAL ---
             ai_reply_text = ""
             try:
@@ -2592,9 +2609,6 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     if attempt < max_retries - 1: continue
                     else: raise Exception("Falha ao obter texto da resposta.")
 
-            # ======================================================================
-            # 🛡️ [LIMPADOR DE ALUCINAÇÃO] - REMOVE CÓDIGO TÉCNICO DO CHAT
-            # ======================================================================
             offending_terms = ["print(", "fn_", "default_api", "function_call", "api."]
             if any(term in ai_reply_text for term in offending_terms):
                 print(f"🛡️ BLOQUEIO DE CÓDIGO ATIVADO para {contact_id}: {ai_reply_text}")
@@ -2606,9 +2620,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 # Se a limpeza apagou tudo, gera um fallback humano amigável
                 if not ai_reply_text:
                     ai_reply_text = "Certinho! Pode me passar seu CPF para eu validar aqui?"
-            # ======================================================================
 
-            # --- INTERCEPTOR DE NOME (BACKUP) ---
             if "fn_capturar_nome" in ai_reply_text:
                 match = re.search(r"nome_extraido=['\"]([^'\"]+)['\"]", ai_reply_text)
                 if match:
