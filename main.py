@@ -3152,7 +3152,11 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
         # 1. Garante que o cliente existe no banco (Com o ID 55... Correto)
         conversation_collection.update_one(
             {'_id': clean_number},
-            {'$setOnInsert': {'created_at': now, 'history': []}},
+            {'$setOnInsert': {
+                'created_at': now, 
+                'history': [],
+                'name_transition_stage': 0  # <--- ADICIONE ESTA LINHA (Inicializa como 0)
+            }},
             upsert=True
         )
 
