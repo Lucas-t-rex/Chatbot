@@ -148,28 +148,40 @@ def _calcular_digito(cpf_parcial):
 def validar_cpf_logica(cpf_input: str):
     """
     Limpa, conta e valida matematicamente o CPF.
-    Retorna um dicionário com status e mensagem para o LLM.
+    LÓGICA HÍBRIDA: Diferencia erro de digitação de múltiplos CPFs.
     """
     # 1. Limpeza (Sanitização) - Remove tudo que não é número
     cpf_limpo = re.sub(r'\D', '', str(cpf_input))
+    tamanho = len(cpf_limpo)
 
-    # 2. Verificação de Formato Básico
-    if len(cpf_limpo) != 11:
-        return {"valido": False, "msg": f"O CPF contém {len(cpf_limpo)} dígitos, mas deve ter 11."}
+    # CENÁRIO 1: MÚLTIPLOS CPFS (Bloqueio de Fluxo)
+    # Se tiver 20 ou mais dígitos, provavelmente são 2 CPFs juntos (11+11=22)
+    if tamanho >= 20:
+        return {
+            "valido": False, 
+            "msg": f"ERRO DE FLUXO: Detectei {tamanho} números. Parece que você enviou DOIS ou mais CPFs juntos. O sistema trava com isso. Pare agora e peça para o cliente mandar UM CPF de cada vez."
+        }
+
+    # CENÁRIO 2: ERRO DE DIGITAÇÃO (Tamanho incorreto)
+    # Se não for 11 (e for menor que 20), é só um erro de digitação do cliente.
+    if tamanho != 11:
+        return {
+            "valido": False, 
+            "msg": f"CPF inválido. O documento precisa ter exatamente 11 dígitos, mas identifiquei {tamanho}. Verifique o número."
+        }
     
-    # 3. Elimina CPFs com todos os dígitos iguais (ex: 111.111.111-11 é inválido matematicamente mas passa no cálculo)
+    # CENÁRIO 3: REGRAS MATEMÁTICAS (Tamanho é 11, agora valida os dígitos)
     if cpf_limpo == cpf_limpo[0] * 11:
         return {"valido": False, "msg": "CPF inválido (todos os dígitos são iguais)."}
 
-    # Primeiro dígito
+    # Primeiro dígito verificador
     primeiro_digito = _calcular_digito(cpf_limpo[:9])
-    # Segundo dígito
+    # Segundo dígito verificador
     segundo_digito = _calcular_digito(cpf_limpo[:9] + primeiro_digito)
 
     cpf_calculado = cpf_limpo[:9] + primeiro_digito + segundo_digito
 
     if cpf_limpo == cpf_calculado:
-        # Aqui podemos formatar para visualização se quiser: f"{cpf_limpo[:3]}.{cpf_limpo[3:6]}..."
         return {"valido": True, "msg": "CPF Válido e verificado."}
     else:
         return {"valido": False, "msg": "CPF inválido (erro nos dígitos verificadores)."}
@@ -2103,7 +2115,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             - Se for "Ganhar Massa/Força": Venda a Musculação. ("Nossa estrutura de pesos é top pra hipertrofia").
             
             3. FECHAMENTO (O AGENDAMENTO):
-            - O seu "link de delivery" aqui é a **AULA EXPERIMENTAL**.
+            - O seu "link de delivery" aqui é a *AULA EXPERIMENTAL GRATÍS*.
             - AÇÃO: Converta o interesse em data e hora.
             - Roteiro: "Bora sentir isso na prática? Tu consegues vir hoje ou amanhã pra fazer um treino experimental na faixa (grátis)?"
             - Use `fn_listar_horarios_disponiveis` para ver se tem aula de luta/dança no horário que ele quer.
@@ -2117,9 +2129,16 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             -> AÇÃO: Fluxo de agendamento.
 
             === FLUXO DE AGENDAMENTO ===
+            
+            ⛔ TRAVA DE SISTEMA (SERIALIZAÇÃO OBRIGATÓRIA): 
+            O sistema CRASHA se você tentar processar duas pessoas ao mesmo tempo.
+            Se o cliente disser "eu e minha esposa", "para nós dois", ou mandar dois CPFs:
+            1. IGNORE TOTALMENTE a segunda pessoa agora.
+            2. DIGA: "Que legal! Pra não me perder, vamos cadastrar um de cada vez. Primeiro o seu..."
+            3. FOCALISE: Peça os dados (Nome/CPF) apenas de UM.
+            4. FINALIZAÇÃO: Somente após a tool `fn_salvar_agendamento` retornar "Sucesso" para o primeiro, você diz: "Pronto! O seu tá feito. Agora me passa o nome e CPF dela."
 
             ATENÇÃO: Você é PROIBIDA de assumir que um horário está livre sem checar a Tool `fn_listar_horarios_disponiveis`.
-            REGRA DE OURO (CASAIS/GRUPOS): Se forem 2+ pessoas, É PROIBIDO processar junto; avise "vamos um de cada vez", finalize 100% o primeiro agendamento e SÓ DEPOIS peça os dados do próximo.
             SEMPRE QUE UMA PESSOA MENCIONAR HORARIOS CHAME `fn_listar_horarios_disponiveis`
             Siga esta ordem. NÃO pule etapas. NÃO assuma dados.
             Se na converssa ja tenha passado os dados não começe novamente do inicio do fluxo, ja continue de onde paramos, mesmo que tenha falado sobre outras coisas no meio da converssa. 
