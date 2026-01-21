@@ -90,9 +90,9 @@ message_buffer = {}
 message_timers = {}
 BUFFER_TIME_SECONDS=8
 
-TEMPO_FOLLOWUP_1 = 5
-TEMPO_FOLLOWUP_2 = 60
-TEMPO_FOLLOWUP_3 = 90
+TEMPO_FOLLOWUP_1 = 2
+TEMPO_FOLLOWUP_2 = 3
+TEMPO_FOLLOWUP_3 = 4
 
 TEMPO_FOLLOWUP_SUCESSO = 22 * 60
 TEMPO_FOLLOWUP_FRACASSO = 22 * 60
@@ -924,17 +924,6 @@ if agenda_instance:
                             }
                         },
                         "required": ["cpf_input"]
-                    }
-                },
-                {
-                    "name": "fn_consultar_historico_completo",
-                    "description": "MEMÓRIA ARQUIVADA (BUSCA DE ÚLTIMO RECURSO): Use esta ferramenta SOMENTE se você precisar saber algo específico (ex: CPF, Endereço, Preferência) e essa informação NÃO estiver escrita nas mensagens recentes acima. REGRA: Se a informação não estiver na conversa atual, aí sim você busca aqui.",
-                    "parameters": {
-                        "type_": "OBJECT",
-                        "properties": {
-                            "query": {"type_": "STRING", "description": "O que você procurou na conversa atual e não achou? (Ex: 'qual o cpf dele', 'preferencia de pizza')"}
-                        },
-                        "required": ["query"]
                     }
                 }
             ]
@@ -1838,14 +1827,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         - REGRA: Se entender que a pessoa quer falar com o Aylla ou o dono ou alguem resposavel, chame a chave imediatamente. Nunca diga que ira chamar e nao use a tolls.
                             - Caso você não entenda peça pra pessoa ser mais claro na intenção dela.
 
-                    4. `fn_consultar_historico_completo`: 
-                        - QUANDO USAR: APENAS para buscar informações de DIAS ANTERIORES que não estão no [HISTÓRICO RECENTE] acima.
-                        - PROIBIDO: Não chame essa função para ver o que o cliente acabou de dizer. Leia o histórico que já te enviei no prompt.
-                        
-                    5. `fn_buscar_por_cpf` / `fn_alterar_agendamento` / `fn_excluir_agendamento`:
+                    4. `fn_buscar_por_cpf` / `fn_alterar_agendamento` / `fn_excluir_agendamento`:
                         - QUANDO USAR: Gestão. Use para consultar, remarcar ou cancelar agendamentos existentes.
                     
-                    6. `fn_validar_cpf`:
+                    5. `fn_validar_cpf`:
                         - QUANDO USAR: Sempre quando voce pedir o cpf do e ele cliente digitar um número de documento.
                     
         # ---------------------------------------------------------
@@ -2475,38 +2460,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
             # Chama a função lógica que já criamos lá em cima
             resp = validar_cpf_logica(cpf) 
             return json.dumps(resp, ensure_ascii=False)
-
-        elif call_name == "fn_consultar_historico_completo":
-            try:
-                print(f"🧠 [MEMÓRIA] IA solicitou busca no histórico antigo para: {contact_id}") # Log Limpo
-
-                convo = conversation_collection.find_one({'_id': contact_id})
-                if not convo:
-                    return json.dumps({"erro": "Histórico não encontrado."}, ensure_ascii=False)
-                
-                history_list = convo.get('history', [])
-                
-                texto_historico = "--- INÍCIO DO HISTÓRICO COMPLETO (BANCO DE DADOS) ---\n"
-                for m in history_list: 
-                    r = "Cliente" if m.get('role') == 'user' else ""
-                    t = m.get('text', '')
-                    # Ignora logs técnicos para limpar a leitura
-                    if not t.startswith("Chamando função") and not t.startswith("[HUMAN"):
-                        texto_historico += f"[{m.get('ts', '')[:16]}] {r}: {t}\n"
-                texto_historico += "--- FIM DO HISTÓRICO COMPLETO ---"
-                
-                qtd_msgs = len(history_list)
-                tamanho_texto = len(texto_historico)
-
-                print(f"✅ [MEMÓRIA] Sucesso! {qtd_msgs} mensagens recuperadas ({tamanho_texto} caracteres) e enviadas para a IA.")
-
-                # 4. Retorna TUDO (Removemos o slice [-2000:])
-                return json.dumps({"sucesso": True, "historico": texto_historico}, ensure_ascii=False)
-                
-            except Exception as e:
-                print(f"❌ [MEMÓRIA] Erro ao ler histórico: {e}")
-                return json.dumps({"erro": f"Falha ao ler histórico: {e}"}, ensure_ascii=False)
-
+        
         else:
             return json.dumps({"erro": f"Ferramenta desconhecida: {call_name}"}, ensure_ascii=False)
             
