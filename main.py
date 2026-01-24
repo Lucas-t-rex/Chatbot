@@ -1266,20 +1266,23 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                 historico_texto += f"- {role}: {txt}\n"
 
         nome_valido = False
-        if nome_cliente and str(nome_cliente).lower() not in ['cliente', 'none', 'null', 'unknown', 'none']:
+        if nome_cliente and str(nome_cliente).lower() not in ['cliente', 'none', 'null', 'unknown']:
             nome_valido = True
         
-        if nome_valido:
-            # Se tem nome: A regra permite usar, e o display_name é o próprio nome
-            regra_tratamento = f"- Use o nome '{nome_cliente}' para gerar conexão."
+        # LÓGICA DE USO DO NOME: Usar apenas em Sucesso, Fracasso ou no PRIMEIRO contato (Estágio 0)
+        usar_nome_agora = True if status_alvo in ['sucesso', 'fracasso'] or (status_alvo == 'andamento' and estagio == 0) else False
+
+        if nome_valido and usar_nome_agora:
+            # Se tem nome e é o momento certo: usa o nome no início.
+            regra_tratamento = f"- Use o nome '{nome_cliente}' de forma natural no início."
             display_name = nome_cliente
-            # Variável que coloca o nome no início da frase (ex: "Dani, ")
-            inicio_fala = f"{nome_cliente}, " 
+            inicio_fala = f"{nome_cliente}, "
         else:
             # Se NÃO tem nome: Regra de neutralidade total
             regra_tratamento = (
                 "- NOME DESCONHECIDO (CRÍTICO): NÃO use 'Cliente', 'Amigo', 'Cara' ou invente nomes.\n"
                 "- PROIBIDO VOCATIVOS GENÉRICOS.\n"
+                "- PROIBIDO saudações como 'tudo bem?', 'tudo certo?', 'tudo bom?', 'beleza?'.\n"
                 "- Comece a frase DIRETAMENTE com o verbo ou o assunto.\n"
                 "- Exemplo CERTO: 'Parece que você está ocupado...'\n"
                 "- Exemplo ERRADO: 'Cliente, parece que você...'"
@@ -1356,7 +1359,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
 
                     REGRAS:
                         - Use conectivos ("Então...", "E aí...", "em...").
-                        - NÃO repita "Oi" ou "Bom dia", "tudo bem".
+                        - NÃO diga "Oi" ou "Bom dia", "tudo bem?", "tudo certo?".
                         - Seja breve.
                     """
                 )
@@ -1380,13 +1383,14 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                         - Tom de quem está ajudando.
                     
                     EXEMPLO-GABARITO (referência de lógica):
-                        "não sei se vc já resolveu o (assunto que falavam), mas pra resolver o (problema do cliente) é só vc/nós/eu (solução(tente parecer facíl))."
+                        "vc deve ta na correria ai né? mas pra vc ter (beneficio do assunto que falavam) é só vc/nós/eu (solução(tente parecer facíl))."
 
                     REGRAS:
                         - Não use o nome.
                         - Tom motivador e parceiro.
                         - Foco no benefício (sentir-se bem).
                         - Não use conectivos ("Então...", "E aí...", "em...").
+                        - LINGUAGEM NEUTRA: Não use 'ocupado' ou 'ocupada'. Use 'a correria', 'a rotina'.
                         - NÃO repita "Oi" ou "Bom dia", "tudo bem".
                         - Seja breve.
 
@@ -1403,7 +1407,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                     1. PROIBIDO dizer "vou encerrar", "vou fechar o chamado" ou "não vou incomodar".
                     2. Diga apenas que você vai ficar por aqui esperando ele(a) quando puder responder ou decidir vir.
                     3. A MENSAGEM DEVE TERMINAR OBRIGATORIAMENTE COM O LINK: 
-                      "Enquanto isso, vai dando uma olhada na galera lá no insta: https://www.instagram.com/brooklyn_academia/"
+                      "Enquanto isso, vai dando uma olhada na galera lá no insta! https://www.instagram.com/brooklyn_academia/"
                     
                     REGRAS CRÍTICAS:
                     - Tom: Super amigável, paciente e "sem pressa".
@@ -1736,9 +1740,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             [CENÁRIO b: PERGUNTA VAGA / GENÉRICA (NÃO SEI O QUE ELE QUER)]
             - Gatilho: Ele disse apenas "Quero informações", "Como funciona", "Queria saber da academia", "Me explica" (sem dizer sobre o que).
             - AÇÃO:
-              1. SAÚDE: "Muuuuuito Prazer, {known_customer_name}!"
+              1. SAÚDE: "Que bom te ver por aqui {known_customer_name}!"
               2. PERGUNTA DE FILTRO: Não explique nada ainda. Pergunte o que ele quer saber.
-              - Script Sugerido: "Claro! A gente tem musculação, lutas, dança. Vc quer saber sobre valores, horários, localização ou sobre as aulas?"
+              - Script Sugerido: "Nós temos musculação, lutas e dança. Vc quer saber sobre valores, horários, localização ou sobre as aulas?"
               (Obrigatório pedir para ele especificar).
 
             [CENÁRIO B: NÃO TEM PERGUNTA NENHUMA, APENAS "OI/OLÁ"]
