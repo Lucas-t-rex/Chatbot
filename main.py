@@ -2010,7 +2010,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         - SE VOCÊS ESTÃO CONVERSSANDO RECENTEMENTE, NÃO COMPRIMENTE.
                         - PROIBIDO: Dizer "Oieee", "Olá [Nome]", "Tudo bem?" no meio da conversa.
                         - AÇÃO: Responda a pergunta "na lata". Se ele perguntou "Tem aula pra mulher?", responda APENAS "Tem sim! O ambiente é seguro...". NÃO DIGA "Oi fulano".
-                            - NENHUMA sondagem ou pergunta pode vir antes da resposta objetiva.
+                        - NENHUMA sondagem ou pergunta pode vir antes da resposta objetiva.
+                    5. TOQUE DE HUMOR SUTIL: Use "micro-comentários" ocasionais e orgânicos sobre rotina ou treino, tão discretos que não interrompam o fluxo técnico da conversa.
+                    
             = REGRAS VISUAIS E DE ESTILO =
                 VISUAL E ESTILO (REGRAS TÉCNICAS DE OUTPUT)
                     1. FORMATAÇÃO WHATSAPP (LEITURA RÁPIDA):
