@@ -985,8 +985,8 @@ def analisar_status_da_conversa(history):
         # --- 1. REGRAS DE FERRO (Verificação Automática) ---
         
         # SUCESSO ABSOLUTO: Se a função de salvar agendamento foi chamada com sucesso.
-        if "fn_salvar_agendamento" in text:
-            print("✅ [Auditor] Sucesso detectado via função de agendamento.")
+        if "fn_salvar_agendamento" in text or "[HUMAN_INTERVENTION]" in text:
+            print(f"✅ [Auditor] Sucesso detectado via: {'Agendamento' if 'fn_salvar_agendamento' in text else 'Intervenção Humana'}")
             return "sucesso", 0, 0
 
         # Prepara o texto limpo para a IA analisar o restante
@@ -1007,6 +1007,7 @@ def analisar_status_da_conversa(history):
                 - Você entendeu que nos ganhamos a venda ou o agendamento.
                 - O agendamento foi CONFIRMADO (o bot disse "agendado", "marcado", "te espero").
                 - O Cliente confirmou que vai comparecer.
+                - Se o cliente disse que queria falar com financeiro e foi enviado este numero pra ele entrar em contato: 99121-6103
             
             2. FRACASSO (Perda):
                 - Você entendeu que perdemos a venda ou o agendamento.
@@ -1318,7 +1319,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
             instrucao = (
                 f"""O cliente ({inicio_fala}) não fechou o agendamento ontem.
                 
-                MISSÃO: Tente identificar a OBJEÇÃO oculta no histórico abaixo e quebre-a com HUMOR.
+                MISSÃO: Tente identificar a OBJEÇÃO oculta no histórico abaixo e quebre-a com HUMOR. E peça Reputação (Google) e Engajamento (Instagram).
                 HISTÓRICO PARA ANÁLISE:
                 {historico_texto}
 
@@ -1342,6 +1343,13 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
 
                 FECHAMENTO OBRIGATÓRIO (Para todos):
                 - Reafirme que a Broklin Academia continua de portas abertas pro momento que ele decidir. "Sem pressão, quando quiseres, é só chamar!"
+
+                O Pedido (Google): Peça uma avaliação rápida, dizendo que ajuda muito a academia a crescer.
+                   -> Coloque este link EXATO logo abaixo: https://share.google/wb1tABFEPXQIc0aMy
+                
+                O Convite (Instagram): Convide para acompanhar as novidades e dicas no nosso Insta.
+                   -> Coloque este link EXATO logo abaixo: https://www.instagram.com/brooklyn_academia/
+
                 """
             )
             
@@ -1355,7 +1363,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                     
                     Identifique o assunto que estava sendo falado em {historico_texto}):
                     EXEMPLO-GABARITO (apenas referência de tom):
-                        "em… aí pra (assunto que falavam) é só vc (continuação ou solução do assunto)!"
+                        "em… aí pra (continuação ou solução do assunto)!"
 
                     REGRAS:
                         - Use conectivos ("Então...", "E aí...", "em...").
@@ -1413,6 +1421,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                     - Tom: Super amigável, paciente e "sem pressa".
                     
                     REGRAS:
+                        - Não use o nome.
                         - Seja breve poucas palavras.
                         - Não use conectivos ("Então...", "E aí...", "em...").t
                         - NÃO repita "Oi" ou "Bom dia", "tudo bem".
@@ -1436,7 +1445,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         {regra_tratamento}
         - SEJA EXTREMAMENTE BREVE: Use poucas palavras. Ninguém lê textão de cobrança.
         - LINGUAGEM DE ZAP: Pode usar abreviações comuns (ex: "vc", "tbm", "pq", "blz") se sentir que o contexto pede.
-        - Seja CURTA e DIALOGAL (máximo 1 ou 3 frases curtas).
+        - Seja CURTA e DIALOGAL (máximo 1 ou 2 frases curtas).
         - NÃO use saudações temporais (Bom dia/Boa tarde), vá direto ao ponto.
         - O tom deve ser humano, fluido e empático.
         """
@@ -1856,7 +1865,11 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 https://maps.app.goo.gl/jgzsqWUqpJAPVS3RA
                 (Não envie apenas o link solto, envie o endereço escrito acima e o link abaixo).
                 CONTATO: Telefone: (44) 99121-6103 | HORÁRIO: Seg a Qui 05:00-22:00 | Sex 05:00-21:00 | Sáb 08:00-10:00 e 15:00-17:00 | Dom 08:00-10:00.
-
+                
+            = SUPORTE/FINANCEIRO =
+                Gatilho: Se for aluno, quiser falar de matrícula, resolver alguma coisa sobre a matricula que ele ja tem ou financeiro.
+                Ação: Pare a venda/agendamento. Mande: "Para resolver pendências ou matrícula, chama o financeiro no 4499121-6103. blz?"
+            
             = POLÍTICA DE PREÇOS (CRÍTICO - LEI ANTI-ALUCINAÇÃO) =
                 1. REGRA: Você não sabe valores.
                 2. MOTIVO: Temos diversos planos (Mensal, Trimestral, Recorrente, Família) e precisamos entender o perfil do aluno pessoalmente.
