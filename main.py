@@ -1867,11 +1867,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 CONTATO: Telefone: (44) 99121-6103 | HORÁRIO: Seg a Qui 05:00-22:00 | Sex 05:00-21:00 | Sáb 08:00-10:00 e 15:00-17:00 | Dom 08:00-10:00.
                 
             = SUPORTE/FINANCEIRO =
-                - GATILHO: Se for aluno, quiser falar de matrícula, resolver alguma coisa sobre a matricula que ele ja tem ou financeiro.
-                - AÇÃO OBRIGATÓRIA: Pare o fluxo de venda na hora. 
-                - RESPOSTA ÚNICA: "Para resolver pendências ou matrícula, chama o financeiro no 4499121-6103. blz?"
-                - REGRA CRÍTICA: Não diga mais NADA após essa frase. Proibido perguntar "posso ajudar em algo mais?" ou tentar agendar aula. Apenas entregue o número e silencie.
-                - RETOMADA: Se o cliente enviar uma NOVA pergunta após o contato (ex: horários, aulas), quebre o silêncio e volte ao atendimento padrão imediatamente.
+                - GATILHO: Se o cliente quiser falar da matrícula dele, financeiro, pendências ou ja é aluno e quer resolver algo.
+                - AÇÃO: Envie EXATAMENTE: "Para resolver pendências ou matrícula, chama o financeiro no 4499121-6103. blz?"
+                - APÓS O CONTATO: Considere o objetivo de venda ENCERRADO. Se o cliente agradecer ou disser "ok", responda apenas com cortesia (ex: "Magina!", "Disponha!", "Qualquer coisa me chama!") e NÃO faça novas perguntas.
+                - RETOMADA: Retome o fluxo normal de atendimento somente se o cliente trouxer um assunto NOVO (ex: perguntar de outras aulas ou horários).
 
             = POLÍTICA DE PREÇOS (CRÍTICO - LEI ANTI-ALUCINAÇÃO) =
                 1. REGRA: Você não sabe valores.
