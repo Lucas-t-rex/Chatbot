@@ -935,8 +935,8 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         if tools: 
-            modelo_ia = genai.GenerativeModel('gemini-2.0-flash', tools=tools)
-            print("✅ Modelo do Gemini (gemini-2.0-flash) inicializado com FERRAMENTAS.")
+            modelo_ia = genai.GenerativeModel('gemini-3-pro-preview', tools=tools)
+            print("✅ Modelo do Gemini (gemini-3-pro-preview) inicializado com FERRAMENTAS.")
         else:
              print("AVISO: Modelo do Gemini não inicializado pois a conexão com a Agenda falhou (tools vazias).")
     except Exception as e:
@@ -1150,7 +1150,7 @@ def executar_profiler_cliente(contact_id):
         """
 
         # 4. Chama o Gemini
-        model_profiler = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
+        model_profiler = genai.GenerativeModel('gemini-3-pro-preview', generation_config={"response_mime_type": "application/json"})
         response = model_profiler.generate_content(prompt_profiler)
 
         # 5. Processa o Resultado
@@ -1276,7 +1276,6 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         if nome_valido and usar_nome_agora:
             # Se tem nome e é o momento certo: usa o nome no início.
             regra_tratamento = f"- Use o nome '{nome_cliente}' de forma natural no início."
-            display_name = nome_cliente
             inicio_fala = f"{nome_cliente}, "
         else:
             # Se NÃO tem nome: Regra de neutralidade total
@@ -1288,7 +1287,6 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                 "- Exemplo CERTO: 'Parece que você está ocupado...'\n"
                 "- Exemplo ERRADO: 'Cliente, parece que você...'"
             )
-            display_name = "o interlocutor" # Apenas para o contexto interno da IA (ela não vai falar isso)
             inicio_fala = "" # Vazio: a frase começará direto, sem nome antes.
 
         instrucao = ""
@@ -2693,7 +2691,7 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
     try:
         # --- TENTATIVA 1 ---
         audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
-        modelo_transcritor = genai.GenerativeModel('gemini-2.0-flash') 
+        modelo_transcritor = genai.GenerativeModel('gemini-3-pro-preview') 
         prompt_transcricao = "Transcreva este áudio exatamente como foi falado. Apenas o texto, sem comentários."
         
         response = modelo_transcritor.generate_content([prompt_transcricao, audio_file])
@@ -2720,7 +2718,7 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
             print("🔄 Tentando transcrição novamente (Retry)...")
             time.sleep(2) # Espera 2 segundinhos
             
-            modelo_retry = genai.GenerativeModel('gemini-2.0-flash')
+            modelo_retry = genai.GenerativeModel('gemini-3-pro-preview')
             audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
             response_retry = modelo_retry.generate_content(["Transcreva o áudio.", audio_file_retry])
             
