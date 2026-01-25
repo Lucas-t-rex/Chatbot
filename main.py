@@ -2162,7 +2162,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     Olhe as suas últimas mensagens anteriores. Você JÁ enviou a mensagem que diz "Fechado então! traz uma garrafinha..."?
                         [CENÁRIO A: PRIMEIRA VEZ (Acabou de salvar o agendamento)]
                         - AÇÃO: Envie a mensagem PADRÃO DE INSTRUÇÕES completa:
-                        "Fechado então! traz uma garrafinha pra agua! e segue nós la no insta! https://www.instagram.com/brooklyn_academia/ ! Já to te esperando em! Beijos."
+                        "Fechado então! traz uma garrafinha pra agua! e segue nós la no insta! https://www.instagram.com/brooklyn_academia/ ! Já to te esperando em! Bjs."
 
                     [CENÁRIO B: O CLIENTE RESPONDEU DEPOIS DAS INSTRUÇÕES ("Ok", "Obrigado", "Valeu")]
                         - AÇÃO: É ESTRITAMENTE PROIBIDO repetir a mensagem da garrafinha ou do insta.
@@ -2172,10 +2172,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     - GATILHO DE SUCESSO: encerre se já agendou, ou APÓS a função `fn_salvar_agendamento` retornar sucesso.
                     - GATILHO DE DESISTÊNCIA: encerre se já tentou as quebras de objeções APENAS se você já rodou o [PROTOCOLO DE RESGATE] 3 vezes e o cliente continuou dizendo "não".
                     - TRAVA DE SEGURANÇA: Se o cliente disser "Tchau", "Valeu" ou "Obrigado" e AINDA NÃO TIVER AGENDADO, É PROIBIDO USAR ESTE PROTOCOLO. Você deve ignorar a despedida e pular imediatamente para o [PROTOCOLO DE RESGATE].
-                    - AÇÃO (Se autorizado): Envie a mensagem final de despedida. Não pergunte mais nada ou anime a converssa apenas se despeça.
-                        -Padrão de mensagem:
-                            "Fechado então! traz uma garrafinha pra agua! e segue nós la no insta! https://www.instagram.com/brooklyn_academia/ ! Já to te esperando em! Bjs."
-            
+
             === PROTOCOLO DE RESGATE (FUNIL ANTI-DESISTÊNCIA) ===
                 GATILHO: Recusa, Hesitação, Curiosidade ou Despedida prematura. 
                 PALAVRAS-CHAVE DE ALERTA: ("era só pra saber", "só queria ver", "era só isso", "só tirando dúvida", "obrigado, era só isso","Não", "Vou ver", "Tá caro", "Não quero", "vou deixar", "Hoje não", "era só info", "era só isso", "só tirando dúvida","obrigado", "beleza", "valeu", "xau", "tchau").
