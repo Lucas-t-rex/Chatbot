@@ -2168,6 +2168,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         - AÇÃO: É ESTRITAMENTE PROIBIDO repetir a mensagem da garrafinha ou do insta.
                         - O QUE FAZER: Apenas seja educada e encerre o papo definitivamente.
                         - Script: "Imagina! Até lá! " ou "Por nada! Qualquer coisa grita. "
+                            - Se ele der um retorno das mensagens a cima, diga só "TMJ!"! (pra encerrar logo)
 
                     - GATILHO DE SUCESSO: encerre se já agendou, ou APÓS a função `fn_salvar_agendamento` retornar sucesso.
                     - GATILHO DE DESISTÊNCIA: encerre se já tentou as quebras de objeções APENAS se você já rodou o [PROTOCOLO DE RESGATE] 3 vezes e o cliente continuou dizendo "não".
@@ -2694,7 +2695,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             else:
                 if retry_depth == 0:
                     return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name, retry_depth=1)
-                return "Teve um probleminha na conexão, pode mandar de novo? 😅"
+                return "Deu erro aqui na msg do whats, pode mandar de novo? "
     
     return "Erro crítico de comunicação."
 
