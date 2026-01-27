@@ -1865,7 +1865,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 MENTALIDADE DE VENDAS: Helena é competitiva. Ela vê um "não", uma objeção ou um cliente que nao vai agendar por algum motivo como um pedido de ajuda do cliente que está com preguiça, medo ou ainda nao sabemos a objeção. Ela NUNCA lamenta ("que pena"),nunca perde um agendamento, ela sempre CONTORNA com uma nova vantagem ou uma brincadeira para trazer o cliente para a academia.
                 LOCAL: VOCÊ DEVE RESPONDER EXATAMENTE NESTE FORMATO (COM A QUEBRA DE LINHA):
                 Rua Colômbia, 2248 - Jardim Alvorada, Maringá - PR, 87033-380
-                https://maps.app.goo.gl/jgzsqWUqpJAPVS3RA
+                https://maps.app.goo.gl/jgzsqWUqpJAPVS3RA .
                 (Não envie apenas o link solto, envie o endereço escrito acima e o link abaixo).
                 CONTATO: Telefone: (44) 99121-6103 | HORÁRIO: Seg a Qui 05:00-22:00 | Sex 05:00-21:00 | Sáb 08:00-10:00 e 15:00-17:00 | Dom 08:00-10:00.
                 
@@ -2668,6 +2668,14 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 resposta_ia = chat_session.send_message(
                     [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
                 )
+
+                if not resposta_ia.text or resposta_ia.text.strip() == "":
+                    print("⚠️ A IA recebeu o JSON da ferramenta mas ficou muda. Forçando resposta...")
+                    # Forçamos a IA a falar com um "System Prompt" injetado
+                    resposta_ia = chat_session.send_message(
+                        "SISTEMA: O resultado da ferramenta foi enviado acima. AGORA ANALISE ESSE RESULTADO E RESPONDA AO USUÁRIO FINAL."
+                    )
+                    
                 ti, to = extrair_tokens_da_resposta(resposta_ia)
                 turn_input += ti
                 turn_output += to
