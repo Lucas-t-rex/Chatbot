@@ -33,6 +33,7 @@ load_dotenv()
 EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
 EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+MODEL_NAME = "gemini-3-flash-preview"
 MONGO_DB_URI = os.environ.get("MONGO_DB_URI") # DB de Conversas
 
 MONGO_AGENDA_URI = os.environ.get("MONGO_AGENDA_URI")
@@ -935,8 +936,8 @@ if GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
         if tools: 
-            modelo_ia = genai.GenerativeModel('gemini-2.0-flash', tools=tools)
-            print("✅ Modelo do Gemini (gemini-2.0-flash) inicializado com FERRAMENTAS.")
+            modelo_ia = genai.GenerativeModel(MODEL_NAME, tools=tools)
+            print(f"✅ Modelo do Gemini ({MODEL_NAME}) inicializado com FERRAMENTAS.")
         else:
              print("AVISO: Modelo do Gemini não inicializado pois a conexão com a Agenda falhou (tools vazias).")
     except Exception as e:
@@ -1150,7 +1151,7 @@ def executar_profiler_cliente(contact_id):
         """
 
         # 4. Chama o Gemini
-        model_profiler = genai.GenerativeModel('gemini-2.0-flash', generation_config={"response_mime_type": "application/json"})
+        model_profiler = genai.GenerativeModel(MODEL_NAME, generation_config={"response_mime_type": "application/json"})
         response = model_profiler.generate_content(prompt_profiler)
 
         # 5. Processa o Resultado
@@ -2709,7 +2710,7 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
     try:
         # --- TENTATIVA 1 ---
         audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
-        modelo_transcritor = genai.GenerativeModel('gemini-2.0-flash') 
+        modelo_transcritor = genai.GenerativeModel(MODEL_NAME) 
         prompt_transcricao = "Transcreva este áudio exatamente como foi falado. Apenas o texto, sem comentários."
         
         response = modelo_transcritor.generate_content([prompt_transcricao, audio_file])
@@ -2736,7 +2737,7 @@ def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
             print("🔄 Tentando transcrição novamente (Retry)...")
             time.sleep(2) # Espera 2 segundinhos
             
-            modelo_retry = genai.GenerativeModel('gemini-2.0-flash')
+            modelo_retry = genai.GenerativeModel(MODEL_NAME)
             audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
             response_retry = modelo_retry.generate_content(["Transcreva o áudio.", audio_file_retry])
             
