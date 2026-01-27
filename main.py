@@ -508,20 +508,19 @@ class Agenda:
             return {"erro": f"Falha ao buscar CPF no banco de dados: {e}"}
 
     def salvar(self, nome: str, cpf_raw: str, telefone: str, servico: str, data_str: str, hora_str: str, owner_id: str = None, observacao: str = "") -> Dict[str, Any]:
-        # --- TRATAMENTOS BÁSICOS ---
+        # --- 1. HIGIENIZAÇÃO E VALIDAÇÃO BÁSICA ---
         apenas_numeros = re.sub(r'\D', '', str(cpf_raw)) if cpf_raw else ""
         cpf = limpar_cpf(cpf_raw)
         if not cpf:
             return {"erro": f"CPF inválido. Identifiquei {len(apenas_numeros)} números. O CPF precisa ter exatamente 11 dígitos."}
         
         dt = parse_data(data_str)
-        if not dt:
-            return {"erro": "Data inválida."}
+        if not dt: return {"erro": "Data inválida."}
         
         hora = validar_hora(hora_str)
-        if not hora:
-            return {"erro": "Hora inválida."}
+        if not hora: return {"erro": "Hora inválida."}
 
+        # --- 2. VALIDAÇÃO DE REGRAS DE NEGÓCIO (Grade e Folga) ---
         folga = self._checar_dia_de_folga(dt)
         if folga:
             return {"erro": f"Não é possível agendar. O dia {data_str} é um {folga} e não trabalhamos."}
@@ -530,48 +529,53 @@ class Agenda:
              return {"erro": f"Não é possível agendar. O horário {data_str} às {hora} já passou."}
 
         duracao_minutos = self._get_duracao_servico(servico)
-        # --- [NOVA TRAVA] VALIDAÇÃO RIGOROSA DA GRADE ---
-        servico_key = servico.lower().strip()
         
-        # Se o serviço tem horário fixo (está na grade), VERIFICA SE O HORÁRIO BATE
+        # Validação da Grade de Aulas (Muay Thai, Jiu-Jitsu, etc)
+        servico_key = servico.lower().strip()
         if servico_key in GRADE_HORARIOS_SERVICOS:
-            dia_semana = dt.weekday() # 0=Seg, 4=Sex...
+            dia_semana = dt.weekday()
             horarios_permitidos = GRADE_HORARIOS_SERVICOS[servico_key].get(dia_semana, [])
-            
-            # Se a hora que o cliente quer não está na lista permitida do dia
             if hora_str not in horarios_permitidos:
                 msg_grade = ", ".join(horarios_permitidos) if horarios_permitidos else "não tem aula neste dia"
                 return {"erro": f"Impossível agendar {servico} às {hora_str}. A grade oficial para esta data é: {msg_grade}."}
-        # ------------------------------------------------
+        
         if duracao_minutos is None:
             return {"erro": f"Serviço '{servico}' não reconhecido. Os serviços válidos são: {LISTA_SERVICOS_PROMPT}"}
 
+        # Validação de Horário de Funcionamento
         if not self._cabe_no_bloco(dt, hora, duracao_minutos):
             fim_dt_calc = datetime.combine(dt.date(), str_to_time(hora)) + timedelta(minutes=duracao_minutos)
-            return {"erro": f"O horário {hora} com duração de {duracao_minutos} min (até {fim_dt_calc.strftime('%H:%M')}) ultrapassa o horário de atendimento."}
+            return {"erro": f"O horário {hora} ultrapassa o fechamento da academia."}
 
         try:
+            # --- 3. PREPARAÇÃO PARA O BANCO ---
             inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
             fim_dt = inicio_dt + timedelta(minutes=duracao_minutos)
 
+            # [CORREÇÃO CRÍTICA]: Verifica duplicidade EXATA (Mesmo CPF + Mesmo Início)
+            # Se for o mesmo CPF mas outro horário, o 'find_one' retornará None e o código seguirá para salvar.
             already_booked = self.collection.find_one({
                 "cpf": cpf,
-                "inicio": inicio_dt
+                "inicio": inicio_dt 
             })
 
             if already_booked:
-                log_info(f"🛡️ [Anti-Bug] Agendamento duplicado detectado para {cpf}. Retornando sucesso falso.")
-                return {"sucesso": True, "msg": f"Confirmado! O agendamento de {nome} já está garantido no sistema para {dt.strftime('%d/%m/%Y')} às {hora}."}
+                log_info(f"🛡️ [Anti-Bug] Tentativa de duplicidade exata para {cpf} às {hora}. Bloqueando.")
+                # AQUI ESTAVA O ERRO: Antes retornava sucesso falso. Agora retorna erro para a IA saber.
+                return {
+                    "sucesso": False, 
+                    "msg": f"Atenção: Este CPF já possui um agendamento EXATAMENTE neste dia e horário ({data_str} às {hora}). Pergunte se ele quer manter este ou agendar em outro horário."
+                }
 
+            # Verifica lotação (Se tem mais de 50 pessoas nesse horário)
             conflitos_atuais = self._contar_conflitos_no_banco(inicio_dt, fim_dt)
-
             if conflitos_atuais >= NUM_ATENDENTES:
-                return {"erro": f"Horário {hora} indisponível. O proprietário já está ocupado neste horário."}
+                return {"erro": f"Horário {hora} indisponível (Lotação máxima atingida)."}
             
             obs_limpa = str(observacao).strip() if observacao else ""
-            if len(obs_limpa) > 200:
-                obs_limpa = obs_limpa[:200]
+            if len(obs_limpa) > 200: obs_limpa = obs_limpa[:200]
 
+            # --- 4. O COMANDO DE SALVAR (INSERT) ---
             novo_documento = {
                 "owner_whatsapp_id": owner_id,  
                 "nome": nome.strip(),
@@ -586,14 +590,21 @@ class Agenda:
                 "created_at": datetime.now(timezone.utc)
             }
             
-            self.collection.insert_one(novo_documento)
+            # Executa a gravação no MongoDB
+            result = self.collection.insert_one(novo_documento)
             
-            return {"sucesso": True, "msg": f"Agendamento salvo para {nome} em {dt.strftime('%d/%m/%Y')} às {hora}."}
+            # --- 5. VALIDAÇÃO PÓS-GRAVAÇÃO ---
+            if result.inserted_id:
+                # Se imprimiu isso no log, ESTÁ NO BANCO. Não tem erro.
+                print(f"💾 [DB SALVO COM SUCESSO] ID: {result.inserted_id} | Cliente: {nome} | Serviço: {servico}")
+                return {"sucesso": True, "msg": f"Agendamento salvo com sucesso para {nome} em {data_str} às {hora}."}
+            else:
+                return {"erro": "Erro crítico: O banco de dados não retornou o ID de confirmação."}
         
         except Exception as e:
-            log_info(f"Erro em salvar: {e}")
-            return {"erro": f"Falha ao salvar no banco de dados: {e}"}
-
+            log_info(f"Erro crítico na função salvar: {e}")
+            return {"erro": f"Falha técnica ao salvar no banco de dados: {e}"}
+        
     def excluir(self, cpf_raw: str, data_str: str, hora_str: str) -> Dict[str, Any]:
         cpf = limpar_cpf(cpf_raw)
         if not cpf:
@@ -1893,7 +1904,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             = BENEFÍCIOS = (ARGUMENTOS DE VENDA - O NOSSO OURO)
                 - Ambiente Seguro e Respeitoso: Aqui mulher treina em paz! Cultura de respeito total, sem olhares tortos ou incômodos. É um lugar pra se sentir bem.
                 - Espaço Kids: Papais e mamães treinam tranquilos sabendo que os filhos estão seguros e se divertindo aqui dentro.
-                - Atenção de Verdade: Nossos profs não ficam só no celular. A gente corrige, ajuda e monta o treino pra ti ter resultado e não se machucar.
+                - Atenção de Verdade: Nossos treinadores não ficam só no celular. A gente corrige, ajuda e monta o treino pra ti ter resultado e não se machucar.
                 - Localização Privilegiada: Fácil acesso aqui no coração do Alvorada, perto de tudo.
                 - Estacionamento Gigante e Gratuito: Seguro, amplo e sem dor de cabeça pra parar.
                 - Equipamentos de Alto Nível: Variedade total pra explorar seu corpo ao máximo, dentro das normas ABNT NBR ISO 20957.
@@ -2200,7 +2211,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
                 PASSO 3: A CARTADA FINAL (O "FREE PASS")
                     LÓGICA: Risco Zero. Use isso APENAS se o Passo 2 falhar. É a última bala na agulha.
-                    SCRIPT: "Espera! Antes de ir. Eu quero te lembra que é Gratís. Vc vem, treina, conhece os profs e não paga NADA. Se não curtir, continuamos amigos. Bora aproveitar essa chance?"
+                    SCRIPT: "Espera! Antes de ir. Eu quero te lembra que é Gratís. Vc vem, treina, conhece os treinadores e não paga NADA. Se não curtir, continuamos amigos. Bora aproveitar essa chance?"
 
                 PASSO 4: PORTAS ABERTAS (A Espera)
                     LÓGICA: Só execute se ele recusar o presente (Passo 3). Não é um adeus, é um "até logo".
@@ -2516,6 +2527,19 @@ safety_settings = [
     {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
 ]
 
+def safe_get_text(response):
+    """Extrai apenas o texto da resposta da IA, ignorando function_calls para evitar erro."""
+    try:
+        if not response.candidates: return ""
+        parts_text = []
+        for part in response.candidates[0].content.parts:
+            if part.text:
+                parts_text.append(part.text)
+        return "".join(parts_text).strip()
+    except Exception as e:
+        print(f"⚠️ Erro ao extrair texto seguro: {e}")
+        return ""
+
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name, retry_depth=0, is_recursion=False): 
     """
     VERSÃO COM TRAVA DE SEGURANÇA ANTI-CÓDIGO (Limpador de Alucinação)
@@ -2675,7 +2699,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     resposta_ia = chat_session.send_message(
                         "SISTEMA: O resultado da ferramenta foi enviado acima. AGORA ANALISE ESSE RESULTADO E RESPONDA AO USUÁRIO FINAL."
                     )
-                    
+
                 ti, to = extrair_tokens_da_resposta(resposta_ia)
                 turn_input += ti
                 turn_output += to
