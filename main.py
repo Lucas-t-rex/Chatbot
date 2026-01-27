@@ -2610,11 +2610,11 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                             f for f in t['function_declarations'] 
                             if f.get('name') != 'fn_capturar_nome'
                         ]
-                        
+
             modelo_com_sistema = genai.GenerativeModel(
                 modelo_ia.model_name,
                 system_instruction=system_instruction,
-                tools=tools,
+                tools=tools_da_vez,
                 safety_settings=safety_settings
             )
             
