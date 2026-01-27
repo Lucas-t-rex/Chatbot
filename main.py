@@ -2599,6 +2599,18 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     max_retries = 3 
     for attempt in range(max_retries):
         try:
+            tools_da_vez = tools
+            if known_customer_name:
+                import copy
+                tools_da_vez = copy.deepcopy(tools) # Copia para não estragar a original
+                for t in tools_da_vez:
+                    if 'function_declarations' in t:
+                        # Filtra removendo apenas a fn_capturar_nome
+                        t['function_declarations'] = [
+                            f for f in t['function_declarations'] 
+                            if f.get('name') != 'fn_capturar_nome'
+                        ]
+                        
             modelo_com_sistema = genai.GenerativeModel(
                 modelo_ia.model_name,
                 system_instruction=system_instruction,
