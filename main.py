@@ -3141,12 +3141,31 @@ def handle_responsible_command(message_content, responsible_number):
             )
 
             if result.modified_count > 0:
-                send_whatsapp_message(responsible_number, f"✅ Atendimento automático reativado para o cliente `{customer_number_to_reactivate}`.")
-                send_whatsapp_message(customer_number_to_reactivate, "Oi, sou eu a  novamente, voltei pro seu atendimento. Se precisar de algo me diga! 😊")
+                send_whatsapp_message(responsible_number, f"✅ Atendimento reativado para `{customer_number_to_reactivate}`.")
+                
+                # --- AQUI ESTÁ A ALTERAÇÃO ---
+                
+                # 1. Define a mensagem de retorno obrigatória
+                msg_retorno = "Oi, sou eu a Helena de novo. Se precisar de alguma coisa me avisa!"
+                
+                # 2. Envia no WhatsApp (Obrigatório)
+                send_whatsapp_message(customer_number_to_reactivate, msg_retorno)
+                
+                # 3. SALVA NO HISTÓRICO (Para a IA ver que ela mandou isso)
+                append_message_to_db(customer_number_to_reactivate, 'assistant', msg_retorno)
+                
+                # 4. O PULO DO GATO: Adiciona uma nota de sistema INVISÍVEL ao cliente
+                # Isso diz para a IA: "O humano já resolveu. Não toque mais no assunto do problema anterior."
+                append_message_to_db(
+                    customer_number_to_reactivate, 
+                    'system', 
+                    '[SISTEMA: A intervenção humana foi finalizada e o problema foi resolvido pelo atendente. Siga o atendimento normalmente a partir de agora, não precisa mencionar que você sabe que da intervenção.]'
+                )
+                
             else:
-                send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo. Nenhuma alteração foi necessária.")
+                send_whatsapp_message(responsible_number, f"ℹ️ O atendimento para `{customer_number_to_reactivate}` já estava ativo.")
             
-            return True 
+            return True
 
         except Exception as e:
             print(f"❌ Erro ao tentar reativar cliente: {e}")
@@ -3398,7 +3417,9 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
                 conversation_collection.update_one({'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True)
-                send_whatsapp_message(sender_number_full, "Já avisei o Aylla, um momento por favor!", delay_ms=2000)
+                msg_aviso_espera = "Já avisei o Aylla, um momento por favor!"
+                send_whatsapp_message(sender_number_full, msg_aviso_espera, delay_ms=3000)
+                append_message_to_db(clean_number, 'assistant', msg_aviso_espera)
                 
                 if RESPONSIBLE_NUMBER:
                     reason = ai_reply.replace("[HUMAN_INTERVENTION] Motivo:", "").strip()
