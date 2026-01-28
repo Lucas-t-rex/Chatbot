@@ -2536,16 +2536,17 @@ safety_settings = [
 ]
 
 def safe_get_text(response):
-    """Extrai apenas o texto da resposta da IA, ignorando function_calls para evitar erro."""
+    """Extrai texto com segurança, evitando erro se houver FunctionCall."""
     try:
         if not response.candidates: return ""
         parts_text = []
         for part in response.candidates[0].content.parts:
-            if part.text:
+            # Verifica se a parte TEM o atributo text antes de acessar
+            if hasattr(part, 'text') and part.text:
                 parts_text.append(part.text)
         return "".join(parts_text).strip()
     except Exception as e:
-        print(f"⚠️ Erro ao extrair texto seguro: {e}")
+        # Se der erro ao tentar ler, assume que não tem texto (é tool call)
         return ""
 
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name, retry_depth=0, is_recursion=False): 
@@ -2697,11 +2698,25 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                         return msg_intervencao
                 except: pass
 
+                # Envia o resultado da ferramenta de volta pra IA
                 resposta_ia = chat_session.send_message(
                     [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
                 )
 
-                if not resposta_ia.text or resposta_ia.text.strip() == "":
+                # --- CORREÇÃO DE SEGURANÇA ---
+                # 1. Extrai o texto sem crashar (retorna "" se for função)
+                texto_seguro = safe_get_text(resposta_ia)
+
+                # 2. Verifica se a IA decidiu chamar OUTRA função em sequência (Chaining)
+                tem_nova_funcao = False
+                try:
+                    if resposta_ia.candidates and resposta_ia.candidates[0].content.parts[0].function_call.name:
+                        tem_nova_funcao = True
+                except:
+                    pass
+
+                # 3. Lógica Anti-Silêncio: Só força a fala se não tem texto E NÃO tem nova função
+                if not texto_seguro and not tem_nova_funcao:
                     print("⚠️ [SISTEMA ANTI-SILÊNCIO] O modelo Flash oscilou. Reenviando prompt de comando...")
                     # Forçamos a IA a falar com um "System Prompt" injetado
                     resposta_ia = chat_session.send_message(
@@ -2712,23 +2727,26 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 turn_input += ti
                 turn_output += to
 
-            ai_reply_text = resposta_ia.text
+                # O LOOP CONTINUA AQUI! Se tiver nova função, ele sobe. Se for texto, ele cai no 'break' lá em cima.
+
+            # --- SAIU DO LOOP (AGORA SIM TRATAMOS O TEXTO FINAL) ---
+            # Observe que a indentação voltou para trás (fora do while)
+            
+            ai_reply_text = safe_get_text(resposta_ia)
             
             # Limpador de alucinação
             offending_terms = ["print(", "fn_", "default_api", "function_call", "api."]
             if any(term in ai_reply_text for term in offending_terms):
                 print(f"🛡️ BLOQUEIO DE CÓDIGO ATIVADO para {log_display}: {ai_reply_text}")
                 linhas = ai_reply_text.split('\n')
-                # Filtra apenas as linhas que NÃO possuem termos técnicos
                 linhas_limpas = [l for l in linhas if not any(term in l for term in offending_terms)]
                 ai_reply_text = "\n".join(linhas_limpas).strip()
                 
                 # Se a limpeza apagou tudo, gera um fallback humano amigável
                 if not ai_reply_text:
                     ai_reply_text = "Certinho! Pode me passar seu CPF para eu validar aqui?"
-            # ======================================================================
 
-            # --- INTERCEPTOR DE NOME (BACKUP) ---
+            # --- INTERCEPTOR DE NOME (BACKUP FINAL) ---
             if "fn_capturar_nome" in ai_reply_text:
                 match = re.search(r"nome_extraido=['\"]([^'\"]+)['\"]", ai_reply_text)
                 if match:
