@@ -2367,7 +2367,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         1. ZERO REPETIÇÃO: Se no histórico você JÁ DEU "Oi", jamais diga "Oi" de novo. Vá direto para "Com quem eu falo?".
         2. POUCAS PALAVRAS E SIMPATICA: Suas mensagens não devem passar de 2 linhas.
         3. INTERAÇÃO: Interaja com a pessoa faça comentarios sobre o que ela falou(se falou), mas nunca passe informações que você não saiba, peça o nome antes.
-"""
+        4. RETORNO DE FERRAMENTAS: NUNCA fique em silêncio após receber o retorno (JSON) de uma tool call.
+        """
         return prompt_gate_de_captura
 
 def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> str:
@@ -2510,8 +2511,15 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         
         elif call_name == "fn_validar_cpf":
             cpf = args.get("cpf_input", "")
-            # Chama a função lógica que já criamos lá em cima
-            resp = validar_cpf_logica(cpf) 
+            resp = validar_cpf_logica(cpf)
+            
+            # --- CORREÇÃO AQUI: Adicionamos contexto para a IA falar ---
+            if resp.get("valido"):
+                resp["instrucao_para_ia"] = "O CPF é VÁLIDO. Agradeça o cliente e siga para o próximo passo do agendamento (pergunte se tem observações ou vá para o Gabarito)."
+            else:
+                resp["instrucao_para_ia"] = "O CPF é INVÁLIDO. Avise o cliente educadamente e peça para digitar novamente."
+            # -----------------------------------------------------------
+
             return json.dumps(resp, ensure_ascii=False)
         
         else:
@@ -2694,7 +2702,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 )
 
                 if not resposta_ia.text or resposta_ia.text.strip() == "":
-                    print("⚠️ A IA recebeu o JSON da ferramenta mas ficou muda. Forçando resposta...")
+                    print("⚠️ [SISTEMA ANTI-SILÊNCIO] O modelo Flash oscilou. Reenviando prompt de comando...")
                     # Forçamos a IA a falar com um "System Prompt" injetado
                     resposta_ia = chat_session.send_message(
                         "SISTEMA: O resultado da ferramenta foi enviado acima. AGORA ANALISE ESSE RESULTADO E RESPONDA AO USUÁRIO FINAL."
@@ -3146,7 +3154,7 @@ def handle_responsible_command(message_content, responsible_number):
                 # --- AQUI ESTÁ A ALTERAÇÃO ---
                 
                 # 1. Define a mensagem de retorno obrigatória
-                msg_retorno = "Oi, sou eu a Helena de novo. Se precisar de alguma coisa me avisa!"
+                msg_retorno = "Oi, sou eu a Helena de novo. Se precisar de alguma coisa, me avisa!"
                 
                 # 2. Envia no WhatsApp (Obrigatório)
                 send_whatsapp_message(customer_number_to_reactivate, msg_retorno)
