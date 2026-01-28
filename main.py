@@ -148,44 +148,71 @@ def _calcular_digito(cpf_parcial):
 
 def validar_cpf_logica(cpf_input: str):
     """
-    Limpa, conta e valida matematicamente o CPF.
-    LÓGICA HÍBRIDA: Diferencia erro de digitação de múltiplos CPFs.
+    Versão Resiliente: Encontra o primeiro padrão de 11 dígitos dentro do texto.
+    Resolve problemas de buffer duplicado ou texto junto com número.
     """
-    # 1. Limpeza (Sanitização) - Remove tudo que não é número
-    cpf_limpo = re.sub(r'\D', '', str(cpf_input))
+    # 1. Tenta encontrar uma sequência de 11 dígitos no meio da bagunça
+    # Isso resolve se o buffer mandar "1234567890112345678901" -> pega só o primeiro
+    match = re.search(r'\d{11}', str(cpf_input))
+    
+    if match:
+        cpf_limpo = match.group(0) # Pega os 11 primeiros dígitos encontrados
+    else:
+        # Se não achou 11 seguidos, limpa tudo e vê o que tem
+        cpf_limpo = re.sub(r'\D', '', str(cpf_input))
+
     tamanho = len(cpf_limpo)
 
-    # CENÁRIO 1: MÚLTIPLOS CPFS (Bloqueio de Fluxo)
-    # Se tiver 20 ou mais dígitos, provavelmente são 2 CPFs juntos (11+11=22)
-    if tamanho >= 20:
-        return {
-            "valido": False, 
-            "msg": f"ERRO DE FLUXO: Detectei {tamanho} números. Parece que você enviou DOIS ou mais CPFs juntos. O sistema trava com isso. Pare agora e peça para o cliente mandar UM CPF de cada vez."
-        }
-
-    # CENÁRIO 2: ERRO DE DIGITAÇÃO (Tamanho incorreto)
-    # Se não for 11 (e for menor que 20), é só um erro de digitação do cliente.
+    # CENÁRIO 1: Tamanho incorreto (mesmo após tentar extrair)
     if tamanho != 11:
         return {
             "valido": False, 
-            "msg": f"CPF inválido. O documento precisa ter exatamente 11 dígitos, mas identifiquei {tamanho}. Verifique o número."
+            "msg": f"O CPF precisa ter 11 números. Identifiquei {tamanho}.",
+            "instrucao_para_ia": "Diga ao cliente que o número está curto ou longo demais e peça para conferir."
         }
     
-    # CENÁRIO 3: REGRAS MATEMÁTICAS (Tamanho é 11, agora valida os dígitos)
+    # CENÁRIO 2: Todos iguais (111.111.111-11)
     if cpf_limpo == cpf_limpo[0] * 11:
-        return {"valido": False, "msg": "CPF inválido (todos os dígitos são iguais)."}
+        return {
+            "valido": False, 
+            "msg": "CPF inválido (números iguais).",
+            "instrucao_para_ia": "Avise que CPFs com todos números iguais não são válidos."
+        }
 
-    # Primeiro dígito verificador
-    primeiro_digito = _calcular_digito(cpf_limpo[:9])
-    # Segundo dígito verificador
-    segundo_digito = _calcular_digito(cpf_limpo[:9] + primeiro_digito)
+    # CENÁRIO 3: Validação Matemática Real
+    # Calcula primeiro dígito
+    soma = 0
+    peso = 10
+    for n in cpf_limpo[:9]:
+        soma += int(n) * peso
+        peso -= 1
+    resto = soma % 11
+    digito1 = '0' if resto < 2 else str(11 - resto)
 
-    cpf_calculado = cpf_limpo[:9] + primeiro_digito + segundo_digito
+    # Calcula segundo dígito
+    soma = 0
+    peso = 11
+    for n in cpf_limpo[:9] + digito1:
+        soma += int(n) * peso
+        peso -= 1
+    resto = soma % 11
+    digito2 = '0' if resto < 2 else str(11 - resto)
+
+    cpf_calculado = cpf_limpo[:9] + digito1 + digito2
 
     if cpf_limpo == cpf_calculado:
-        return {"valido": True, "msg": "CPF Válido e verificado."}
+        return {
+            "valido": True, 
+            "msg": "CPF Válido.",
+            "instrucao_para_ia": f"CPF {cpf_limpo} validado com sucesso! Prossiga imediatamente para o próximo passo (Gabarito ou Observações)."
+        }
     else:
-        return {"valido": False, "msg": "CPF inválido (erro nos dígitos verificadores)."}
+        # DICA: Para testes, você pode comentar o 'return' abaixo e dar return True se quiser aceitar qualquer número
+        return {
+            "valido": False, 
+            "msg": "CPF inválido (Dígitos verificadores não batem).",
+            "instrucao_para_ia": f"O número {cpf_limpo} existe no formato, mas é matematicamente inválido na Receita Federal. Peça para o cliente conferir se digitou errado."
+        }
     
 def parse_data(data_str: str) -> Optional[datetime]:
     if not data_str or not isinstance(data_str, str):
