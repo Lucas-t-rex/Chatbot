@@ -68,19 +68,20 @@ MAPA_SERVICOS_DURACAO = {
 
 GRADE_HORARIOS_SERVICOS = {
     "muay thai": {
-        0: ["18:30"], 2: ["18:30"], 4: ["19:00"] # Seg, Qua, Sex
+        0: ["18:30", "19:30"], 2: ["18:30", "19:30"], 4: ["19:00"] # Seg, Qua, Sex
     },
     "jiu-jitsu": {
-        1: ["20:00"], 3: ["20:00"], 5: ["15:00"] # Ter, Qui, Sáb
+        1: ["20:00"], 3: ["20:00"], 5: ["08:30"] # Ter, Qui, Sáb
     },
     "jiu-jitsu kids": {
-        1: ["18:00"], 3: ["18:00"] # Ter e Qui
+        1: ["18:15"], 3: ["18:15"], 5: ["09:30"] # Ter e Qui
     },
     "capoeira": {
-        0: ["21:00"], 2: ["21:00"], 4: ["20:00"] # Seg, Qua, Sex
+        0: ["20:40"], 2: ["20:40"], 4: ["20:00"] # Seg, Qua, Sex
     },
     "dança": {
-        5: ["8:00"] # Sábado
+        0: ["08:00"], 2: ["08:00"], # Seg e Qua de manhã
+        1: ["19:00"], 3: ["19:00"] # Ter e Qui a noite
     }
 }
 
@@ -748,7 +749,13 @@ class Agenda:
                  log_info(f"Falha ao alterar: update_one não encontrou o _id {documento_id}")
                  return {"erro": "Falha ao encontrar o documento para atualizar, pode ter sido removido."}
 
-            return {"sucesso": True, "msg": f"Agendamento alterado para {dt_new.strftime('%d/%m/%Y')} às {h_new}."}
+            # --- ALTERAÇÃO AQUI: Retornar dados extras para notificação ---
+            return {
+                "sucesso": True, 
+                "msg": f"Agendamento alterado para {dt_new.strftime('%d/%m/%Y')} às {h_new}.",
+                "nome_cliente": item.get("nome", "Cliente"),
+                "telefone_cliente": item.get("telefone", "Não informado")
+            }
         
         except Exception as e:
             log_info(f"Erro em alterar: {e}") 
@@ -1128,7 +1135,7 @@ def executar_profiler_cliente(contact_id):
 
         # 3. O Prompt com Regras de Persistência
         prompt_profiler = f"""
-        Você é um PROFILER sênior (Agente Espião). Sua missão é enriquecer o "Dossiê do Cliente" com base nas novas mensagens.
+        Você é um PROFILER sênior . Sua missão é enriquecer o "Dossiê do Cliente" com base nas novas mensagens.
         PERFIL ATUAL (NÃO APAGUE NADA):
         {json.dumps(perfil_atual, ensure_ascii=False)}
 
@@ -1907,22 +1914,30 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 (Não envie apenas o link solto, envie o endereço escrito acima e o link abaixo).
                 CONTATO: Telefone: (44) 99121-6103 | HORÁRIO: Seg a Qui 05:00-22:00 | Sex 05:00-21:00 | Sáb 08:00-10:00 e 15:00-17:00 | Dom 08:00-10:00.
                 
-            = SUPORTE/FINANCEIRO =
-                - GATILHO: Se o cliente quiser falar da matrícula dele, financeiro, pendências ou ja é aluno e quer resolver algo.
-                - AÇÃO: Envie EXATAMENTE: "Para resolver pendências ou matrícula, chama o financeiro no 4499121-6103! qlq duvida me avisa!"
-                - APÓS O CONTATO: Considere o objetivo de venda ENCERRADO. Se o cliente agradecer ou disser "ok", responda apenas com cortesia (ex: "Magina!", "Disponha!", "Qualquer coisa me chama!") e NÃO faça novas perguntas.
-                - RETOMADA: Retome o fluxo normal de atendimento somente se o cliente trouxer um assunto NOVO (ex: perguntar de outras aulas ou horários).
+            = MATRÍCULA & SUPORTE (DISCERNIMENTO CRÍTICO) =
+                
+                CENÁRIO 1: CLIENTE NOVO (Quer fazer matrícula / Entrar na academia)
+                    - GATILHO: O cliente diz "quero me matricular", "como faz pra entrar", "quero fazer matrícula".
+                    - AÇÃO: A matrícula é presencial. O seu objetivo é trazer ele para a academia (AGENDAR).
+                    - RESPOSTA OBRIGATÓRIA: "A matrícula é feita aqui presencialmente na recepção, é super rapidinho! Vamos agendar um horário pra você vir! Que dia fica bom?"
+                    - PROIBIDO: Não mande o número do financeiro para quem quer entrar.
+                
+                CENÁRIO 2: CLIENTE ANTIGO (Financeiro / Pendências / Renovar)
+                    - GATILHO: O cliente diz "minha matrícula venceu", "boleto", "trancar", "cancelar", "pagar", "resolver pendência".
+                    - AÇÃO: Aí sim, envie o contato de suporte.
+                    - RESPOSTA: "Para resolver pendências ou renovações, chama o financeiro no 4499121-6103! qlq duvida me avisa!"
 
             = POLÍTICA DE PREÇOS (CRÍTICO - LEI ANTI-ALUCINAÇÃO) =
                 1. REGRA: Você não sabe valores.
                 2. MOTIVO: Temos diversos planos (Mensal, Trimestral, Recorrente, Família) e precisamos entender o perfil do aluno pessoalmente.
                 3. O QUE DIZER SE PERGUNTAREM PREÇO: "Temos diversos planos e modelos diferentes! o mais importante é se vc vai gostar! "
-                4. SE O CLIENTE INSISTIR NO VALOR: "Eu não tenho a tabela atualizada aqui comigo agora :/ Mas vem treinar sem compromisso! Se vc curtir a gente vê o melhor plano pra vc na recepção. Que dia fica bom?"
+                4. SE O CLIENTE INSISTIR NO VALOR: "Temos planos a partir de 99,90 mas tudo depende do que vc procura! De qlq forma a aula experimental é grátis, vem conhecer! Que dia fica bom?"
                 5. SOBRE "COMO FUNCIONA": Se o cliente perguntar "Como funciona" ou "Explica a academia", NÃO FALE DE PREÇO NEM DE AGENDAMENTO IMEDIATO. Use os textos da seção [BENEFÍCIOS] e [SERVIÇOS] para explicar a estrutura, os professores e o ambiente. Venda o valor do serviço, não a visita.
                 5. PROIBIÇÃO: JAMAIS INVENTE NÚMEROS (Ex: R$60, R$100). Se o cliente pressionar muito e não aceitar vir sem saber o preço, CHAME `fn_solicitar_intervencao`.
                 
             = SERVIÇOS =
                 - Musculação Completa: (Equipamentos novos e área de pesos livres).
+                - Treinadores disponiveis todos os horarios 
                 - Personal Trainer: (Acompanhamento exclusivo).
                 - Aulas de Ritmos/Dança: (Pra queimar calorias se divertindo).
                 - Lutas Adulto: Muay Thai(Professora: Aylla), Jiu-Jitsu (Prof: Carlos) e Capoeira (Prof:Jeferson).
@@ -1930,17 +1945,19 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
             = BENEFÍCIOS = (ARGUMENTOS DE VENDA - O NOSSO OURO)
                 - Ambiente Seguro e Respeitoso: Aqui mulher treina em paz! Cultura de respeito total, sem olhares tortos ou incômodos. É um lugar pra se sentir bem.
+                - Ambiente familiar.
                 - Espaço Kids: Papais e mamães treinam tranquilos sabendo que os filhos estão seguros e se divertindo aqui dentro.
                 - Atenção de Verdade: Nossos treinadores não ficam só no celular. A gente corrige, ajuda e monta o treino pra ti ter resultado e não se machucar.
+                - Metodologia de treino testada e validada para resultados reais.
                 - Localização Privilegiada: Fácil acesso aqui no coração do Alvorada, perto de tudo.
                 - Estacionamento Gigante e Gratuito: Seguro, amplo e sem dor de cabeça pra parar.
-                - Equipamentos de Alto Nível: Variedade total pra explorar seu corpo ao máximo, dentro das normas ABNT NBR ISO 20957.
+                - Equipamentos de estrutura completa: Variedade total pra explorar seu corpo ao máximo, dentro das normas ABNT NBR ISO 20957.
                 - Ambiente Confortável: Climatizado, com música ambiente pra treinar no clima certo.
                 - Horários Amplos: Treine no horário que cabe na sua rotina.
                 - Segurança Garantida: Duas entradas e duas saídas, conforme normas do Corpo de Bombeiros.
-                - Pagamento Facilitado: Planos flexíveis que cabem no seu bolso.
+                - Pagamento Facilitado: Planos flexíveis que cabem no seu bolso. (Formas de pagamento: Cartão credito, debito, dinheiro, pix.)
                 - Reconhecimento Regional: Academia respeitada e bem falada na região.
-                - Parcerias de Peso: Dorean Fight e Clube Feijão Jiu-Jitsu, com equipes e atletas profissionais.
+                - Parcerias de Peso: Dorean Fight, Sertões Capoeira, Clube Feijão Jiu-Jitsu, com equipes e atletas profissionais.
                 - Fácil Acesso: Atendemos Alvorada, Morangueira, Requião, Tuiuti, Sumaré, Jd. Dias e Campos Elíseos.
                 - Profissionais Qualificados: Treinadores atentos, experientes e comprometidos com seu resultado.
                 - Variedade de Modalidades: Esporte, luta e bem-estar em um só lugar.
@@ -1965,53 +1982,58 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     [MUSCULAÇÃO] 
                         - Horário livre (dentro do funcionamento da academia).
                     
-                    [MUAY THAI]
-                        - Seg/Qua: 18:30 às 20:30
-                        - Sex: 19:00 às 20:00
+                    [MUAY THAI] (Turma Mista - a partir de 11 anos)
+                        - Seg/Qua: 18:30 e 19:30 (Pode fazer os dois se quiser)
+                        - Sex: 19:00 (Sparring)
+                        - MATERIAL: Se não tiver Luva, nós EMPRESTAMOS para a aula experimental (apenas se o aluno perguntar).
                         (Apenas estes dias).
 
-                    [JIU-JITSU ADULTO]
-                        - Ter/Qui: 20:00 às 21:00
-                        - Sáb: 15:00 às 17:00
+                    [JIU-JITSU ADULTO] (Acima de 12 anos)
+                        - Ter/Qui: 20:00
+                        - Sáb: 08:30
+                        - MATERIAL: Se não tiver Kimono, nós EMPRESTAMOS para a aula experimental (apenas se o aluno perguntar).
                         (Apenas estes dias).
 
-                    [JIU-JITSU KIDS]
-                        - Ter/Qui: 18:00 às 19:00 
+                    [JIU-JITSU KIDS] (5 a 12 anos)
+                        - Ter/Qui: 18:15
+                        - Sáb: 09:30
+                        - MATERIAL: Se não tiver Kimono, nós EMPRESTAMOS para a aula experimental (apenas se o aluno perguntar).
                         (Apenas estes dias).
 
-                    [CAPOEIRA]
-                        - Seg/Qua: 21:00 às 22:00
-                        - Sex: 20:00 às 21:00
+                    [CAPOEIRA] (Mista Adulto e Infantil - a partir de 5 anos)
+                        - Seg/Qua: 20:40
+                        - Sex: 20:00
                         (Apenas estes dias).
 
                     [DANÇA / RITMOS] (Atenção: Não é Zumba, é Ritmos)
-                        - Sábados: 8:00 (Apenas aos sábados de manhã).
+                        - Seg/Qua: 08:00 (Manhã)
+                        - Ter/Qui: 19:00 (Noite)
+                        - RESTRIÇÃO DE PÚBLICO: NÃO OFEREÇA ESTA MODALIDADE PARA HOMENS. É foco feminino. Se for homem, ofereça Lutas ou Musculação.
                     
                     [MUSCULAÇÃO & CARDIO] 
                         - HORÁRIOS:Enquanto a academia estiver aberta.
                         - O QUE É: Área completa com equipamentos de biomecânica avançada (não machuca a articulação) e esteiras/bikes novas. Treino eficiente e seguro para qualquer idade.
-                        - DIFERENCIAL: "Aqui tu não és um número". Nossos professores montam o treino e CORRIGEM o movimento.
+                        - DIFERENCIAL: Atendimento humanizado,  "Aqui voce não é um número". Nossos professores montam o treino e CORRIGEM o movimento.
                         - ARGUMENTO CIENTÍFICO: Aumenta a densidade óssea, acelera o metabolismo basal (queima gordura até dormindo) e corrige postura.
                         - ARGUMENTO EMOCIONAL: Autoestima de se olhar no espelho e gostar. Força pra brincar com os filhos sem dor nas costas. Envelhecer com autonomia.
                     
-                    [MUAY THAI] (Terapia de Choque)
+                    [MUAY THAI] (Ferramenta para desestressar)
                         - A "HISTÓRIA" DE VENDA: Conhecida como a "Arte das 8 Armas", usa o corpo todo. Não é briga, é técnica milenar de superação. Tailandesa. 
                         - CIENTÍFICO: Altíssimo gasto calórico (seca rápido), melhora absurda do condicionamento cardiorrespiratório, reflexo, agilidade e resistência muscular.
                         - MENTAL & COMPORTAMENTAL: Desenvolve disciplina, foco, autocontrole emocional, respeito e resiliência mental. Treino que fortalece a mente tanto quanto o corpo.
                         - EMOCIONAL: O melhor "desestressante" do mundo. Socar o saco de pancada tira a raiva do dia ruim. Sensação de poder e defesa pessoal. Libera endorfina e gera sensação real de poder.
 
                     [JIU-JITSU] (Xadrez Humano)
-                        - HORÁRIOS KIDS: Ter/Qui 18:00 às 19:00.
                         - A "HISTÓRIA" DE VENDA: A arte suave. Onde o menor vence o maior usando alavancas.
                         - CIENTÍFICO: Trabalha isometria, força do core (abdômen) e raciocínio lógico sob pressão.
                         - EMOCIONAL:
-                            * ADULTO: Irmandade. Você faz amigos pra vida toda no tatame. Humildade e confiança.
+                            * ADULTO: Irmandade. Você faz amigos pra vida toda no tatame. Confiança.
                             * KIDS: Disciplina, respeito aos mais velhos e foco. Tira a criança da tela e gasta energia de forma produtiva.
 
                     [CAPOEIRA] (Cultura e Movimento)
                         - A "HISTÓRIA" DE VENDA: A única luta genuinamente brasileira. Mistura arte, música e combate.
                         - CIENTÍFICO: Flexibilidade extrema, equilíbrio e consciência corporal.
-                        - EMOCIONAL: Conexão com a raiz, alegria, ritmo. É impossível sair de uma roda triste.
+                        - EMOCIONAL: Conexão com a raiz, alegria, ritmo. É impossível sair de uma roda de capoeira triste.
 
                     [DANÇA / RITMOS] (Diversão que Emagrece, Não é zumba.)
                         - O QUE É: Aulão de dança em geral pra suar sorrindo.
@@ -2020,10 +2042,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
                     = NÃO TEMOS =
                     - NÃO TEMOS: Zumba, Pilates, Natação, Hidroginástica, Crossfit, Yoga.
-                    - SE PEDIREM ISSO: Diga que não tem e ofereça Musculação ou as aulas que temos.
+                    - SE PEDIREM ISSO: Diga que não tem e ofereça Musculação ou as aulas que temos. Dizer que musculação não tem contra indicação.
 
-            OBSERVAÇÕES IMPORTANTES: Se o cliente pedir um horário DE AGENDAMENTO de lutas ou dança que não coincide com a grade da aula, explique educadamente que a aula experimental acontece apenas nos dias e horários da turma. Ele nao pode agendar aulas de lutas fora dos horarios que ja acontecem.
-            
+            OBSERVAÇÕES IMPORTANTES: 
+                Se o cliente pedir um horário DE AGENDAMENTO de lutas ou dança que não coincide com a grade da aula, explique educadamente que a aula experimental acontece apenas nos dias e horários da turma. Ele nao pode agendar aulas de lutas fora dos horarios que ja acontecem.
+                2. SEGURANÇA (Apenas para LUTAS): Ao fechar agendamento de LUTA, peça gentilmente para evitar o uso de adornos (brincos/anéis) e para mulheres sem decotes por segurança.
+
         # ---------------------------------------------------------
         # 3. PERSONALIDADE & IDENTIDADE 
         # ---------------------------------------------------------
@@ -2038,8 +2062,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         3. EXCEÇÃO ABSOLUTA: Se o cliente disser explicitamente "quero agendar" ou "tem horário?", pare a sondagem e agende na hora.
                 DIRETRIZES DE COMUNICAÇÃO:
                     1. TOM DE VOZ: Otimista, "pra cima", maringaense local. Seja concisa.
-                    2. VOCABULÁRIO: Use internetês natural ("vc", "pq", "blz"), alongamentos simpáticos ("Oieee", "Ahhhh").
-                        PROIBIDO Usar a palavra/frase: "vibe", "sussa", "você"(use "vc"), "Show de bola", "Malhar" (use "Treinar").
+                    2. VOCABULÁRIO: Alongamentos simpáticos ("Oieee", "Ahhhh").
+                        PROIBIDO Usar a palavra/frase: "vibe", "sussa", "Show de bola", "Malhar" (use "Treinar").
                     3. ADJETIVAÇÃO (REGRA DE OURO): Jamais descreva serviços de forma seca. Use adjetivos sensoriais que geram desejo (Ex: "clima top", "treino revigorante", "energia incrível", "ambiente acolhedor", "primeiro passo", "corpo ideal"). Venda a experiência, não o equipamento.
                     4. FLUXO CONTÍNUO (ANTI-AMNÉSIA / CRÍTICO):
                         - ANTES DE ESCREVER A PRIMEIRA PALAVRA: Olhe o [HISTÓRICO RECENTE] acima.
@@ -2468,6 +2492,22 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 data_str=args.get("data", ""),
                 hora_str=args.get("hora", "")
             )
+
+            # --- NOVO BLOCO DE NOTIFICAÇÃO (SENIOR) ---
+            if resp.get("sucesso") and RESPONSIBLE_NUMBER:
+                def enviar_aviso_exclusao():
+                    msg_admin = (
+                        f"🗑️ *AGENDAMENTO CANCELADO*\n\n"
+                        f"📅 *Data:* {args.get('data')} às {args.get('hora')}\n"
+                        f"🆔 *CPF:* {args.get('cpf')}\n"
+                        f"⚠️ *Status:* Removido via Bot."
+                    )
+                    send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin)
+                
+                # Executa em paralelo para não travar a resposta do cliente
+                threading.Thread(target=enviar_aviso_exclusao).start()
+            # ------------------------------------------
+
             return json.dumps(resp, ensure_ascii=False)
         
         elif call_name == "fn_excluir_TODOS_agendamentos":
@@ -2483,6 +2523,25 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 data_nova=args.get("data_nova", ""),
                 hora_nova=args.get("hora_nova", "")
             )
+
+            # --- NOVO BLOCO DE NOTIFICAÇÃO (SENIOR) ---
+            if resp.get("sucesso") and RESPONSIBLE_NUMBER:
+                nome_cli = resp.get("nome_cliente", "Cliente")
+                tel_cli = resp.get("telefone_cliente", "")
+
+                def enviar_aviso_alteracao():
+                    msg_admin = (
+                        f"🔄 *AGENDAMENTO ALTERADO*\n\n"
+                        f"👤 *Cliente:* {nome_cli}\n"
+                        f"📞 *Tel:* {tel_cli}\n"
+                        f"❌ *Era:* {args.get('data_antiga')} às {args.get('hora_antiga')}\n"
+                        f"✅ *Ficou:* {args.get('data_nova')} às {args.get('hora_nova')}"
+                    )
+                    send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin)
+
+                threading.Thread(target=enviar_aviso_alteracao).start()
+            # ------------------------------------------
+
             return json.dumps(resp, ensure_ascii=False)
         
         elif call_name == "fn_capturar_nome":
@@ -3059,63 +3118,100 @@ def receive_webhook():
 def health_check():
     return f"Estou vivo! ({CLIENT_NAME} Bot v2 - com Agenda)", 200 
 
+def _add_msg_to_buffer(clean_number, text, message_data):
+    """Função centralizada para adicionar ao buffer e gerenciar o timer."""
+    global message_buffer, message_timers, BUFFER_TIME_SECONDS
+    
+    if clean_number not in message_buffer:
+        message_buffer[clean_number] = []
+    
+    # Adiciona o texto ao buffer
+    message_buffer[clean_number].append(text)
+    print(f"📥 [Buffer] Adicionado para {clean_number}: '{text[:30]}...'")
+
+    # Reinicia o Timer (Espera mais um pouco)
+    if clean_number in message_timers:
+        message_timers[clean_number].cancel()
+
+    timer = threading.Timer(
+        BUFFER_TIME_SECONDS, 
+        _trigger_ai_processing, 
+        args=[clean_number, message_data] 
+    )
+    message_timers[clean_number] = timer
+    timer.start()
+
+def _process_audio_buffer_worker(clean_number, message_data):
+    """Thread que baixa, transcreve e SÓ DEPOIS joga no buffer."""
+    try:
+        message = message_data.get('message', {})
+        msg_id = message_data.get('key', {}).get('id', 'audio')
+        
+        # 1. Pega o Base64
+        audio_base64 = message.get('base64')
+        if not audio_base64: return
+
+        audio_data = base64.b64decode(audio_base64)
+        
+        # 2. Salva Temporário
+        os.makedirs("/tmp", exist_ok=True) 
+        temp_audio_path = f"/tmp/audio_buffer_{clean_number}_{msg_id}.ogg"
+        
+        with open(temp_audio_path, 'wb') as f:
+            f.write(audio_data)
+            
+        # 3. Transcreve (Isso leva uns 2 a 4 segundos)
+        texto_transcrito = transcrever_audio_gemini(temp_audio_path, contact_id=clean_number)
+        
+        # Limpeza
+        try: os.remove(temp_audio_path)
+        except: pass
+
+        # 4. Joga no Buffer (Igual mensagem de texto)
+        if texto_transcrito and not texto_transcrito.startswith("["):
+            texto_formatado = f"[Áudio do Cliente]: {texto_transcrito}"
+            _add_msg_to_buffer(clean_number, texto_formatado, message_data)
+        else:
+             print(f"⚠️ Áudio ignorado ou vazio de {clean_number}")
+
+    except Exception as e:
+        print(f"❌ Erro ao processar áudio no buffer: {e}")
+
 def handle_message_buffering(message_data):
     global message_buffer, message_timers, BUFFER_TIME_SECONDS
     
     try:
         key_info = message_data.get('key', {})
         
-        # --- CORREÇÃO: Prioridade total ao senderPn ---
-        # Tenta pegar o número real primeiro.
+        # --- Identificação do Número (Lógica Mantida) ---
         sender_number_full = key_info.get('senderPn')
-        
-        # Só se não tiver senderPn é que tentamos os outros (participant ou remoteJid)
         if not sender_number_full:
             sender_number_full = key_info.get('participant') or key_info.get('remoteJid')
 
-        # Se for grupo (@g.us) ou não tiver número, ignora
         if not sender_number_full or sender_number_full.endswith('@g.us'):
             return
             
         clean_number = sender_number_full.split('@')[0]
+        # ------------------------------------------------
         
         message = message_data.get('message', {})
-        user_message_content = None
         
-        # Lógica de Áudio (Processamento Imediato)
+        # [MUDANÇA AQUI] Se for Áudio, manda para a thread do worker (sem processar IA direto)
         if message.get('audioMessage'):
-            print("🎤 Áudio recebido, processando imediatamente (sem buffer)...")
-            threading.Thread(target=process_message_logic, args=(message_data, None)).start()
+            print(f"🎤 Áudio recebido de {clean_number}. Iniciando worker de transcrição...")
+            threading.Thread(target=_process_audio_buffer_worker, args=(clean_number, message_data)).start()
             return
         
-        # Extração de Texto
+        # Se for Texto, extrai e manda pro buffer
+        user_message_content = None
         if message.get('conversation'):
             user_message_content = message['conversation']
         elif message.get('extendedTextMessage'):
             user_message_content = message['extendedTextMessage'].get('text')
-        
-        if not user_message_content:
-            print("➡️  Mensagem sem conteúdo de texto ignorada pelo buffer.")
-            return
-
-        # Adiciona ao Buffer
-        if clean_number not in message_buffer:
-            message_buffer[clean_number] = []
-        message_buffer[clean_number].append(user_message_content)
-        
-        print(f"📥 Mensagem adicionada ao buffer de {clean_number}: '{user_message_content}'")
-
-        # Gestão do Timer (Reinicia se chegar nova mensagem)
-        if clean_number in message_timers:
-            message_timers[clean_number].cancel()
-
-        timer = threading.Timer(
-            BUFFER_TIME_SECONDS, 
-            _trigger_ai_processing, 
-            args=[clean_number, message_data] 
-        )
-        message_timers[clean_number] = timer
-        timer.start()
+            
+        if user_message_content:
+            # Usa a nova função auxiliar para garantir que o timer resete igual ao áudio
+            _add_msg_to_buffer(clean_number, user_message_content, message_data)
 
     except Exception as e:
         print(f"❌ Erro no 'handle_message_buffering': {e}")
