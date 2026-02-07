@@ -1090,9 +1090,9 @@ def analisar_status_da_conversa(history):
 
 def executar_profiler_cliente(contact_id):
     """
-    AGENTE 'ESPIÃO' V5 (Filtro Biográfico e Persistência): 
-    Lê EXCLUSIVAMENTE as mensagens do USER. 
-    Mantém dados consolidados e apenas enriquece o dossiê.
+    AGENTE 'ESPIÃO' V5 (Dual-Stream): 
+    1. Lê BOT + USER para gerar o resumo narrativo (historico_converssa).
+    2. Lê EXCLUSIVAMENTE USER para preencher dados demográficos (evita alucinação).
     """
     if conversation_collection is None or not GEMINI_API_KEY:
         return
@@ -1119,37 +1119,63 @@ def executar_profiler_cliente(contact_id):
 
         novo_checkpoint_ts = mensagens_novas[-1].get('ts')
 
-        # 2. Prepara o Texto (FILTRO ESTRITO: APENAS USER)
-        txt_conversa_nova = ""
+        # ==============================================================================
+        # [ALTERAÇÃO 1] PREPARAÇÃO DUAL-STREAM (DOIS TEXTOS DIFERENTES)
+        # ==============================================================================
+        txt_para_historico = "" # Lê TUDO (Bot + Cliente) -> Para o campo 'historico_converssa'
+        txt_para_perfil = ""    # Lê SÓ CLIENTE -> Para os campos de dados (Nome, CPF, Dores...)
+
         for m in mensagens_novas:
-            # FILTRO DE SEGURANÇA: Só entra o que o cliente falou de fato
-            if m.get('role') == 'user':
-                texto = m.get('text', '')
-                # Remove mensagens de sistema ou comandos que possam ter sido salvos como user por erro
-                if texto and not texto.startswith("Chamando função") and not texto.startswith("[HUMAN"):
-                    txt_conversa_nova += f"- Cliente disse: {texto}\n"
+            role_raw = m.get('role')
+            texto = m.get('text', '')
+            
+            # Filtros de segurança (ignora chamadas de função e logs internos)
+            if texto and not texto.startswith("Chamando função") and not texto.startswith("[HUMAN") and not texto.startswith("SISTEMA:"):
+                
+                # FLUXO A: Narrativa Completa (Para entender o contexto)
+                quem_fala = "Cliente" if role_raw == 'user' else "Atendente"
+                txt_para_historico += f"- {quem_fala}: {texto}\n"
+
+                # FLUXO B: Dados Puros (Apenas o que o cliente afirmou)
+                if role_raw == 'user':
+                    txt_para_perfil += f"- Cliente disse: {texto}\n"
         
-        if not txt_conversa_nova.strip():
+        # Se não tem nada em nenhum dos dois, sai
+        if not txt_para_historico.strip():
             conversation_collection.update_one({'_id': contact_id}, {'$set': {'profiler_last_ts': novo_checkpoint_ts}})
             return
 
-        # 3. O Prompt com Regras de Persistência
+        # ==============================================================================
+        # [ALTERAÇÃO 2] PROMPT COM DIRETRIZES DE SEGREGAÇÃO
+        # ==============================================================================
         prompt_profiler = f"""
         Você é um PROFILER sênior . Sua missão é enriquecer o "Dossiê do Cliente" com base nas novas mensagens.
-        PERFIL ATUAL (NÃO APAGUE NADA):
+
+        PERFIL ATUAL (JSON) NÃO APAGUE:
         {json.dumps(perfil_atual, ensure_ascii=False)}
 
-        NOVAS MENSAGENS DO CLIENTE (FONTE PARA ADIÇÃO):
-        {txt_conversa_nova}
+        FONTE A (Contexto Completo - Atendente e Cliente):
+        Use APENAS para preencher o campo 'historico_converssa'.
+        Resuma o que aconteceu cronologicamente.
+        DADOS:
+        {txt_para_historico}
+
+        FONTE B (Dados do Cliente - Apenas falas do Cliente):
+        Use para preencher TODOS OS OUTROS CAMPOS (Nome, CPF, Dores, Objetivos).
+        Ignore perguntas do Bot, foque apenas no que o cliente afirmou.
+        DADOS:
+        {txt_para_perfil}
 
         === REGRAS DE OURO (SISTEMA DE APPEND) ===
         1. SE O CAMPO ESTIVER VAZIO (""): Preencha com a informação detectada.
-        2. SE O CAMPO JÁ TIVER DADOS: **NÃO APAGUE**. Você deve ADICIONAR a nova informação ao final, separada por " | ".
+        2. SEPARAÇÃO DE FONTES: Não use a Fonte A para inferir dados pessoais (evita atribuir falas do bot ao cliente).
+        3. CAMPO 'historico_converssa': Deve ser um parágrafo narrativo. (Ex: "Cliente perguntou preço, Atendente explicou, Cliente agendou"). Mantenha o histórico anterior e adicione o novo.
+        4. SE O CAMPO JÁ TIVER DADOS: **NÃO APAGUE**. Você deve ADICIONAR a nova informação ao final, separada por " | ".
            - Exemplo Errado: Campo era "Dores no joelho", cliente disse "tenho asma". Resultado: "Tenho asma". (ISSO É PROIBIDO).
            - Exemplo Correto: Campo era "Dores no joelho", cliente disse "tenho asma". Resultado: "Dores no joelho | Apresentou asma também".
-        3. SEJA CUMULATIVO: Use e abuse das adições. Queremos um histórico rico.
-        4. SEJA CONCISO: Nas adições, use poucas palavras. Seja direto.
-        5. ZERO ALUCINAÇÃO: Se não houver informação nova para um campo, mantenha o valor original exato do JSON.
+        5. SEJA CUMULATIVO: Queremos um histórico rico.
+        6. SEJA CONCISO: Nas adições, use poucas palavras. Seja direto.
+        7. ZERO ALUCINAÇÃO: Se não houver informação nova para um campo, mantenha o valor original exato do JSON.
         
         === ANÁLISE COMPORTAMENTAL (DISC) ===
         Para o campo 'perfil_comportamental', use esta guia estrita:
@@ -1189,7 +1215,8 @@ def executar_profiler_cliente(contact_id):
         "desejos": "",
         "medos": "",
         "agrados": "",
-        "observacoes_importantes": "" // Use este campo para acumular detalhes variados. Lembre do APPEND com " | ".
+        "observacoes_importantes": "", // Use este campo para acumular detalhes importantes para vendas e relacionamento. Lembre do APPEND com " | ".
+        "historico_converssa": "" // ÚNICO CAMPO QUE USA A FONTE A. Resumo cronológico da interação.
         }}
 
         RETORNE APENAS O JSON ATUALIZADO. SEM TEXTO EXTRA.
@@ -1220,7 +1247,7 @@ def executar_profiler_cliente(contact_id):
                 }
             }
         )
-        print(f"🕵️ [Profiler] Dossiê de {contact_id} atualizado com persistência de dados.")
+        print(f"🕵️ [Profiler Dual-Stream] Dossiê de {contact_id} atualizado.")
 
     except Exception as e:
         print(f"⚠️ Erro no Agente Profiler: {e}")
@@ -1303,7 +1330,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
 
     try:
         convo_data = conversation_collection.find_one({'_id': contact_id})
-        history = convo_data.get('history', [])[-8:]
+        history = convo_data.get('history', [])[-10:]
         
         historico_texto = ""
         for m in history:
@@ -2133,12 +2160,18 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 [O QUE JÁ SABEMOS DO CLIENTE]:
                 {texto_perfil_cliente}
 
-                >>> PROTOCOLO DE PENSAMENTO (LEITURA OBRIGATÓRIA) <<<
-                    ANTES de escrever qualquer letra, ANTES de formular qualquer pensamento, LEIA os dados acima dentro do DOSSIÊ.
-                    1. O fluxo abaixo pede para você perguntar algo? -> PARE e verifique o DOSSIÊ acima
-                    2. A resposta já está escrita ali? 
-                        -> SIM: ENTÃO VOCÊ JÁ SABE. É PROIBIDO perguntar de novo. Use a informação para afirmar (ex: "Como você já treina...") ou PULE para o próximo passo.
-                        -> NÃO: Aí sim (e só aí) você pergunta.
+                    >>> LEI UNIVERSAL DE CONTEXTO (PRIORIDADE MÁXIMA) <<<
+                    ANTES de raciocinar, você é OBRIGADA a ler e processar os campos 'historico_converssa' e 'observacoes_importantes' do JSON acima.
+                    
+                    1. MEMÓRIA ABSOLUTA: 
+                        - O campo 'historico_converssa' contém tudo o que já aconteceu (mesmo que não esteja nas mensagens recentes).
+                        - O campo 'observacoes_importantes' contém detalhes críticos (lesões, horários restritos, filhos).
+                    2. PROIBIÇÃO DE REPETIÇÃO:
+                        - Se a informação consta nestes dois campos, É ESTRITAMENTE PROIBIDO perguntar novamente.
+                        - EXEMPLO: Se no 'historico_converssa' diz que ele já recusou Jiu-Jitsu, NÃO ofereça de novo. Se diz que ele tem dor no joelho, NÃO pergunte "tem alguma lesão?".
+                    3. AÇÃO CORRETA:
+                        -> A resposta está no Dossiê? Use-a para AFIRMAR e criar conexão ("Vi aqui que você tem aquela dor no joelho, então vamos focar na musculação...").
+                        -> Não está no Dossiê? Aí sim você pode perguntar.
 
                 (IMPORTANTE POUCAS PALAVRAS, NECESSARIA PRA DIZER O QUE PRECISA)
                     1. MÉTODO RESPOSTA-GANCHO (Hierarquia de Resposta):
@@ -2690,7 +2723,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     if convo_data:
         history_from_db = convo_data.get('history', [])
         perfil_cliente_dados = convo_data.get('client_profile', {})
-        janela_recente = history_from_db[-15:] 
+        janela_recente = history_from_db[-2:] 
         
         for m in janela_recente:
             role_name = "Cliente" if m.get('role') == 'user' else ""
