@@ -1717,8 +1717,15 @@ def verificar_lembretes_agendados():
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
 
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None, transition_stage: int = 0, is_recursion: bool = False) -> str:
+    
+    # [CORREÇÃO] Inicializa variáveis para garantir que existam em qualquer cenário
+    hora_fmt = "{HORA_ATUAL}" 
 
     if horario_atual == "{DATA_E_HORA_ATUAL}":
+        # MODO CACHE (ESTÁTICO)
+        # Definimos os placeholders literais para o cache
+        hora_fmt = "{HORA_ATUAL}" # <--- AQUI ESTAVA O ERRO (Faltava definir isso)
+        
         info_tempo_real = (
             f"HOJE É: {{DIA_SEMANA_ATUAL}}, {{DATA_ATUAL}} | HORA: {{HORA_ATUAL}}\n"
             f"=== STATUS ATUAL DA ACADEMIA (LEI ABSOLUTA) ===\n"
@@ -1728,22 +1735,23 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             f"=== MAPA DE DATAS ===\n{{CALENDARIO_DINAMICO}}\n"
         )
     else:
-        # Lógica normal (Dinâmica) - Calcula datas reais APENAS se não for cache
+        # MODO EXECUÇÃO (DINÂMICO)
         try:
             fuso = pytz.timezone('America/Sao_Paulo')
             agora = datetime.now(fuso)
             dia_sem = agora.weekday() # 0=Seg, 6=Dom
             hora_float = agora.hour + (agora.minute / 60.0)
             
+            # Define a hora formatada real para uso no texto abaixo
+            hora_fmt = agora.strftime("%H:%M") # <--- Define o valor real
+            
             status_casa = "FECHADO"
             mensagem_status = "Fechado."
             
-            # Busca os blocos de hoje (ex: Sábado tem 2 blocos: [08-10, 15-17])
             blocos_hoje = BLOCOS_DE_TRABALHO.get(dia_sem, [])
             esta_aberto = False
             
             for bloco in blocos_hoje:
-                # Converte strings "08:00" para float (8.0) para comparar
                 h_ini = int(bloco["inicio"].split(':')[0]) + int(bloco["inicio"].split(':')[1])/60.0
                 h_fim = int(bloco["fim"].split(':')[0]) + int(bloco["fim"].split(':')[1])/60.0
                 
