@@ -12,7 +12,7 @@ import base64
 import time
 import threading
 from flask import Flask, request, jsonify
-from datetime import datetime, timedelta, timezone, time as dt_time
+from datetime import datetime, timedelta
 from dateutil import parser as dateparser
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -272,33 +272,19 @@ def gerar_slots_de_trabalho(intervalo_min: int, data_ref: datetime) -> List[str]
     return slots
 
 def extrair_tokens_da_resposta(response):
-    """
-    Extrai separadamente:
-    1. Tokens de Cache (Baratos)
-    2. Tokens Frescos (Caros)
-    3. Tokens de Saída (Resposta da IA)
-    """
     try:
         if hasattr(response, 'usage_metadata'):
             usage = response.usage_metadata
-            
-            # Pega o que veio do cache
+            # O Gemini 1.5/2.0/3.0 separa por cached_content_token_count
             cached = usage.cached_content_token_count or 0
-            
-            # Pega o que é novo (Total de entrada - Cache)
-            # Nota: Em algumas versões da API, 'prompt_token_count' é o total. 
-            # O 'fresh' é o que sobra.
             total_input = usage.prompt_token_count or 0
-            fresh = total_input - cached
-            if fresh < 0: fresh = 0
-            
             output = usage.candidates_token_count or 0
             
-            return (cached, fresh, output)
-            
-        return (0, 0, 0)
+            # Se o seu código espera (input, output), retorne assim:
+            return (total_input, output)
+        return (0, 0)
     except:
-        return (0, 0, 0)
+        return (0, 0)
     
 def agrupar_horarios_em_faixas(lista_horarios, step=15):
     """
@@ -1089,7 +1075,8 @@ def analisar_status_da_conversa(history):
             """
             
             resp = modelo_ia.generate_content(prompt_auditoria)
-            in_tokens, out_tokens = extrair_tokens_da_resposta(resp)
+            cached_in, fresh_in, out_tokens = extrair_tokens_da_resposta(resp)
+            in_tokens = cached_in + fresh_in
             
             status_ia = resp.text.strip().upper()
             
