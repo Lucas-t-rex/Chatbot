@@ -12,7 +12,7 @@ import base64
 import time
 import threading
 from flask import Flask, request, jsonify
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone, time as dt_time
 from dateutil import parser as dateparser
 from dotenv import load_dotenv
 from pymongo import MongoClient
@@ -2744,7 +2744,7 @@ def get_model_with_cache(tools_schema, static_prompt_text):
                 system_instruction=static_prompt_text,
                 contents=[], 
                 tools=tools_schema, 
-                ttl=datetime.timedelta(hours=24)
+                ttl=timedelta(hours=24)
             )
             
             # Carrega o modelo recém-criado e SALVA NA RAM GLOBAL
