@@ -275,16 +275,17 @@ def extrair_tokens_da_resposta(response):
     try:
         if hasattr(response, 'usage_metadata'):
             usage = response.usage_metadata
-            # O Gemini 1.5/2.0/3.0 separa por cached_content_token_count
-            cached = usage.cached_content_token_count or 0
-            total_input = usage.prompt_token_count or 0
-            output = usage.candidates_token_count or 0
+            cached = getattr(usage, 'cached_content_token_count', 0) or 0
+            total_input = getattr(usage, 'prompt_token_count', 0) or 0
+            output = getattr(usage, 'candidates_token_count', 0) or 0
             
-            # Se o seu código espera (input, output), retorne assim:
-            return (total_input, output)
-        return (0, 0)
+            fresh_input = max(0, total_input - cached)
+            
+            # Agora retorna os 3 valores que o sistema exige
+            return (cached, fresh_input, output) 
+        return (0, 0, 0)
     except:
-        return (0, 0)
+        return (0, 0, 0)
     
 def agrupar_horarios_em_faixas(lista_horarios, step=15):
     """
@@ -1232,8 +1233,8 @@ def executar_profiler_cliente(contact_id):
         # 5. Processa o Resultado
         novo_perfil_json = json.loads(response.text)
         
-        # 6. Contabilidade de Tokens
-        in_tok, out_tok = extrair_tokens_da_resposta(response)
+        c_tok, f_tok, out_tok = extrair_tokens_da_resposta(response)
+        in_tok = c_tok + f_tok
 
         # 7. Atualização no MongoDB
         conversation_collection.update_one(
@@ -1523,8 +1524,8 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         
         resp = modelo_ia.generate_content(prompt)
 
-        # --- CONTABILIDADE SEPARADA (Input vs Output) ---
-        in_tok, out_tok = extrair_tokens_da_resposta(resp)
+        c_tok, f_tok, out_tok = extrair_tokens_da_resposta(resp)
+        in_tok = c_tok + f_tok
         
         if in_tok > 0 or out_tok > 0:
             conversation_collection.update_one(
@@ -3185,7 +3186,6 @@ processed_messages = set()
 def receive_webhook():
     data = request.json 
 
-
     event_type = data.get('event')
     if event_type and event_type != 'messages.upsert':
         return jsonify({"status": "ignored_event_type"}), 200
@@ -3198,6 +3198,18 @@ def receive_webhook():
         key_info = message_data.get('key', {})
         if not key_info:
             return jsonify({"status": "ignored_no_key"}), 200
+
+        # ================================================================
+        # 🛑 TRAVA DE HISTÓRICO: Ignora mensagens velhas (Sincronização)
+        # ================================================================
+        message_timestamp = message_data.get('messageTimestamp')
+        if message_timestamp:
+            agora = int(time.time())
+            # Se a mensagem foi enviada há mais de 3 minutos (180 segundos), joga fora.
+            if agora - int(message_timestamp) > 180:
+                print("⏳ [Webhook] Ignorando mensagem antiga do histórico de sincronização.")
+                return jsonify({"status": "ignored_old_message"}), 200
+        # ================================================================
         
         # --- CORREÇÃO: Prioridade ao senderPn (Corrige o bug do ID 71...) ---
         sender_number_full = key_info.get('senderPn')
