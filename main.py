@@ -1,6 +1,5 @@
 
 import google.generativeai as genai
-from google.generativeai import caching  
 import requests
 import os
 import pytz 
@@ -26,7 +25,7 @@ from bson.objectid import ObjectId
 
 FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
 CLIENT_NAME="Brooklyn Academia"
-RESPONSIBLE_NUMBER="554800000000"
+RESPONSIBLE_NUMBER="554898389781"
 ADMIN_USER = "brooklyn"
 ADMIN_PASS = "brooklyn2025"
 load_dotenv()
@@ -272,21 +271,19 @@ def gerar_slots_de_trabalho(intervalo_min: int, data_ref: datetime) -> List[str]
     return slots
 
 def extrair_tokens_da_resposta(response):
+    """
+    Extrai separadamente tokens de entrada (prompt) e saída (resposta).
+    Retorna uma tupla: (tokens_input, tokens_output)
+    """
     try:
         if hasattr(response, 'usage_metadata'):
             usage = response.usage_metadata
-            cached = getattr(usage, 'cached_content_token_count', 0) or 0
-            total_input = getattr(usage, 'prompt_token_count', 0) or 0
-            output = getattr(usage, 'candidates_token_count', 0) or 0
-            
-            fresh_input = max(0, total_input - cached)
-            
-            # Agora retorna os 3 valores que o sistema exige
-            return (cached, fresh_input, output) 
-        return (0, 0, 0)
+            # Pega entrada e saída separadamente conforme documentação oficial
+            return (usage.prompt_token_count, usage.candidates_token_count)
+        return (0, 0)
     except:
-        return (0, 0, 0)
-    
+        return (0, 0)
+
 def agrupar_horarios_em_faixas(lista_horarios, step=15):
     """
     Agrupa horários sequenciais de forma dinâmica.
@@ -1076,8 +1073,7 @@ def analisar_status_da_conversa(history):
             """
             
             resp = modelo_ia.generate_content(prompt_auditoria)
-            cached_in, fresh_in, out_tokens = extrair_tokens_da_resposta(resp)
-            in_tokens = cached_in + fresh_in
+            in_tokens, out_tokens = extrair_tokens_da_resposta(resp)
             
             status_ia = resp.text.strip().upper()
             
@@ -1233,8 +1229,8 @@ def executar_profiler_cliente(contact_id):
         # 5. Processa o Resultado
         novo_perfil_json = json.loads(response.text)
         
-        c_tok, f_tok, out_tok = extrair_tokens_da_resposta(response)
-        in_tok = c_tok + f_tok
+        # 6. Contabilidade de Tokens
+        in_tok, out_tok = extrair_tokens_da_resposta(response)
 
         # 7. Atualização no MongoDB
         conversation_collection.update_one(
@@ -1256,7 +1252,7 @@ def executar_profiler_cliente(contact_id):
     except Exception as e:
         print(f"⚠️ Erro no Agente Profiler: {e}")
 
-def save_conversation_to_db(contact_id, sender_name, customer_name, cached_in, fresh_in, tokens_out, ultima_msg_gerada=None):
+def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used_chat_in, tokens_used_chat_out, ultima_msg_gerada=None):
     if conversation_collection is None: return
     try:
         doc_atual = conversation_collection.find_one({'_id': contact_id})
@@ -1267,11 +1263,11 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, cached_in, f
             historico_atual.append({'role': 'assistant', 'text': ultima_msg_gerada})
 
         status_calculado, audit_in, audit_out = analisar_status_da_conversa(historico_atual)
+
+        final_input = tokens_used_chat_in + audit_in
+        final_output = tokens_used_chat_out + audit_out
         
-        # O auditor não usa cache, então somamos ele no "Fresh" (caro)
-        total_fresh_final = fresh_in + audit_in 
-        total_out_final = tokens_out + audit_out
-        total_geral = cached_in + total_fresh_final + total_out_final
+        total_combined = final_input + final_output
         
         update_payload = {
             'sender_name': sender_name,
@@ -1279,14 +1275,18 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, cached_in, f
             'conversation_status': status_calculado,
         }
 
+        # --- LÓGICA DE RESET DE ESTÁGIO ---
         should_reset_stage = False
+        
         if status_calculado == 'andamento':
             should_reset_stage = True
+        
         elif status_calculado != status_anterior:
             should_reset_stage = True
         
         if should_reset_stage:
             update_payload['followup_stage'] = 0
+        # ----------------------------------
 
         if customer_name:
             update_payload['customer_name'] = customer_name
@@ -1296,10 +1296,9 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, cached_in, f
             {
                 '$set': update_payload,
                 '$inc': {
-                    'total_tokens_consumed': total_geral,      # Soma bruta (pra ter noção de volume)
-                    'tokens_input_cached': cached_in,          # <--- ECONOMIA (Isso aqui é barato)
-                    'tokens_input_fresh': total_fresh_final,   # <--- GASTO REAL (Isso aqui é o custo normal)
-                    'tokens_output': total_out_final           # <--- SAÍDA
+                    'total_tokens_consumed': total_combined, # Total Geral
+                    'tokens_input': final_input,             # Novo Campo: Só entrada (barato)
+                    'tokens_output': final_output            # Novo Campo: Só saída (caro)
                 } 
             },
             upsert=True
@@ -1524,8 +1523,8 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         
         resp = modelo_ia.generate_content(prompt)
 
-        c_tok, f_tok, out_tok = extrair_tokens_da_resposta(resp)
-        in_tok = c_tok + f_tok
+        # --- CONTABILIDADE SEPARADA (Input vs Output) ---
+        in_tok, out_tok = extrair_tokens_da_resposta(resp)
         
         if in_tok > 0 or out_tok > 0:
             conversation_collection.update_one(
@@ -1705,102 +1704,87 @@ def verificar_lembretes_agendados():
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
 
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None, transition_stage: int = 0, is_recursion: bool = False) -> str:
-    
-    # [CORREÇÃO] Inicializa variáveis para garantir que existam em qualquer cenário
-    hora_fmt = "{HORA_ATUAL}" 
+    try:
+        fuso = pytz.timezone('America/Sao_Paulo')
+        agora = datetime.now(fuso)
+        dia_sem = agora.weekday() # 0=Seg, 6=Dom
+        hora_float = agora.hour + (agora.minute / 60.0)
+        
+        status_casa = "FECHADO"
+        mensagem_status = "Fechado."
+        
+        # Busca os blocos de hoje (ex: Sábado tem 2 blocos: [08-10, 15-17])
+        blocos_hoje = BLOCOS_DE_TRABALHO.get(dia_sem, [])
+        esta_aberto = False
+        
+        for bloco in blocos_hoje:
+            # Converte strings "08:00" para float (8.0) para comparar
+            h_ini = int(bloco["inicio"].split(':')[0]) + int(bloco["inicio"].split(':')[1])/60.0
+            h_fim = int(bloco["fim"].split(':')[0]) + int(bloco["fim"].split(':')[1])/60.0
+            
+            if h_ini <= hora_float < h_fim:
+                esta_aberto = True
+                status_casa = "ABERTO"
+                mensagem_status = "Status atual: ABERTO (Pode convidar para vir agora se for musculação)."
+                break
 
-    if horario_atual == "{DATA_E_HORA_ATUAL}":
-        # MODO CACHE (ESTÁTICO)
-        # Definimos os placeholders literais para o cache
-        hora_fmt = "{HORA_ATUAL}" # <--- AQUI ESTAVA O ERRO (Faltava definir isso)
+        if dia_sem == 5 and not esta_aberto:
+
+            if len(blocos_hoje) > 1:
+                fim_manha = int(blocos_hoje[0]["fim"].split(':')[0])
+                inicio_tarde = int(blocos_hoje[1]["inicio"].split(':')[0])
+                
+                if fim_manha <= hora_float < inicio_tarde:
+                    status_casa = "FECHADO_INTERVALO_SABADO"
+                    mensagem_status = f"Status atual: Pausa de almoço. Voltamos às {blocos_hoje[1]['inicio']}."
+
+
+        dias_semana = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
+        
+        dia_sem_str = dias_semana[agora.weekday()]
+        hora_fmt = agora.strftime("%H:%M")
+        data_hoje_fmt = agora.strftime("%d/%m/%Y")
+        dia_num = agora.day
+        ano_atual = agora.year
+
+        lista_dias = []
+        
+        # Reduzimos para 30 dias para focar no mês atual/próximo
+        for i in range(30): 
+            d = agora + timedelta(days=i)
+            nome_dia = dias_semana[d.weekday()]
+            data_str = d.strftime("%d/%m")
+            
+            marcador = ""
+            
+            # --- AQUI ESTÁ A MÁGICA DA CORREÇÃO ---
+            if i == 0: 
+                marcador = " (HOJE)"
+            elif i == 1: 
+                marcador = " (AMANHÃ)"
+            elif i < 7:
+                if nome_dia == "Domingo":
+                    marcador = " [DOMINGO AGORA - O PRÓXIMO]"
+                elif nome_dia == "Sexta-feira":
+                    marcador = " [SEXTA AGORA]"
+                elif nome_dia == "Sábado":
+                    marcador = " [SÁBADO AGORA]"
+
+            lista_dias.append(f"- {data_str} é {nome_dia}{marcador}")
+
+        calendario_completo = "\n".join(lista_dias)
         
         info_tempo_real = (
-            f"HOJE É: {{DIA_SEMANA_ATUAL}}, {{DATA_ATUAL}} | HORA: {{HORA_ATUAL}}\n"
+            f"HOJE É: {dia_sem_str}, {data_hoje_fmt} | HORA: {hora_fmt}\n"
             f"=== STATUS ATUAL DA ACADEMIA (LEI ABSOLUTA) ===\n"
-            f"STATUS: {{STATUS_ABERTURA}}\n"
-            f"CONTEXTO: {{MSG_STATUS_ABERTURA}}\n"
+            f"STATUS: {status_casa}\n"
+            f"CONTEXTO: {mensagem_status}\n"
             f"===========================================\n"
-            f"=== MAPA DE DATAS ===\n{{CALENDARIO_DINAMICO}}\n"
+            f"=== MAPA DE DATAS ===\n{calendario_completo}\n"
         )
-    else:
-        # MODO EXECUÇÃO (DINÂMICO)
-        try:
-            fuso = pytz.timezone('America/Sao_Paulo')
-            agora = datetime.now(fuso)
-            dia_sem = agora.weekday() # 0=Seg, 6=Dom
-            hora_float = agora.hour + (agora.minute / 60.0)
-            
-            # Define a hora formatada real para uso no texto abaixo
-            hora_fmt = agora.strftime("%H:%M") # <--- Define o valor real
-            
-            status_casa = "FECHADO"
-            mensagem_status = "Fechado."
-            
-            blocos_hoje = BLOCOS_DE_TRABALHO.get(dia_sem, [])
-            esta_aberto = False
-            
-            for bloco in blocos_hoje:
-                h_ini = int(bloco["inicio"].split(':')[0]) + int(bloco["inicio"].split(':')[1])/60.0
-                h_fim = int(bloco["fim"].split(':')[0]) + int(bloco["fim"].split(':')[1])/60.0
-                
-                if h_ini <= hora_float < h_fim:
-                    esta_aberto = True
-                    status_casa = "ABERTO"
-                    mensagem_status = "Status atual: ABERTO (Pode convidar para vir agora se for musculação)."
-                    break
-
-            if dia_sem == 5 and not esta_aberto:
-                if len(blocos_hoje) > 1:
-                    fim_manha = int(blocos_hoje[0]["fim"].split(':')[0])
-                    inicio_tarde = int(blocos_hoje[1]["inicio"].split(':')[0])
-                    
-                    if fim_manha <= hora_float < inicio_tarde:
-                        status_casa = "FECHADO_INTERVALO_SABADO"
-                        mensagem_status = f"Status atual: Pausa de almoço. Voltamos às {blocos_hoje[1]['inicio']}."
-
-            dias_semana = ["Segunda-feira", "Terça-feira", "Quarta-feira", "Quinta-feira", "Sexta-feira", "Sábado", "Domingo"]
-            
-            dia_sem_str = dias_semana[agora.weekday()]
-            hora_fmt = agora.strftime("%H:%M")
-            data_hoje_fmt = agora.strftime("%d/%m/%Y")
-            
-            lista_dias = []
-            
-            # Reduzimos para 30 dias para focar no mês atual/próximo
-            for i in range(30): 
-                d = agora + timedelta(days=i)
-                nome_dia = dias_semana[d.weekday()]
-                data_str = d.strftime("%d/%m")
-                
-                marcador = ""
-                
-                if i == 0: 
-                    marcador = " (HOJE)"
-                elif i == 1: 
-                    marcador = " (AMANHÃ)"
-                elif i < 7:
-                    if nome_dia == "Domingo":
-                        marcador = " [DOMINGO AGORA - O PRÓXIMO]"
-                    elif nome_dia == "Sexta-feira":
-                        marcador = " [SEXTA AGORA]"
-                    elif nome_dia == "Sábado":
-                        marcador = " [SÁBADO AGORA]"
-
-                lista_dias.append(f"- {data_str} é {nome_dia}{marcador}")
-
-            calendario_completo = "\n".join(lista_dias)
-            
-            info_tempo_real = (
-                f"HOJE É: {dia_sem_str}, {data_hoje_fmt} | HORA: {hora_fmt}\n"
-                f"=== STATUS ATUAL DA ACADEMIA (LEI ABSOLUTA) ===\n"
-                f"STATUS: {status_casa}\n"
-                f"CONTEXTO: {mensagem_status}\n"
-                f"===========================================\n"
-                f"=== MAPA DE DATAS ===\n{calendario_completo}\n"
-            )
-            
-        except Exception as e:
-            info_tempo_real = f"DATA: {horario_atual} (Erro critico data: {e})"
+        
+    except Exception as e:
+        info_tempo_real = f"DATA: {horario_atual} (Erro critico data: {e})"
 
     texto_perfil_cliente = "Nenhum detalhe pessoal conhecido ainda."
     if client_profile_json:
@@ -1882,11 +1866,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         - Se você já disse que "treinador não fica no celular" nas últimas mensagens, NÃO REPITA ISSO. Fica parecendo robô quebrado.
                         - Alterne os argumentos: Fale do ar-condicionado, do ambiente sem julgamento, da segurança, do estacionamento. Tenha criatividade!
 
-                    3. HIERARQUIA TEMPORAL (CRONOLOGIA É LEI):
-                        - O campo 'historico_converssa' é uma LINHA DO TEMPO VIVA. O final desse texto representa o "AGORA", mas as anteriores são o que aconteceu antes.
-                        - As 'observacoes_importantes' contêm os fatos mais recentes coletados (ex: "acabou de dizer que quer perder peso").
-                        - REGRA DE OURO: Se a informação está no final do histórico ou nas observações, ela é a VERDADE IMEDIATA. Não aja como se não soubesse. Use essa informação para continuar a conversa, não para reiniciar o assunto.
-                        - No caso as ultimas mensagens do historico e das observaçoes são as mais recentes !
+                    3. CAMPO 'historico_converssa' É O SEU GUIA:
+                        - Leia este campo no JSON. Se lá diz que o cliente já respondeu X, considere X respondido. Ponto final.
 
             (TODAS AS SUAS INFORMAÇOES ESTÃO ORGANIZADAS NO TEXTO A BAIXO.)
         
@@ -2428,9 +2409,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             CONTEXTO: {info_tempo_real} | SAUDAÇÃO SUGERIDA: {saudacao}
             HISTÓRICO: {historico_str}
             
-            IDENTIDADE: Helena, 34 anos. Tom: Casual, Simpatica.
+            IDENTIDADE: Helena, 34 anos. Tom: Casual, WhatsApp, fala com abreviações "vc", "pq", "td bem?", "td otimo e vc?".
             OBJETIVO ÚNICO: Obter o PRIMEIRO NOME do cliente de maneira simpatica, carismática, atencionsa  para liberar o sistema.
-            DESEJAVEL: SE O CLIENTE FEZ UMA PERGUNTA, NÃO RESPONDA VOCÊ AINDA NAO SABE, GUARDE ELA NA MEMORIA POIS SERA RESPONDIDA DEPOIS DE PEGAR O NOME.
+            DESEJAVEL: SE O CLIENTE FEZ UMA PERGUNTA, GUARDE ELA NA MEMORIA POIS SERA RESPONDIDA DEPOIS DE PEGAR O NOME.
 
         = FERRAMENTAS (EXECUÇÃO SILENCIOSA) =
             1. `fn_capturar_nome`:
@@ -2479,7 +2460,6 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         2. POUCAS PALAVRAS E SIMPATICA: Suas mensagens não devem passar de 2 linhas.
         3. INTERAÇÃO: Interaja com a pessoa faça comentarios sobre o que ela falou(se falou), mas nunca passe informações que você não saiba, peça o nome antes.
         4. RETORNO DE FERRAMENTAS: NUNCA fique em silêncio após receber o retorno (JSON) de uma tool call.
-        5. NÃO RESPONDA: este contato é apenas para pegar o nome , se a pessoa perguntar algo , acalme ela dizendo que ja vi dizer e pergunte o nome d eforma simpatica.
         """
         return prompt_gate_de_captura
 
@@ -2696,71 +2676,9 @@ def safe_get_text(response):
         # Se der erro ao tentar ler, assume que não tem texto (é tool call)
         return ""
 
-cache_lock = threading.Lock()  # O "Semáforo"
-cached_model_instance = None
-
-def get_model_with_cache(tools_schema, static_prompt_text):
-    """
-    ENGINEERING: Gerencia o ciclo de vida do Cache Explícito (TTL 24h).
-    Usa 'Double-Checked Locking' para performance máxima e segurança de custo.
-    """
-    global cached_model_instance # Acessa a memória RAM global
-    
-    # [CAMADA 1] Verificação Rápida (RAM)
-    # Se já carregamos o modelo antes, retorna instantaneamente (0 latência)
-    if cached_model_instance:
-        return cached_model_instance
-
-    # [CAMADA 2] O Semáforo (Thread Lock)
-    # Se 10 mensagens chegarem juntas, só a primeira entra aqui. As outras 9 esperam na fila.
-    with cache_lock:
-        
-        # [CAMADA 3] Re-verificação (Double Check)
-        # Pode ser que, enquanto a thread esperava na fila do Lock, outra já tenha criado o cache.
-        if cached_model_instance:
-            return cached_model_instance
-
-        # --- A PARTIR DAQUI, SÓ UMA THREAD POR VEZ EXECUTA ---
-        
-        cache_name_id = "brooklyn-static-context-v2" # Mudei pra v2 pra garantir limpeza
-        
-        # 1. Pergunta pro Google se o cache já existe na nuvem
-        try:
-            for c in caching.CachedContent.list():
-                if c.display_name == cache_name_id:
-                    print(f"⚡️ [CACHE HIT] Contexto recuperado da nuvem: {c.name}")
-                    # Carrega o modelo e SALVA NA RAM GLOBAL
-                    model = genai.GenerativeModel.from_cached_content(cached_content=c)
-                    cached_model_instance = model
-                    return model
-        except Exception as e:
-            print(f"⚠️ Aviso na busca de cache (prosseguindo para criar): {e}")
-
-        # 2. Se não existe na nuvem, CRIA um novo (Paga custo de criação)
-        print(f"💾 [CACHE MISS] Criando novo Context Cache no Google (TTL 24h)...")
-        try:
-            cache = caching.CachedContent.create(
-                model=MODEL_NAME,
-                display_name=cache_name_id, 
-                system_instruction=static_prompt_text,
-                contents=[], 
-                tools=tools_schema, 
-                ttl=timedelta(hours=24)
-            )
-            
-            # Carrega o modelo recém-criado e SALVA NA RAM GLOBAL
-            model = genai.GenerativeModel.from_cached_content(cached_content=cache)
-            cached_model_instance = model
-            return model
-            
-        except Exception as e:
-            print(f"❌ Erro crítico ao criar cache: {e}. Usando fallback sem cache.")
-            # Fallback: Retorna modelo padrão sem cache (não salva na RAM pra tentar de novo depois)
-            return genai.GenerativeModel(MODEL_NAME, system_instruction=static_prompt_text, tools=tools_schema)
-    
 def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name, retry_depth=0, is_recursion=False): 
     """
-    VERSÃO FINAL: CACHE EXPLÍCITO + SEGURANÇA + CONTABILIDADE FINANCEIRA (3 VIAS)
+    VERSÃO COM TRAVA DE SEGURANÇA ANTI-CÓDIGO (Limpador de Alucinação)
     """
     global modelo_ia 
 
@@ -2786,13 +2704,13 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     try:
         fuso_horario_local = pytz.timezone('America/Sao_Paulo')
         agora_local = datetime.now(fuso_horario_local)
-        horario_atual = agora_local.strftime("%d/%m/%Y às %H:%M") # Formato Humano
+        horario_atual = agora_local.strftime("%Y-%m-%d %H:%M:%S")
         hora_do_dia = agora_local.hour
         if 5 <= hora_do_dia < 12: saudacao = "Bom dia"
         elif 12 <= hora_do_dia < 18: saudacao = "Boa tarde"
         else: saudacao = "Boa noite"
     except:
-        horario_atual = datetime.now().strftime("%d/%m/%Y às %H:%M")
+        horario_atual = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         saudacao = "Olá" 
 
     # --- CARREGA HISTÓRICO ---
@@ -2801,17 +2719,19 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     old_history_gemini_format = []
     perfil_cliente_dados = {}
 
-    # === [LÓGICA DE ESTÁGIOS] ===
+    # === [LÓGICA DE ESTÁGIOS - APENAS LEITURA] ===
+    # A atualização agora é feita lá fora, no process_message_logic
     current_stage = 0
     if convo_data and known_customer_name:
         current_stage = convo_data.get('name_transition_stage', 0)
     
     stage_to_pass = current_stage
+    # ============================
     
     if convo_data:
         history_from_db = convo_data.get('history', [])
         perfil_cliente_dados = convo_data.get('client_profile', {})
-        janela_recente = history_from_db[-6:] 
+        janela_recente = history_from_db[-2:] 
         
         for m in janela_recente:
             role_name = "Cliente" if m.get('role') == 'user' else ""
@@ -2825,60 +2745,47 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             if 'text' in msg and not msg['text'].startswith("Chamando função"):
                 old_history_gemini_format.append({'role': role, 'parts': [msg['text']]})
 
-    # ------------------------------------------------------------------
-    # ESTRATÉGIA DE CACHE: SEPARAÇÃO DE DADOS
-    # ------------------------------------------------------------------
-    
-    # 1. PARTE ESTÁTICA (Vai para o Cache do Google - Paga 1x por dia)
-    system_instruction_estatica = get_system_prompt_unificado(
-        saudacao="{SAUDACAO_DO_DIA}", 
-        horario_atual="{DATA_E_HORA_ATUAL}",
-        known_customer_name="{NOME_DO_CLIENTE}",  
-        clean_number="{TELEFONE_CLIENTE}", 
-        historico_str="{HISTORICO_RECENTE_CONVERSA}",
-        client_profile_json={}, 
-        transition_stage=0, 
-        is_recursion=False
+    # Passa o ESTÁGIO NUMÉRICO para o prompt
+    system_instruction = get_system_prompt_unificado(
+        saudacao, 
+        horario_atual,
+        known_customer_name,  
+        contact_id,
+        historico_str=historico_texto_para_prompt,
+        client_profile_json=perfil_cliente_dados,
+        transition_stage=stage_to_pass # <--- Passando Inteiro (0 ou 1)
     )
-
-    # 2. PARTE DINÂMICA (Vai injetada na mensagem do usuário)
-    contexto_dinamico = f"""
-    [ATUALIZAÇÃO DE SISTEMA - CONTEXTO DINÂMICO]
-    Considere estes dados como a VERDADEIRA situação atual (substituem os placeholders do sistema):
-    
-    - Data/Hora Real: {horario_atual}
-    - Saudação Ideal: {saudacao}
-    - Nome do Cliente: {known_customer_name or 'Ainda não identificado'} (ID: {contact_id})
-    - Estágio da Conversa: {stage_to_pass}
-    
-    [DOSSIÊ DO CLIENTE (PERFIL ATUALIZADO)]:
-    {json.dumps(perfil_cliente_dados, indent=2, ensure_ascii=False) if perfil_cliente_dados else "Ainda sem dados perfilados."}
-
-    [MEMÓRIA DE CURTO PRAZO (ÚLTIMAS MENSAGENS)]:
-    {historico_texto_para_prompt}
-    """
-
-    mensagem_final_com_rag = f"{contexto_dinamico}\n\n---\n[MENSAGEM DO CLIENTE AGORA]:\n{user_message}"
 
     max_retries = 3 
     for attempt in range(max_retries):
         try:
-            # Pega o modelo já conectado ao cache
-            modelo_com_sistema = get_model_with_cache(tools, system_instruction_estatica)
+            tools_da_vez = tools
+            if known_customer_name:
+                import copy
+                tools_da_vez = copy.deepcopy(tools) # Copia para não estragar a original
+                for t in tools_da_vez:
+                    if 'function_declarations' in t:
+                        # Filtra removendo apenas a fn_capturar_nome
+                        t['function_declarations'] = [
+                            f for f in t['function_declarations'] 
+                            if f.get('name') != 'fn_capturar_nome'
+                        ]
+
+            modelo_com_sistema = genai.GenerativeModel(
+                modelo_ia.model_name,
+                system_instruction=system_instruction,
+                tools=tools_da_vez,
+                safety_settings=safety_settings
+            )
             
             chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
-            resposta_ia = chat_session.send_message(mensagem_final_com_rag)
+            resposta_ia = chat_session.send_message(user_message)
             
-            # --- NOVA CONTABILIDADE DE TOKENS (3 VIAS) ---
-            turn_cached = 0
-            turn_fresh = 0
+            turn_input = 0
             turn_output = 0
-            
-            # Extrai da primeira resposta
-            c_in, f_in, out = extrair_tokens_da_resposta(resposta_ia)
-            turn_cached += c_in
-            turn_fresh += f_in
-            turn_output += out
+            t_in, t_out = extrair_tokens_da_resposta(resposta_ia)
+            turn_input += t_in
+            turn_output += t_out
 
             # --- LOOP DE CHAMADA DE FERRAMENTAS ---
             while True:
@@ -2892,6 +2799,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 except:
                     func_call = None
 
+                # SE NÃO TIVER FUNÇÃO (É TEXTO), SAI DO LOOP
                 if not func_call or not getattr(func_call, "name", None):
                     break 
 
@@ -2901,51 +2809,59 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 append_message_to_db(contact_id, 'assistant', f"Chamando função: {call_name}({call_args})")
                 resultado_json_str = handle_tool_call(call_name, call_args, contact_id)
 
+                # SE CAPTUROU NOME: Reinicia o processo. 
                 if call_name == "fn_capturar_nome":
                     rd = json.loads(resultado_json_str)
                     nome_salvo = rd.get("nome_salvo") or rd.get("nome_extraido")
                     if nome_salvo:
                         return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_salvo, retry_depth=retry_depth, is_recursion=True)
 
+                # Intervenção humana imediata
                 try:
                     res_data = json.loads(resultado_json_str)
                     if res_data.get("tag_especial") == "[HUMAN_INTERVENTION]":
                         msg_intervencao = f"[HUMAN_INTERVENTION] Motivo: {res_data.get('motivo', 'Solicitado.')}"
-                        
-                        # Salva antes de retornar (com os tokens acumulados até aqui)
-                        save_conversation_to_db(contact_id, sender_name, known_customer_name, 
-                                              turn_cached, turn_fresh, turn_output, 
-                                              ultima_msg_gerada=msg_intervencao)
+                        save_conversation_to_db(contact_id, sender_name, known_customer_name, turn_input, turn_output, ultima_msg_gerada=msg_intervencao)
                         return msg_intervencao
                 except: pass
 
+                # Envia o resultado da ferramenta de volta pra IA
                 resposta_ia = chat_session.send_message(
                     [genai.protos.FunctionResponse(name=call_name, response={"resultado": resultado_json_str})]
                 )
 
+                # --- CORREÇÃO DE SEGURANÇA ---
+                # 1. Extrai o texto sem crashar (retorna "" se for função)
                 texto_seguro = safe_get_text(resposta_ia)
+
+                # 2. Verifica se a IA decidiu chamar OUTRA função em sequência (Chaining)
                 tem_nova_funcao = False
                 try:
                     if resposta_ia.candidates and resposta_ia.candidates[0].content.parts[0].function_call.name:
                         tem_nova_funcao = True
-                except: pass
+                except:
+                    pass
 
+                # 3. Lógica Anti-Silêncio: Só força a fala se não tem texto E NÃO tem nova função
                 if not texto_seguro and not tem_nova_funcao:
                     print("⚠️ [SISTEMA ANTI-SILÊNCIO] O modelo Flash oscilou. Reenviando prompt de comando...")
+                    # Forçamos a IA a falar com um "System Prompt" injetado
                     resposta_ia = chat_session.send_message(
                         "SISTEMA: O resultado da ferramenta foi enviado acima. AGORA ANALISE ESSE RESULTADO E RESPONDA AO USUÁRIO FINAL."
                     )
 
-                # ACUMULA TOKENS DO TURNO DE FERRAMENTAS
-                c_in, f_in, out = extrair_tokens_da_resposta(resposta_ia)
-                turn_cached += c_in
-                turn_fresh += f_in
-                turn_output += out
+                ti, to = extrair_tokens_da_resposta(resposta_ia)
+                turn_input += ti
+                turn_output += to
 
-            # --- SAIU DO LOOP (TRATAMENTO FINAL) ---
+                # O LOOP CONTINUA AQUI! Se tiver nova função, ele sobe. Se for texto, ele cai no 'break' lá em cima.
+
+            # --- SAIU DO LOOP (AGORA SIM TRATAMOS O TEXTO FINAL) ---
+            # Observe que a indentação voltou para trás (fora do while)
             
             ai_reply_text = safe_get_text(resposta_ia)
             
+            # Limpador de alucinação
             offending_terms = ["print(", "fn_", "default_api", "function_call", "api."]
             if any(term in ai_reply_text for term in offending_terms):
                 print(f"🛡️ BLOQUEIO DE CÓDIGO ATIVADO para {log_display}: {ai_reply_text}")
@@ -2953,9 +2869,11 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 linhas_limpas = [l for l in linhas if not any(term in l for term in offending_terms)]
                 ai_reply_text = "\n".join(linhas_limpas).strip()
                 
+                # Se a limpeza apagou tudo, gera um fallback humano amigável
                 if not ai_reply_text:
                     ai_reply_text = "Certinho! Pode me passar seu CPF para eu validar aqui?"
 
+            # --- INTERCEPTOR DE NOME (BACKUP FINAL) ---
             if "fn_capturar_nome" in ai_reply_text:
                 match = re.search(r"nome_extraido=['\"]([^'\"]+)['\"]", ai_reply_text)
                 if match:
@@ -2963,10 +2881,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                     handle_tool_call("fn_capturar_nome", {"nome_extraido": nome_f}, contact_id)
                     return gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_customer_name=nome_f,  is_recursion=True)
 
-            # SALVA COM A CONTABILIDADE DETALHADA
-            save_conversation_to_db(contact_id, sender_name, known_customer_name, 
-                                  turn_cached, turn_fresh, turn_output, 
-                                  ai_reply_text)
+            save_conversation_to_db(contact_id, sender_name, known_customer_name, turn_input, turn_output, ai_reply_text)
             return ai_reply_text
 
         except Exception as e:
@@ -3186,6 +3101,7 @@ processed_messages = set()
 def receive_webhook():
     data = request.json 
 
+
     event_type = data.get('event')
     if event_type and event_type != 'messages.upsert':
         return jsonify({"status": "ignored_event_type"}), 200
@@ -3198,18 +3114,6 @@ def receive_webhook():
         key_info = message_data.get('key', {})
         if not key_info:
             return jsonify({"status": "ignored_no_key"}), 200
-
-        # ================================================================
-        # 🛑 TRAVA DE HISTÓRICO: Ignora mensagens velhas (Sincronização)
-        # ================================================================
-        message_timestamp = message_data.get('messageTimestamp')
-        if message_timestamp:
-            agora = int(time.time())
-            # Se a mensagem foi enviada há mais de 3 minutos (180 segundos), joga fora.
-            if agora - int(message_timestamp) > 180:
-                print("⏳ [Webhook] Ignorando mensagem antiga do histórico de sincronização.")
-                return jsonify({"status": "ignored_old_message"}), 200
-        # ================================================================
         
         # --- CORREÇÃO: Prioridade ao senderPn (Corrige o bug do ID 71...) ---
         sender_number_full = key_info.get('senderPn')
