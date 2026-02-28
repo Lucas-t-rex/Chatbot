@@ -137,15 +137,6 @@ def limpar_cpf(cpf_raw: Optional[str]) -> Optional[str]:
         s = s[:11]
     return s if len(s) == 11 else None
 
-def _calcular_digito(cpf_parcial):
-    """Função auxiliar interna para calcular os dígitos verificadores."""
-    soma = 0
-    peso = len(cpf_parcial) + 1
-    for n in cpf_parcial:
-        soma += int(n) * peso
-        peso -= 1
-    resto = soma % 11
-    return '0' if resto < 2 else str(11 - resto)
 
 def validar_cpf_logica(cpf_input: str):
     """
@@ -2209,7 +2200,11 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                    - "Fica tranquila(o)! Aqui ninguém julga, todo mundo começou do zero. Nosso ambiente é família, sem 'carão'. A gente te dá todo o suporte pra não ficar perdido."
                 5. OBJEÇÃO "SERÁ QUE FUNCIONA?"
                    - "Funciona porque não é mágica, é método. Temos centenas de alunos que chegaram aqui com essa mesma dúvida e hoje tão voando. O melhor jeito de saber é sentindo na pele. O risco é zero, a aula é por nossa conta."
-                    
+                6. OBJEÇÃO DE COMPANHIA ("Minha esposa não deixa", "Queria treinar com meu filho/amigo")
+                   - GATILHO: Use para dar valor nos planos ou se que o cliente citar que tem esposa, marido, filho(a) ou amigo(a).
+                   - AÇÃO MENTAL: Use o plano especial como isca para trazer os dois para a academia. NÃO explique valores por aqui.
+                   - SCRIPT: "Ah, e já que vc falou da sua família/amigo... nós temos um plano especial incrível aqui: vc pode trazer uma pessoa diferente por mês pra treinar de graça com vc! É perfeito pra ter companhia. Vem fazer a aula experimental que eu te explico presencialmente como funciona esse plano certinho, combinado?"
+
             = FLUXO DE ATENDIMENTO (A BÚSSOLA) =
                 OBJETIVO: Agendar a AULA EXPERIMENTAL (sem parecer sua intenção). A conversão financeira é presencial.
                 NOTA: Isto é um guia de raciocínio, não um script rígido. O CONTEXTO do cliente define sua próxima jogada.
@@ -3705,7 +3700,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                 
                 elif should_split:
                     print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}")
-                    paragraphs = [p.strip() for p in re.split(r'(?<=[.!?])\s+', ai_reply) if p.strip()]
+                    paragraphs = [p.strip() for p in re.split(r'(?<=[.!?])\s+|\n+', ai_reply) if p.strip()]
                     
                     if not paragraphs: return
 
