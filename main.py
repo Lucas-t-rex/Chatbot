@@ -2958,48 +2958,41 @@ def remove_emojis(text):
         r'\ufe0f]'                  # Cobre caracteres invisíveis de formatação
         , '', text).strip()
 
-def avaliar_se_e_nome_real(texto):
-    if not texto: return False
-    
-    # Remove emojis (aproveitando sua função existente)
-    texto_limpo = remove_emojis(str(texto)).strip()
-    if not texto_limpo: return False
-
-    # Barrar nomes muito curtos (ex: "A", "Oi") ou textões de status
-    if len(texto_limpo) < 2 or len(texto_limpo) > 20:
-        return False
-
-    # Permite apenas letras e espaços (barra números, traços e pontuações estranhas)
-    if not re.match(r'^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$', texto_limpo):
-        return False
-
-    palavras = texto_limpo.split()
-    
-    # Nomes comuns no WhatsApp costumam ter de 1 a 3 palavras no máximo
-    if len(palavras) > 3:
-        return False
-
-    # Dicionário de palavras muito comuns em status que não são nomes de pessoas
-    palavras_bloqueadas = {
-        "deus", "jesus", "amor", "fé", "vida", "paz", "gratidão", "blessed",
-        "de", "do", "da", "amém", "familia", "vendas", "loja", "suporte",
-        "cliente", "admin", "atendimento", "mãe", "pai", "filho", "filha",
-        "amo", "minha", "meu", "senhor", "deusa", "rei", "rainha", "luz"
-    }
-
-    for p in palavras:
-        if p.lower() in palavras_bloqueadas:
-            return False
-
-    return True
-
-def extrair_primeiro_nome(nome_completo):
-    texto_limpo = remove_emojis(str(nome_completo)).strip()
-    palavras = texto_limpo.split()
-    if palavras:
-        return palavras[0].capitalize()
-    return None
+def verificar_nome_com_ia(push_name):
+    """Agente de IA exclusivo para auditar o push_name do WhatsApp."""
+    if not push_name or push_name.lower() in ['cliente', 'none', 'null', 'unknown']:
+        return None
         
+    # Filtro básico para não gastar token com lixo óbvio (ex: "a", ou textão)
+    texto_limpo = remove_emojis(str(push_name)).strip()
+    if len(texto_limpo) < 2 or len(texto_limpo) > 40:
+        return None
+
+    prompt_verificador = f"""
+    Você é um auditor de dados. Analise o nome de perfil do WhatsApp do usuário: "{texto_limpo}"
+    
+    Sua tarefa é verificar se isso é um nome próprio real de uma pessoa ou um apelido muito claro (ex: "Dani", "Duda", "Gael", "Jão", "Fer", "Nanda", "Vava", "Gabi", "Lu", "Malu", "Guto", "Isa", "Bela", "Ale". ).
+    Se for uma frase de efeito, status, nome de empresa, time ou religião (ex: "vida loka", "Deus e mais", "gavioes da fiel", "suporte", "vendas", "Is the king", "sonho" , "lord". ), retorne 'valido': false.
+    
+    Responda APENAS em JSON:
+    {{
+        "valido": true ou false,
+        "nome_limpo": "Apenas o primeiro nome com a primeira letra maiúscula (ou null se for invalido)"
+    }}
+    """
+    try:
+        # Usamos o modelo limpo, sem ferramentas, e forçamos a saída em JSON
+        modelo_validador = genai.GenerativeModel(MODEL_NAME, generation_config={"response_mime_type": "application/json"})
+        resposta = modelo_validador.generate_content(prompt_verificador)
+        resultado = json.loads(resposta.text)
+        
+        if resultado.get("valido") and resultado.get("nome_limpo"):
+            return resultado.get("nome_limpo")
+        return None
+    except Exception as e:
+        print(f"⚠️ Erro no agente verificador de nome: {e}")
+        return None
+
 def send_whatsapp_message(number, text_message, delay_ms=1200): # <--- NOVO PARÂMETRO AQUI
     INSTANCE_NAME = "chatbot"
     clean_number = number.split('@')[0]
@@ -3615,26 +3608,28 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
             return 
 
-# Pega o nome para passar pra IA
+        # Pega o nome para passar pra IA
         known_customer_name = convo_status.get('customer_name') if convo_status else None
         current_stage = convo_status.get('name_transition_stage', 0)
 
-        # --- NOVA LÓGICA DE CAPTURA AUTOMÁTICA DO WHATSAPP (PUSHNAME) ---
-        if not known_customer_name and sender_name_from_wpp and sender_name_from_wpp.lower() != 'cliente':
-            if avaliar_se_e_nome_real(sender_name_from_wpp):
-                primeiro_nome = extrair_primeiro_nome(sender_name_from_wpp)
-                if primeiro_nome:
-                    known_customer_name = primeiro_nome
-                    # Atualiza o banco e já pula a fase de captura do prompt_gate
-                    conversation_collection.update_one(
-                        {'_id': clean_number},
-                        {'$set': {
-                            'customer_name': known_customer_name,
-                            'name_transition_stage': 1
-                        }}
-                    )
-                    current_stage = 1
-                    print(f"🪄 [Auto-Name] Nome '{known_customer_name}' capturado automaticamente do perfil: '{sender_name_from_wpp}'")
+        # --- NOVA LÓGICA DE CAPTURA COM AGENTE DE IA (PUSHNAME) ---
+        if not known_customer_name and current_stage == 0 and sender_name_from_wpp:
+            nome_aprovado_ia = verificar_nome_com_ia(sender_name_from_wpp)
+            
+            if nome_aprovado_ia:
+                known_customer_name = nome_aprovado_ia
+                # Atualiza o banco e já pula a fase de perguntar o nome (gatekeeper)
+                conversation_collection.update_one(
+                    {'_id': clean_number},
+                    {'$set': {
+                        'customer_name': known_customer_name,
+                        'name_transition_stage': 1
+                    }}
+                )
+                current_stage = 1
+                print(f"🪄 [Auto-Name IA] Agente aprovou o nome: '{known_customer_name}' (Original: {sender_name_from_wpp})")
+            else:
+                print(f"🛑 [Auto-Name IA] Agente rejeitou o push_name: '{sender_name_from_wpp}'. O bot vai usar o prompt_gate para perguntar o nome.")
         # ---------------------------------------------------------------
 
         if known_customer_name and current_stage == 0:
@@ -3643,7 +3638,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                 {'$set': {'name_transition_stage': 1}}
             )
             print(f"🔒 [ESTÁGIO] Cliente {clean_number} respondeu após capturar nome. Evoluindo para Estágio 1 (Manutenção).")
-        
+
         log_info(f"[DEBUG RASTREIO | PONTO 2] Conteúdo final para IA (Cliente {clean_number}): '{user_message_content}'")
 
         # Chama a IA
