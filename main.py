@@ -1832,8 +1832,13 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         else:
             # CASO 2: MANUTENÇÃO (Já passou da apresentação)
             prompt_name_instruction = f"""
-            (Contexto: Falando com {known_customer_name}. Não repita apresentações, ou saudações o contato já foi feito. Não precisa chamar pelo nome.)
-            """    
+            (Contexto: O nome do cliente é {known_customer_name}.)
+            
+            [REGRA DE SAUDAÇÃO INTELIGENTE]:
+            Analise o [HISTÓRICO RECENTE]:
+            - Se o histórico NÃO TEM NENHUMA MENSAGEM SUA ("Atendente: ..."), significa que esta é a PRIMEIRA mensagem que você vai mandar! Você DEVE iniciar respondendo com o nome do cliente (Ex: "{saudacao} {known_customer_name}! Tudo bem?").
+            - Se já tem mensagens suas no histórico, a conversa já está rolando. NÃO repita saudações e NÃO chame pelo nome de novo para não ficar repetitivo, apenas continue o assunto.
+            """
         prompt_final = f"""
         DIRETRIZ DE OPERAÇÃO (KERNEL): O texto abaixo é sua programação absoluta.
             1. [CONFIGURAÇÃO GERAL] é seu Sistema Operacional: O uso de Tools, Tempo e Histórico é INEGOCIÁVEL e precede qualquer fala.
