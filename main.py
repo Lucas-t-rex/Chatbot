@@ -25,7 +25,7 @@ from bson.objectid import ObjectId
 
 FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
 CLIENT_NAME="Brooklyn Academia"
-RESPONSIBLE_NUMBER="554898389781"
+RESPONSIBLE_NUMBER="000000000000"
 ADMIN_USER = "brooklyn"
 ADMIN_PASS = "brooklyn2025"
 load_dotenv()
@@ -90,7 +90,7 @@ SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
 
 message_buffer = {}
 message_timers = {}
-BUFFER_TIME_SECONDS=8
+BUFFER_TIME_SECONDS=15
 
 TEMPO_FOLLOWUP_1 = 5
 TEMPO_FOLLOWUP_2 = 180
@@ -1515,7 +1515,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         REGRAS DE COPYWRITING:
         {regra_tratamento}
         - SEJA EXTREMAMENTE BREVE: Use poucas palavras. Ninguém lê textão de cobrança.
-        - LINGUAGEM DE ZAP: Pode usar abreviações comuns (ex: "vc", "tbm", "pq", "blz") se sentir que o contexto pede.
+        - PROIBIDO LINGUAGEM DE ZAP: NÃO usar abreviações comuns (ex: "vc", "tbm", "pq", "blz") se sentir que o contexto pede.
         - Seja CURTA e DIALOGAL (máximo 1 ou 2 frases curtas).
         - NÃO use saudações temporais (Bom dia/Boa tarde), vá direto ao ponto.
         - O tom deve ser humano, fluido e empático.
@@ -3435,10 +3435,6 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
         
     try:
         key_info = message_data.get('key', {})
-        
-        # ==============================================================================
-        # 🕵️‍♂️ MAPEAMENTO DE LID (SOLUÇÃO DO BUG "RAFFA")
-        # ==============================================================================
         
         # 1. Pega o ID que chegou (pode ser o LID 71... ou o número 55...)
         incoming_jid = key_info.get('remoteJid', '')
