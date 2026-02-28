@@ -3799,6 +3799,14 @@ def api_login():
     else:
         return jsonify({"erro": "Usuário ou senha incorretos."}), 401
 
+@app.route('/api/servicos', methods=['GET'])
+def api_listar_servicos():
+    """
+    Retorna a lista dinâmica de serviços configurada no MAPA_SERVICOS_DURACAO
+    """
+    # Pega as chaves do mapa e transforma em uma lista
+    lista_servicos = list(MAPA_SERVICOS_DURACAO.keys())
+    return jsonify(lista_servicos), 200
 
 @app.route('/api/meus-agendamentos', methods=['GET'])
 def api_meus_agendamentos():
