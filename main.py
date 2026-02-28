@@ -2957,6 +2957,48 @@ def remove_emojis(text):
         r'\u2700-\u27bf'            # Cobre Dingbats (AQUI MORA O ✅, o ❤, a ✂️)
         r'\ufe0f]'                  # Cobre caracteres invisíveis de formatação
         , '', text).strip()
+
+def avaliar_se_e_nome_real(texto):
+    if not texto: return False
+    
+    # Remove emojis (aproveitando sua função existente)
+    texto_limpo = remove_emojis(str(texto)).strip()
+    if not texto_limpo: return False
+
+    # Barrar nomes muito curtos (ex: "A", "Oi") ou textões de status
+    if len(texto_limpo) < 2 or len(texto_limpo) > 20:
+        return False
+
+    # Permite apenas letras e espaços (barra números, traços e pontuações estranhas)
+    if not re.match(r'^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$', texto_limpo):
+        return False
+
+    palavras = texto_limpo.split()
+    
+    # Nomes comuns no WhatsApp costumam ter de 1 a 3 palavras no máximo
+    if len(palavras) > 3:
+        return False
+
+    # Dicionário de palavras muito comuns em status que não são nomes de pessoas
+    palavras_bloqueadas = {
+        "deus", "jesus", "amor", "fé", "vida", "paz", "gratidão", "blessed",
+        "de", "do", "da", "amém", "familia", "vendas", "loja", "suporte",
+        "cliente", "admin", "atendimento", "mãe", "pai", "filho", "filha",
+        "amo", "minha", "meu", "senhor", "deusa", "rei", "rainha", "luz"
+    }
+
+    for p in palavras:
+        if p.lower() in palavras_bloqueadas:
+            return False
+
+    return True
+
+def extrair_primeiro_nome(nome_completo):
+    texto_limpo = remove_emojis(str(nome_completo)).strip()
+    palavras = texto_limpo.split()
+    if palavras:
+        return palavras[0].capitalize()
+    return None
         
 def send_whatsapp_message(number, text_message, delay_ms=1200): # <--- NOVO PARÂMETRO AQUI
     INSTANCE_NAME = "chatbot"
@@ -3573,11 +3615,28 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
             return 
 
-        # Pega o nome para passar pra IA
+# Pega o nome para passar pra IA
         known_customer_name = convo_status.get('customer_name') if convo_status else None
-
         current_stage = convo_status.get('name_transition_stage', 0)
-        
+
+        # --- NOVA LÓGICA DE CAPTURA AUTOMÁTICA DO WHATSAPP (PUSHNAME) ---
+        if not known_customer_name and sender_name_from_wpp and sender_name_from_wpp.lower() != 'cliente':
+            if avaliar_se_e_nome_real(sender_name_from_wpp):
+                primeiro_nome = extrair_primeiro_nome(sender_name_from_wpp)
+                if primeiro_nome:
+                    known_customer_name = primeiro_nome
+                    # Atualiza o banco e já pula a fase de captura do prompt_gate
+                    conversation_collection.update_one(
+                        {'_id': clean_number},
+                        {'$set': {
+                            'customer_name': known_customer_name,
+                            'name_transition_stage': 1
+                        }}
+                    )
+                    current_stage = 1
+                    print(f"🪄 [Auto-Name] Nome '{known_customer_name}' capturado automaticamente do perfil: '{sender_name_from_wpp}'")
+        # ---------------------------------------------------------------
+
         if known_customer_name and current_stage == 0:
             conversation_collection.update_one(
                 {'_id': clean_number},
