@@ -4031,6 +4031,54 @@ def api_gerenciar_folga():
 
     return jsonify({"erro": "Ação inválida"}), 400
 
+@app.route('/api/conversas', methods=['GET'])
+def api_listar_conversas():
+    if conversation_collection is None:
+        return jsonify({"erro": "Banco de conversas offline"}), 500
+
+    # Pegando os filtros da URL (Status e Data)
+    status_filter = request.args.get('status')
+    date_filter = request.args.get('data')
+
+    query = {"_id": {"$ne": "BOT_STATUS"}}
+
+    # Filtro de status
+    if status_filter and status_filter != 'todos':
+        query['conversation_status'] = status_filter
+
+    # Filtro de data
+    if date_filter:
+        try:
+            dt = datetime.strptime(date_filter, "%Y-%m-%d")
+            # Busca desde 00:00 até 23:59 do dia escolhido
+            query['last_interaction'] = {
+                "$gte": dt,
+                "$lt": dt + timedelta(days=1)
+            }
+        except:
+            pass
+
+    try:
+        # Busca ordenando da mais recente para a mais antiga
+        resultados = list(conversation_collection.find(query).sort("last_interaction", -1))
+        
+        conversas = []
+        for r in resultados:
+            last_int = r.get("last_interaction")
+            dt_str = last_int.isoformat() if isinstance(last_int, datetime) else ""
+
+            conversas.append({
+                "telefone": str(r.get("_id")),
+                "nome": r.get("customer_name") or r.get("sender_name") or "Sem Nome",
+                "status": r.get("conversation_status", "andamento"),
+                "data_contato": dt_str,
+                "perfil": r.get("client_profile", {})
+            })
+            
+        return jsonify(conversas), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))
