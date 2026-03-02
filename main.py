@@ -3131,6 +3131,20 @@ app = Flask(__name__)
 CORS(app) 
 processed_messages = set() 
 
+def is_numero_travado(numero):
+    """Verifica no MongoDB se o número está na lista de bloqueados para o bot."""
+    if conversation_collection is None:
+        return False
+    try:
+        # Busca o documento específico criado para as travas
+        doc = conversation_collection.find_one({'_id': 'numeros_travados'})
+        if doc and 'lista' in doc:
+            return str(numero) in doc['lista']
+        return False
+    except Exception as e:
+        print(f"Erro ao verificar numeros_travados: {e}")
+        return False
+
 @app.route('/webhook', methods=['POST'])
 def receive_webhook():
     data = request.json 
@@ -3170,6 +3184,11 @@ def receive_webhook():
             clean_number = sender_number_full.split('@')[0]
             if clean_number != RESPONSIBLE_NUMBER:
                  return jsonify({"status": "ignored_from_me"}), 200
+        
+        clean_number_check = sender_number_full.split('@')[0]
+        if is_numero_travado(clean_number_check):
+            print(f"🛑 [Atendimento Humano] Bot silenciado para o número {clean_number_check}.")
+            return jsonify({"status": "ignored_numero_travado"}), 200
 
         message_id = key_info.get('id')
         if not message_id:
