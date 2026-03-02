@@ -3131,16 +3131,28 @@ app = Flask(__name__)
 CORS(app) 
 processed_messages = set() 
 
-def is_numero_travado(numero):
-    """Verifica no MongoDB se o número está na lista de bloqueados para o bot."""
-    if conversation_collection is None:
+def is_numero_travado(numero_webhook):
+    if conversation_collection is None: 
         return False
+    
     try:
-        # Busca o documento específico criado para as travas
+        # 1. Limpa tudo que não for número
+        num_str = re.sub(r'\D', '', str(numero_webhook))
+        
+        # 2. Deixa exatamente com 12 dígitos: 55 + DDD + 8 números
+        # Se chegar 55 11 9 12345678 (13 dígitos), ele corta o 9.
+        if len(num_str) == 13 and num_str.startswith('55'):
+            num_formatado = num_str[:4] + num_str[5:] 
+        else:
+            num_formatado = num_str # Mantém como está se já vier com 12 ou outro tamanho
+            
+        # 3. Busca super rápida no MongoDB
         doc = conversation_collection.find_one({'_id': 'numeros_travados'})
         if doc and 'lista' in doc:
-            return str(numero) in doc['lista']
+            return num_formatado in doc['lista']
+            
         return False
+        
     except Exception as e:
         print(f"Erro ao verificar numeros_travados: {e}")
         return False
@@ -3187,7 +3199,9 @@ def receive_webhook():
         
         clean_number_check = sender_number_full.split('@')[0]
         if is_numero_travado(clean_number_check):
-            print(f"🛑 [Atendimento Humano] Bot silenciado para o número {clean_number_check}.")
+            # Se achou na lista, ele encerra a requisição aqui mesmo com o 'return'.
+            # O código para, a IA nem é acionada e nenhum token é gasto!
+            print(f"🛑 [Atendimento Humano] Mensagem ignorada do número: {clean_number_check}")
             return jsonify({"status": "ignored_numero_travado"}), 200
 
         message_id = key_info.get('id')
