@@ -1044,6 +1044,7 @@ def analisar_status_da_conversa(history):
                 - Você entendeu que nos ganhamos a venda ou o agendamento.
                 - O agendamento foi CONFIRMADO (o bot disse "agendado", "marcado", "te espero").
                 - O Cliente confirmou que vai comparecer.
+                - Cliente disse que vai na academia ou que esta a caminho.
                 - Se o cliente disse que queria falar com financeiro e foi enviado este numero pra ele entrar em contato: 99121-6103
             
             2. FRACASSO (Perda):
@@ -1357,12 +1358,12 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
 
         if status_alvo == "sucesso":
             instrucao = (
-                f"""O cliente ({inicio_fala}) realizou um agendamento a BROKLIN ACADEMIA recentemente ou ja é aluno.
-                OBJETIVO: Fidelização, Reputação (Google) e Engajamento (Instagram).
+                f"""O cliente ({inicio_fala}) teve uma converssa positiva recentemente ou ja é aluno ou disse que veio ou ia na academia.
+                OBJETIVO:Agradeça o contato, Fidelização, Reputação (Google) e Engajamento (Instagram).
 
                 SUA MISSÃO É ESCREVER UMA MENSAGEM VISUALMENTE ORGANIZADA:
 
-                1. Check-in do Treino: Comece agradecendo o atendimento. (Seja parceira!).
+                1. Agradeça com humor o atendimento. (Seja parceira!).
                 
                 2. O Pedido (Google): Peça uma avaliação rápida, dizendo que ajuda muito a academia a crescer.
                    -> Coloque este link EXATO logo abaixo: https://share.google/wb1tABFEPXQIc0aMy
@@ -1374,6 +1375,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                 - Pule uma linha entre o texto e os links.
                 - Não deixe tudo embolado num parágrafo só.
                 - Seja breve e motivadora.
+                - Poucas palavras e com educação. 
                 """
             )
         
@@ -1381,7 +1383,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
             instrucao = (
                 f"""O cliente ({inicio_fala}) não fechou o agendamento ontem.
                 
-                MISSÃO: Tente identificar a OBJEÇÃO oculta no histórico abaixo e quebre-a com HUMOR. E peça Reputação (Google) e Engajamento (Instagram).
+                MISSÃO: Tente identificar a OBJEÇÃO oculta no histórico abaixo e quebre-a com HUMOR e seja engraçado. E peça Engajamento (Instagram).
                 HISTÓRICO PARA ANÁLISE:
                 {historico_texto}
 
@@ -1406,9 +1408,6 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
                 FECHAMENTO OBRIGATÓRIO (Para todos):
                 - Reafirme que a Broklin Academia continua de portas abertas pro momento que ele decidir. "Quando quiser, é só chamar!"
 
-                O Pedido (Google): Peça uma avaliação rápida, dizendo que ajuda muito a academia a crescer.
-                   -> Coloque este link EXATO logo abaixo: https://share.google/wb1tABFEPXQIc0aMy
-                
                 O Convite (Instagram): Convide para acompanhar as novidades e dicas no nosso Insta.
                    -> Coloque este link EXATO logo abaixo: https://www.instagram.com/brooklyn_academia/
 
@@ -4036,9 +4035,10 @@ def api_listar_conversas():
     if conversation_collection is None:
         return jsonify({"erro": "Banco de conversas offline"}), 500
 
-    # Pegando os filtros da URL (Status e Data)
+    # Pegando os filtros da URL
     status_filter = request.args.get('status')
-    date_filter = request.args.get('data')
+    data_inicio = request.args.get('data_inicio')
+    data_fim = request.args.get('data_fim')
 
     query = {"_id": {"$ne": "BOT_STATUS"}}
 
@@ -4046,14 +4046,14 @@ def api_listar_conversas():
     if status_filter and status_filter != 'todos':
         query['conversation_status'] = status_filter
 
-    # Filtro de data
-    if date_filter:
+    # Filtro de data (Agora é um PERÍODO)
+    if data_inicio and data_fim:
         try:
-            dt = datetime.strptime(date_filter, "%Y-%m-%d")
-            # Busca desde 00:00 até 23:59 do dia escolhido
+            dt_ini = datetime.strptime(data_inicio, "%Y-%m-%d")
+            dt_fim = datetime.strptime(data_fim, "%Y-%m-%d")
             query['last_interaction'] = {
-                "$gte": dt,
-                "$lt": dt + timedelta(days=1)
+                "$gte": dt_ini,
+                "$lt": dt_fim + timedelta(days=1) # Pega até às 23:59 do último dia
             }
         except:
             pass
@@ -4078,7 +4078,7 @@ def api_listar_conversas():
         return jsonify(conversas), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
-
+    
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))
