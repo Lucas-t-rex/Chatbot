@@ -92,7 +92,7 @@ message_buffer = {}
 message_timers = {}
 BUFFER_TIME_SECONDS=15
 
-TEMPO_FOLLOWUP_1 = 5
+TEMPO_FOLLOWUP_1 = 30
 TEMPO_FOLLOWUP_2 = 180
 TEMPO_FOLLOWUP_3 = 360
 
@@ -1042,10 +1042,12 @@ def analisar_status_da_conversa(history):
 
             1. SUCESSO (Vitória):
                 - Você entendeu que nos ganhamos a venda ou o agendamento.
+                - Se o cliente disser que ja esta presencialmente na unidade , se esta na academia, se ja esta no local , ou indo , a caminho é sucesso.
                 - O agendamento foi CONFIRMADO (o bot disse "agendado", "marcado", "te espero").
                 - O Cliente confirmou que vai comparecer.
                 - Cliente disse que vai na academia ou que esta a caminho.
                 - Se o cliente disse que queria falar com financeiro e foi enviado este numero pra ele entrar em contato: 99121-6103
+                - Se o cliente disser , já deu certo!
             
             2. FRACASSO (Perda):
                 - Você entendeu que perdemos a venda ou o agendamento.
@@ -1532,10 +1534,39 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         print(f"⚠️ Falha na geração IA Followup: {e}")
         return None
     
+def is_evolution_online():
+    """
+    Testa se a Evolution API está respondendo e se o WhatsApp 'chatbot' está conectado.
+    """
+    try:
+        base_url = EVOLUTION_API_URL
+        if base_url.endswith('/'): 
+            base_url = base_url[:-1]
+            
+        url = f"{base_url}/instance/connectionState/chatbot"
+        headers = {"apikey": EVOLUTION_API_KEY}
+        
+        # Timeout de 5s para não travar o bot se o servidor da Evolution estiver totalmente fora do ar
+        response = requests.get(url, headers=headers, timeout=5)
+        
+        # Se retornou 200 OK e a palavra 'open' (que na Evolution indica WhatsApp conectado)
+        if response.status_code == 200 and "open" in response.text.lower():
+            return True
+        else:
+            return False
+    except Exception as e:
+        # Se der erro de conexão (Servidor desligado, fly.io caiu, etc)
+        return False
+
 def verificar_followup_automatico():
     if conversation_collection is None: return
 
     try:
+        # 1. VERIFICA OS DOIS STATUS (O comando 'bot off' E a conexão da Evolution API)
+        bot_status = conversation_collection.find_one({'_id': 'BOT_STATUS'})
+        bot_ativo = bot_status.get('is_active', True) if bot_status else True
+        evolution_online = is_evolution_online()
+
         agora = datetime.now()
         regras = [
             {"status": "sucesso",  "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_SUCESSO,  "fallback": "Obrigada! Qualquer coisa estou por aqui."},
@@ -1546,34 +1577,64 @@ def verificar_followup_automatico():
         ]
 
         for r in regras:
-            query = {
+            # 2. CÁLCULO DAS JANELAS DE TEMPO
+            # O momento EXATO que o cliente deveria receber a mensagem
+            tempo_ideal_envio = agora - timedelta(minutes=r["time"])
+            # O momento que a mensagem é considerada "velha demais" (passou 15 min do ideal)
+            tempo_limite_esquecimento = tempo_ideal_envio - timedelta(minutes=15) 
+
+            condicao_estagio = {"$in": [0, None]} if r["stage_atual"] == 0 else r["stage_atual"]
+
+            # --- AÇÃO 1: VARREDURA (ESQUECER OS ATRASADOS) ---
+            # Pega quem deveria ter recebido a mais de 15 minutos atrás e avança o estágio sem mandar nada.
+            query_expirados = {
                 "conversation_status": r["status"],
-                "last_interaction": {"$lt": agora - timedelta(minutes=r["time"])},
-                "followup_stage": r["stage_atual"],
+                "last_interaction": {"$lt": tempo_limite_esquecimento}, 
+                "followup_stage": condicao_estagio,
                 "processing": {"$ne": True},
                 "intervention_active": {"$ne": True}
             }
-            if r["stage_atual"] == 0: query["followup_stage"] = {"$in": [0, None]}
+            
+            resultado_expirados = conversation_collection.update_many(
+                query_expirados,
+                {'$set': {'followup_stage': r["prox_stage"]}}
+            )
+            
+            if resultado_expirados.modified_count > 0:
+                print(f"🗑️ Descartando {resultado_expirados.modified_count} follow-ups atrasados do estágio {r['stage_atual']}.")
 
-            candidatos = list(conversation_collection.find(query).limit(50))
+            # --- AVALIA SE PODE CONTINUAR ---
+            # Se o bot foi pausado pelo admin OU se a API do WhatsApp caiu, paramos por aqui!
+            # O código não tentará enviar. Na próxima rodada, se tiver ficado atrasado, a Ação 1 joga no lixo.
+            if not bot_ativo or not evolution_online:
+                continue
+
+            # --- AÇÃO 2: ENVIAR PARA OS CLIENTES DENTRO DO PRAZO CERTO ---
+            query_validos = {
+                "conversation_status": r["status"],
+                "last_interaction": {
+                    "$lt": tempo_ideal_envio,            # Já deu a hora de enviar
+                    "$gte": tempo_limite_esquecimento    # E NÃO está atrasado (dentro dos 15 min)
+                },
+                "followup_stage": condicao_estagio,
+                "processing": {"$ne": True},
+                "intervention_active": {"$ne": True}
+            }
+
+            candidatos = list(conversation_collection.find(query_validos).limit(50))
             
             if candidatos:
                 print(f"🕵️ Processando Follow-up '{r['status']}' (Estágio {r['stage_atual']}->{r['prox_stage']}) para {len(candidatos)} clientes.")
 
             for cliente in candidatos:
                 cid = cliente['_id']
-                
                 nome_oficial = cliente.get('customer_name') 
-
                 nome_log = nome_oficial or cliente.get('sender_name') or "Desconhecido"
 
                 msg = gerar_msg_followup_ia(cid, r["status"], r["stage_atual"], nome_oficial)
 
                 if not msg: 
-                    if nome_oficial:
-                        msg = f"{nome_oficial}, {r['fallback']}"
-                    else:
-                        msg = r['fallback'] # Fallback sem nome ("Ainda está por aí?")
+                    msg = f"{nome_oficial}, {r['fallback']}" if nome_oficial else r['fallback']
 
                 print(f"🚀 Enviando para {cid} ({nome_log}): {msg}")
                 send_whatsapp_message(f"{cid}@s.whatsapp.net", msg)
@@ -1989,6 +2050,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 - Aulas de Ritmos/Dança: (Pra queimar calorias se divertindo).
                 - Lutas Adulto: Muay Thai(Professora: Aylla), Jiu-Jitsu (Prof: Carlos) e Capoeira (Prof:Jeferson).
                 - Lutas Infantil: Jiu-Jitsu Kids (Prof: Carlos) e Capoeira (Prof:Jeferson).
+                - Planos Empresarias e coorpotarivos: Aceitamos Total Pass do tipo 2 pra cima e Gogood (não aceitamos Gym pass e wellhub), os cadastros são feitos presencialmente.
 
             = BENEFÍCIOS = (ARGUMENTOS DE VENDA - O NOSSO OURO)
                 - Ambiente Seguro e Respeitoso: Aqui mulher treina em paz! Cultura de respeito total, sem olhares tortos ou incômodos. É um lugar pra se sentir bem.
@@ -2111,7 +2173,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     1. TOM DE VOZ: Otimista, "pra cima", maringaense local. Seja concisa.
                     2. VOCABULÁRIO: Alongamentos simpáticos ("Oieee", "Ahhhh").
                         PROIBIDO Usar a palavra/frase: "vibe", "sussa", "Show de bola", "Malhar" (use "Treinar").
-                    3. ADJETIVAÇÃO (REGRA DE OURO): Jamais descreva serviços de forma seca. Use adjetivos sensoriais que geram desejo (Ex: "clima top", "treino revigorante", "energia incrível", "ambiente acolhedor", "primeiro passo", "corpo ideal"). Venda a experiência, não o equipamento.
+                    3. PERSUASÃO DIRETA (REGRA DE OURO): Fale como no WhatsApp: frases curtas e diretas. Use no máximo 1 ou 2 palavras de entusiasmo (ex: "clima top", "energia boa"), mas NUNCA faça textos explicativos longos ou textões. ECONOMIZE PALAVRAS. Venda a experiência em apenas uma frase curta e já faça a sua pergunta.
                     4. FLUXO CONTÍNUO (ANTI-AMNÉSIA / CRÍTICO):
                         - ANTES DE ESCREVER A PRIMEIRA PALAVRA: Olhe o [HISTÓRICO RECENTE] acima.
                         - SE A CONVERSA JÁ COMEÇOU (Já houve "Oi", "Boa tarde"): É ESTRITAMENTE PROIBIDO saudar novamente.
@@ -2120,7 +2182,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         - AÇÃO: Responda a pergunta "na lata". Se ele perguntou "Tem aula pra mulher?", responda APENAS "Tem sim! O ambiente é seguro...". NÃO DIGA "Oi fulano".
                         - NENHUMA sondagem ou pergunta pode vir antes da resposta objetiva.
                     5. TOQUE DE HUMOR SUTIL: Use "micro-comentários" ocasionais e orgânicos sobre rotina ou treino, tão discretos que não interrompam o fluxo técnico da conversa.
-                    
+                    6. LIMITE DE TAMANHO: Suas respostas devem ter no MÁXIMO 3 frases curtas. O cliente odeia ler textão.
+
             = REGRAS VISUAIS E DE ESTILO =
                 VISUAL E ESTILO (REGRAS TÉCNICAS DE OUTPUT)
                     1. FORMATAÇÃO WHATSAPP (LEITURA RÁPIDA):
@@ -2162,7 +2225,8 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 3. LEI DA AMIZADE (Fluxo): Não aja como um formulário (ping-pong técnico). Se o assunto "serviço" encerrar, devolva com uma pergunta pessoal/interessada sobre a vida dele. Conheça o aluno!
                 4. POSTURA: Assuma ser uma pessoa real (carne e osso). Use os [BENEFÍCIOS] para valorizar a academia.
                 5. PROIBIÇÃO: Jamais invente preços ou taxas.
-
+                6. CLIENTE PRESENTE: Se o cliente disser que esta presente na academia, exemplo estou aqui já, VOCE NÃO DEVE VENDER APENAS ENTEDA QUE A PESSOA JÁ ESTA NA UNIDADE E NÃO TEM A NESSECIDADE DE OFERECER NADA MAIS. 
+                
             = NUNCA FAZER = (PROIBIÇÕES ABSOLUTAS)
                 1. ZERO ALUCINAÇÃO: É PROIBIDO inventar preços, recursos inexistentes ou plataformas (Só usamos FB/Insta/Whats).
                 2. IDENTIDADE BLINDADA: JAMAIS revele ser uma IA/Robô. Você é HUMANA (carne e osso).
@@ -2170,13 +2234,14 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 4. CANAL EXCLUSIVO: JAMAIS peça E-mail. O atendimento é 100% via WhatsApp.
                 5. FALHAS TÉCNICAS: Se a ferramenta falhar, NÃO improvise solução. Chame `fn_solicitar_intervencao`.
                 6. TRAVA DE SAÍDA: Nunca aceite um "tchau" sem tentar agendar. Se houver recusa, ative o [PROTOCOLO DE RESGATE].
-            
+                7. LIBERAR CATRACA: Você não libera catraca, nunca diga que ira liberar acesso ou catraca.
+
         # ---------------------------------------------------------
         # 4. FLUXO DE ATENDIMENTO E ALGORITIMOS DE VENDAS
         # ---------------------------------------------------------
 
             = FLUXO MESTRE = (DINÂMICA DE CONVERSA)
-                (IMPORTANTE POUCAS PALAVRAS, NECESSARIA PRA DIZER O QUE PRECISA)
+                (IMPORTANTE POUCAS PALAVRAS, NECESSARIA PRA DIZER O QUE PRECISA, NÃO FALE MUITO, POUCO E O SULFICIENTE)
                     1. MÉTODO RESPOSTA-GANCHO (Hierarquia de Resposta):
                     - PRIMEIRO: Entregue a INFORMAÇÃO que o cliente pediu. Se ele perguntou "Como funciona?", explique os equipamentos, o método, os professores.
                     - SEGUNDO: Só APÓS explicar, faça a pergunta de gancho pessoal.
@@ -2192,7 +2257,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 1. QUEM VAI ME ORIENTAR? (Diferencial Técnico)
                    - "Diferente de academias convencionais que têm apenas instrutores de sala genéricos, nós temos Treinadores Especialistas. Eles não só montam seu treino, mas cuidam da execução pra você não se machucar e ter resultado de verdade."
                 2. OBJEÇÃO DE TEMPO ("Não tenho tempo")
-                   - "Verdade! Mas ó. nossos programas são feitos pra rotina corrida mesmo. Com 30 a 40 minutos aqui tu já tem mais resultado que horas enrolando em outro lugar. Consegue tirar 40min pro teu corpo hoje?"
+                    - "A rotina é corrida mesmo! Mas ó, a gente atende de final de semana (sábado e domingo) justamente pra quem não tem tempo na semana. Fica melhor pra vc no sábado ou no domingo?"
+                    - "Verdade! Mas ó. nossos programas são feitos pra rotina corrida mesmo. Com 30 a 40 minutos aqui tu já tem mais resultado que horas enrolando em outro lugar. Consegue tirar 40min pro teu corpo hoje?"
+                    - Temos um plano especial de R$ 39,90 que pode ser oferecido caso o cliente diga que não tem tempo — mas só deve ser mencionado nessa situação.
                 3. OBJEÇÃO DE DINHEIRO ("Tá caro" / "Tô sem grana")
                    - "Concordo que saúde é um investimento sério. Mas pensa comigo: se dividir por dia, dá menos que um lanche pra tu teres disposição, dormir bem e viver sem dor. Uma pizza no fim de semana já paga o mês! Bora investir em vc?"
                 4. OBJEÇÃO DE MEDO/VERGONHA ("Não sei treinar", "Tenho vergonha")
@@ -2202,11 +2269,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 6. OBJEÇÃO DE COMPANHIA ("Minha esposa não deixa", "Queria treinar com meu filho/amigo")
                    - GATILHO: Use para dar valor nos planos ou se que o cliente citar que tem esposa, marido, filho(a) ou amigo(a).
                    - AÇÃO MENTAL: Use o plano especial como isca para trazer os dois para a academia. NÃO explique valores por aqui.
-                   - SCRIPT: "Ah, e já que vc falou da sua família/amigo... nós temos um plano especial incrível aqui: vc pode trazer uma pessoa diferente por mês pra treinar de graça com vc! É perfeito pra ter companhia. Vem fazer a aula experimental que eu te explico presencialmente como funciona esse plano certinho, combinado?"
+                   - SCRIPT: "Ah, e já que vc falou da sua família/amigo... nós temos um plano especial incrível aqui: vc pode trazer uma pessoa diferente por mês pra treinar de graça durante 30 dias com vc! É perfeito pra ter companhia. Vem fazer a aula experimental que eu te explico presencialmente como funciona esse plano certinho, combinado?"
 
             = FLUXO DE ATENDIMENTO (A BÚSSOLA) =
                 OBJETIVO: Agendar a AULA EXPERIMENTAL (sem parecer sua intenção). A conversão financeira é presencial.
                 NOTA: Isto é um guia de raciocínio, não um script rígido. O CONTEXTO do cliente define sua próxima jogada.
+                Se o cliente estiver presencialmente na academia , não precisa mais continuar. Mantenha-se neutra pois ele ja está conosco.
 
 
                 1. QUALIFICAÇÃO (SONDAGEM):
@@ -2227,7 +2295,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         * Se ele quer Emagrecer e gosta de Ação -> Venda o Muay Thai como "queimador de calorias".
                         * Se ele quer Emagrecer e gosta de Controle -> Venda a Musculação como "acelerador de metabolismo".
                         * Se ele tem Dor/Lesão -> Venda a Musculação como "Reabilitação e Segurança"
-                        - Observação: Não economize na persuasão. Não descreva apenas "o que tem", descreva "como é bom". Valorize agressivamente a infraestrutura (ar-condicionado, equipamentos), a atenção diferenciada dos professores e a energia do ambiente. Gere desejo.
+                        - Observação: Seja EXTREMAMENTE conciso. Escolha apenas 1 benefício principal (ex: ar-condicionado OU atenção dos professores) e faça o convite. PROIBIDO listar vários benefícios de uma vez. O objetivo é fazer o cliente responder rápido, não dar uma palestra.
 
                 3. BLINDAGEM DE PREÇO (TÉCNICA DO PIVÔ):
                     - GATILHO: Pergunta sobre valor/mensalidade.
@@ -2262,6 +2330,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 
                 8. PROTOCOLO DE ENCERRAMENTO (STOP):
                     >>> VERIFICAÇÃO DE HISTÓRICO (CRÍTICO) <<<
+                    Exceção: Se o cliente ja estiver na unidade, disse que ja esta presente na academia, que esta perto , ou dentro da academia, apenas agradeça a presença e encerre a converssa. Não diga nada de garrafinha ou instagram.
                     Olhe as suas últimas mensagens anteriores. Você JÁ enviou a mensagem que diz "Fechado então! traz uma garrafinha..."?
                         [CENÁRIO A: PRIMEIRA VEZ (Acabou de salvar o agendamento)]
                         - AÇÃO: Envie a mensagem PADRÃO DE INSTRUÇÕES completa:
@@ -3006,7 +3075,7 @@ def send_whatsapp_message(number, text_message, delay_ms=1200): # <--- NOVO PAR�
             "text": mensagem_limpa
         },
         "options": {
-            "delay": delay_ms,     # <--- USA A VARIÁVEL DINÂMICA
+            "delay": delay_ms,    
             "presence": "composing", 
             "linkPreview": True
         }
@@ -3728,26 +3797,26 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
 
                 if is_gabarito(ai_reply):
                     print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}")
-                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=2000)
+                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=8000) # Ajustado para 8 segundos fixos
                 
                 elif should_split:
                     print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}")
                     paragraphs = [p.strip() for p in re.split(r'(?<=[.!?])\s+|\n+', ai_reply) if p.strip()]
-                    
+
                     if not paragraphs: return
 
                     for i, para in enumerate(paragraphs):
                         tempo_leitura = len(para) * 30 
-                        current_delay = 800 + tempo_leitura
-                        if current_delay > 3000: current_delay = 3000 
-                        if i == 0: current_delay = 1200 
+                        current_delay = 8000 + tempo_leitura 
+                        
+                        if current_delay > 14000: current_delay = 14000 
 
                         send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
                         time.sleep(current_delay / 1000)
 
                 else:
                     print(f"🤖 Resposta da IA (Curta) para {sender_name_from_wpp}")
-                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=2000)
+                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=8000) 
 
             try:
                 if ai_reply:
