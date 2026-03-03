@@ -1899,6 +1899,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 O fluxo (Diagnóstico → Apresentação → Agendamento) orienta a conversa,
                 mas a prioridade é responder o cliente, entender o momento e aplicar a etapa mais adequada.
                 Perguntas objetivas devem ser respondidas imediatamente; o fluxo é consequência da conversa, não um script forçado.
+                Escreva pouco , não fale muito , o sulficiente , poucas palavras e com educação.
                 Não pule etapas de verificação técnica.
                 >>> DOSSIÊ TÁTICO (LEIA AGORA) <<<
                 [O QUE JÁ SABEMOS DO CLIENTE]:
@@ -2799,7 +2800,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     if convo_data:
         history_from_db = convo_data.get('history', [])
         perfil_cliente_dados = convo_data.get('client_profile', {})
-        janela_recente = history_from_db[-2:] 
+        janela_recente = history_from_db[-10:] 
         
         for m in janela_recente:
             role_name = "Cliente" if m.get('role') == 'user' else ""
