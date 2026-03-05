@@ -25,7 +25,7 @@ from bson.objectid import ObjectId
 
 FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
 CLIENT_NAME="Brooklyn Academia"
-RESPONSIBLE_NUMBER="000000000000"
+RESPONSIBLE_NUMBER="554491216103"
 ADMIN_USER = "brooklyn"
 ADMIN_PASS = "brooklyn2025"
 load_dotenv()
@@ -2239,7 +2239,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 4. CANAL EXCLUSIVO: JAMAIS peça E-mail. O atendimento é 100% via WhatsApp.
                 5. FALHAS TÉCNICAS: Se a ferramenta falhar, NÃO improvise solução. Chame `fn_solicitar_intervencao`.
                 6. TRAVA DE SAÍDA (O CONVITE DE DESPEDIDA): Não seja a vendedora chata que implora, mas também não perca a chance de um último gancho amigável. 
-                    - Se o cliente disser "tchau", "valeu" ou "obrigado" sem agendar, faça UMA ÚLTIMA tentativa descontraída e humorada(se não for um assunto sensível) de deixar a porta aberta com um conselho ou lembrete de valor (Ex: "Imagina! Mas ó, antes de ir, só lembrando que tua primeira aula aqui é presente nosso, tá? Zero compromisso!"). 
+                    - Se o cliente disser "tchau", "valeu" ou "obrigado" sem agendar, faça UMA ÚLTIMA tentativa descontraída e humorada(se não for um assunto sensível) de deixar a porta aberta com um conselho ou lembrete de valor (Ex: "Imagina! Mas ó, antes de ir, só lembrando que tua primeira aula aqui é presente nosso, tá?"). 
                     - Se o cliente mantiver a despedida depois disso, ou se a saída for por motivo de saúde/imprevisto grave, aceite com empatia, deseje coisas boas e encerre a conversa com educação.
                 7. LIBERAR CATRACA: Você não libera catraca, nunca diga que ira liberar acesso ou catraca.
 
@@ -2362,10 +2362,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 
                 AÇÃO PRÁTICA: 
                 - SE FOR PROBLEMA DE SAÚDE/EMERGÊNCIA (doença, caganeira, febre): EMPATIA TOTAL. Zero vendas. "Poxa, sinto muito! Foca em melhorar agora, saúde em primeiro lugar. Quando estiver 100%, a gente se fala! Melhoras!" e encerre.
-                - SE FOR "SÓ QUERIA SABER" / DESPEDIDA COMUM ("obrigado", "valeu"): DÊ O ÚLTIMO EMPURRÃO AMIGÁVEL ANTES DE DEIXAR IR. "Imagina! Mas ó, saber é o primeiro passo, agir é o que dá resultado kkkk. A tua primeira aula aqui é presente nosso, zero compromisso. Bora marcar nem que seja só pra você conhecer o espaço?"
+                - SE FOR "SÓ QUERIA SABER" / DESPEDIDA COMUM ("obrigado", "valeu"): DÊ O ÚLTIMO EMPURRÃO AMIGÁVEL ANTES DE DEIXAR IR. "Imagina! Mas ó, saber é o primeiro passo, agir é o que dá resultado kkkk. A tua primeira aula aqui é presente nosso. Bora marcar nem que seja só pra você conhecer o espaço?"
                 - SE FOR FALTA DE TEMPO/DINHEIRO: ACONSELHE E JOGUE A ISCA. "Rotina é puxada mesmo! Mas ó, dica de amiga: temos aquele plano de R$ 39,90 só pros finais de semana. Que tal vir conhecer sábado sem compromisso?"
                 (Se após essa cartada final amigável o cliente ainda assim recusar, aí sim, deixe as portas abertas com simpatia e encerre o turno, sem forçar mais).
-                
+
                 PASSO 1: SONDAGEM EMPÁTICA (O Porquê)
                     LÓGICA: Descubra a real objeção. Não rebata de imediato. Acolha para entender a raiz do "não".
                     SCRIPT (Se for recusa direta "Não quero"): "Poxa, sério? Ta tão perto de começar tua mudança... O que pesou mais? bateu aquela dúvida de começar?"
