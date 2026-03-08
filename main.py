@@ -1035,7 +1035,7 @@ def analisar_status_da_conversa(history):
     if modelo_ia:
         try:
             prompt_auditoria = f"""
-            SUA MISSÃO:O seu papel é analisar as ultimas mensagens e saber que status esta esta converssa, pois com essa ferramente iremos mandar mensagens de follow up pro cliente.
+            SUA MISSÃO:É analisar as ultimas mensagens e saber que status esta esta converssa, pois com essa ferramente iremos mandar mensagens de follow up pro cliente.
             
             HISTÓRICO RECENTE:
             {historico_texto}
@@ -1043,6 +1043,7 @@ def analisar_status_da_conversa(history):
             1. SUCESSO (Vitória):
                 - O cliente disse que vai comparecer mais tarde, ou vai vir outro dia. 
                 - Você entendeu que nos ganhamos a venda ou o agendamento.
+                - Se foi engano (alguém mandando mensagem que era pra outra pessoa, pode se dizer que é sucesso pra encerrar a converssa.)
                 - Se o cliente disser que ja esta presencialmente na unidade , se esta na academia, se ja esta no local , ou indo , a caminho é sucesso.
                 - O agendamento foi CONFIRMADO (o bot disse "agendado", "marcado", "te espero").
                 - O Cliente confirmou que vai comparecer.
@@ -1361,10 +1362,10 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
 
         if status_alvo == "sucesso":
             instrucao = (
-                f"""O cliente ({inicio_fala}) teve uma converssa positiva recentemente ou ja é aluno ou disse que veio ou ia na academia.
-                OBJETIVO:Agradeça o contato, Fidelização, Reputação (Google) e Engajamento (Instagram).
+                f"""O cliente ({inicio_fala}) teve uma converssa positiva recentemente.
+                OBJETIVO:Pedir avaliação no google, Fidelização, Reputação (Google) e Engajamento (Instagram).
 
-                SUA MISSÃO É ESCREVER UMA MENSAGEM VISUALMENTE ORGANIZADA:
+                SUA MISSÃO É ESCREVER UMA MENSAGEM VISUALMENTE ORGANIZADA E RAPIDA:
 
                 1. Agradeça com humor o atendimento. (Seja parceira!).
                 
@@ -1559,8 +1560,23 @@ def is_evolution_online():
         # Se der erro de conexão (Servidor desligado, fly.io caiu, etc)
         return False
 
+def subtrair_tempo_util(referencia, minutos):
+    """Cronômetro inteligente: subtrai o tempo pausando durante a madrugada (00h às 06h59)."""
+    resultado = referencia
+    while minutos > 0:
+        resultado -= timedelta(minutes=1)
+        # Se a hora não for de madrugada (0 a 6), consumimos 1 minuto útil do cronômetro
+        if not (0 <= resultado.hour < 7):
+            minutos -= 1
+    return resultado
+
 def verificar_followup_automatico():
     if conversation_collection is None: return
+
+    # TRAVA DE DISPARO: Impede que o próprio sistema envie qualquer follow-up de madrugada
+    agora = datetime.now()
+    if 0 <= agora.hour < 7:
+        return
 
     try:
         # 1. VERIFICA OS DOIS STATUS (O comando 'bot off' E a conexão da Evolution API)
@@ -1568,7 +1584,6 @@ def verificar_followup_automatico():
         bot_ativo = bot_status.get('is_active', True) if bot_status else True
         evolution_online = is_evolution_online()
 
-        agora = datetime.now()
         regras = [
             {"status": "sucesso",  "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_SUCESSO,  "fallback": "Obrigada! Qualquer coisa estou por aqui."},
             {"status": "fracasso", "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_FRACASSO, "fallback": "Se mudar de ideia, é só chamar!"},
@@ -1578,11 +1593,11 @@ def verificar_followup_automatico():
         ]
 
         for r in regras:
-            # 2. CÁLCULO DAS JANELAS DE TEMPO
+            # 2. CÁLCULO DAS JANELAS DE TEMPO (USANDO O CRONÔMETRO ÚTIL)
             # O momento EXATO que o cliente deveria receber a mensagem
-            tempo_ideal_envio = agora - timedelta(minutes=r["time"])
+            tempo_ideal_envio = subtrair_tempo_util(agora, r["time"])
             # O momento que a mensagem é considerada "velha demais" (passou 15 min do ideal)
-            tempo_limite_esquecimento = tempo_ideal_envio - timedelta(minutes=15) 
+            tempo_limite_esquecimento = subtrair_tempo_util(tempo_ideal_envio, 15) 
 
             condicao_estagio = {"$in": [0, None]} if r["stage_atual"] == 0 else r["stage_atual"]
 
@@ -2246,6 +2261,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     - Se o cliente disser "tchau", "valeu" ou "obrigado" sem agendar, faça UMA ÚLTIMA tentativa descontraída e humorada(se não for um assunto sensível) de deixar a porta aberta com um conselho ou lembrete de valor (Ex: "Imagina! Mas ó, antes de ir, só lembrando que tua primeira aula aqui é presente nosso, tá?"). 
                     - Se o cliente mantiver a despedida depois disso, ou se a saída for por motivo de saúde/imprevisto grave, aceite com empatia, deseje coisas boas e encerre a conversa com educação.
                 7. LIBERAR CATRACA: Você não libera catraca, nunca diga que ira liberar acesso ou catraca.
+                8. CONTATO POR ENGANO (CRÍTICO): Se a pessoa disser que "foi engano", "número errado" ou pedir desculpas por chamar no número incorreto, RECUE 100%. É ESTRITAMENTE PROIBIDO tentar vender, oferecer plano, agendamento ou ativar qualquer protocolo de retenção. Apenas responda com simpatia: "Imagina, sem problemas!" e encerre a conversa.
 
         # ---------------------------------------------------------
         # 4. FLUXO DE ATENDIMENTO E ALGORITIMOS DE VENDAS
@@ -2364,6 +2380,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 
                 AÇÃO PRÁTICA: 
                 - SE FOR PROBLEMA DE SAÚDE/EMERGÊNCIA (doença, caganeira, febre): EMPATIA TOTAL. Zero vendas. "Poxa, sinto muito! Foca em melhorar agora, saúde em primeiro lugar. Quando estiver 100%, a gente se fala! Melhoras!" e encerre.
+                - SE FOR MENSAGEM POR ENGANO ("número errado", "desculpa, foi engano"): RECUE IMEDIATAMENTE. Zero vendas, zero convites para aula. Responda apenas "Imagina, sem problemas! Um abraço!" e encerre a conversa para não ser invasiva.
                 - SE FOR "SÓ QUERIA SABER" / DESPEDIDA COMUM ("obrigado", "valeu"): DÊ O ÚLTIMO EMPURRÃO AMIGÁVEL ANTES DE DEIXAR IR. "Imagina! Mas ó, saber é o primeiro passo, agir é o que dá resultado kkkk. A tua primeira aula aqui é presente nosso. Bora marcar nem que seja só pra você conhecer o espaço?"
                 - SE FOR FALTA DE TEMPO/DINHEIRO: ACONSELHE E JOGUE A ISCA. "Rotina é puxada mesmo! Mas ó, dica de amiga: temos aquele plano de R$ 39,90 só pros finais de semana. Que tal vir conhecer sábado sem compromisso?"
                 (Se após essa cartada final amigável o cliente ainda assim recusar, aí sim, deixe as portas abertas com simpatia e encerre o turno, sem forçar mais).
