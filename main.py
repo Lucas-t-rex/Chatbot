@@ -3230,6 +3230,7 @@ scheduler.start()
 app = Flask(__name__)
 CORS(app) 
 processed_messages = set() 
+retry_counters = {}
 
 def is_numero_travado(numero_webhook):
     if conversation_collection is None: 
@@ -3437,7 +3438,7 @@ def _trigger_ai_processing(clean_number, last_message_data):
     if not messages_to_process:
         return
 
-    full_user_message = ". ".join(messages_to_process)
+    full_user_message = "\n".join(messages_to_process)
 
     log_info(f"[DEBUG RASTREIO | PONTO 1] Buffer para {clean_number}: '{full_user_message}'")
     
@@ -3641,7 +3642,13 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             upsert=True
         )
 
-        # 2. Tenta pegar o crachá de atendimento (LOCK)
+        # Libera locks travados há mais de 2 minutos (evita deadlock se o processo cravar)
+        dois_min_atras = now - timedelta(minutes=2)
+        conversation_collection.update_one(
+            {'_id': clean_number, 'processing': True, 'processing_started_at': {'$lt': dois_min_atras}},
+            {'$unset': {'processing': "", 'processing_started_at': ""}}
+        )
+
         res = conversation_collection.update_one(
             {'_id': clean_number, 'processing': {'$ne': True}},
             {'$set': {'processing': True, 'processing_started_at': now}}
@@ -3657,7 +3664,30 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                     message_buffer[clean_number] = []
                 if buffered_message_text not in message_buffer[clean_number]:
                     message_buffer[clean_number].insert(0, buffered_message_text)
-            
+            if res.matched_count == 0:
+            retry_counters[clean_number] = retry_counters.get(clean_number, 0) + 1
+
+            if retry_counters[clean_number] > 5:
+                print(f"🗑️ [Anti-Ghost] {clean_number} atingiu limite de retries. Descartando mensagem.")
+                retry_counters.pop(clean_number, None)
+                return
+
+            print(f"⏳ {clean_number} está ocupado. Fila de espera... (Retry {retry_counters[clean_number]}/5)")
+
+            if buffered_message_text:
+                if clean_number not in message_buffer:
+                    message_buffer[clean_number] = []
+                if buffered_message_text not in message_buffer[clean_number]:
+                    message_buffer[clean_number].insert(0, buffered_message_text)
+
+            # CANCELA o timer anterior antes de criar o novo (evita o storm)
+            if clean_number in message_timers:
+                message_timers[clean_number].cancel()
+
+            timer = threading.Timer(4.0, _trigger_ai_processing, args=[clean_number, full_json])
+            message_timers[clean_number] = timer
+            timer.start()
+            return
             # Passamos o full_json para garantir que o retry tenha os dados da raiz
             timer = threading.Timer(4.0, _trigger_ai_processing, args=[clean_number, full_json])
             message_timers[clean_number] = timer
@@ -3665,6 +3695,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             return 
         
         lock_acquired = True
+        retry_counters.pop(clean_number, None)  # Reseta contador ao adquirir o lock
         # ==============================================================================
         
         user_message_content = None
