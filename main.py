@@ -3656,15 +3656,6 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
 
         # 3. SE NÃO CONSEGUIU O CRACHÁ, ESPERA NA FILA
         if res.matched_count == 0:
-            print(f"⏳ {clean_number} está ocupado. Colocando mensagem na FILA DE ESPERA...")
-            
-            # Devolve para o buffer e tenta de novo em 4s
-            if buffered_message_text:
-                if clean_number not in message_buffer: 
-                    message_buffer[clean_number] = []
-                if buffered_message_text not in message_buffer[clean_number]:
-                    message_buffer[clean_number].insert(0, buffered_message_text)
-            if res.matched_count == 0:
             retry_counters[clean_number] = retry_counters.get(clean_number, 0) + 1
 
             if retry_counters[clean_number] > 5:
@@ -3680,7 +3671,6 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                 if buffered_message_text not in message_buffer[clean_number]:
                     message_buffer[clean_number].insert(0, buffered_message_text)
 
-            # CANCELA o timer anterior antes de criar o novo (evita o storm)
             if clean_number in message_timers:
                 message_timers[clean_number].cancel()
 
@@ -3688,11 +3678,6 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             message_timers[clean_number] = timer
             timer.start()
             return
-            # Passamos o full_json para garantir que o retry tenha os dados da raiz
-            timer = threading.Timer(4.0, _trigger_ai_processing, args=[clean_number, full_json])
-            message_timers[clean_number] = timer
-            timer.start()
-            return 
         
         lock_acquired = True
         retry_counters.pop(clean_number, None)  # Reseta contador ao adquirir o lock
