@@ -90,7 +90,7 @@ SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
 
 message_buffer = {}
 message_timers = {}
-BUFFER_TIME_SECONDS=25
+BUFFER_TIME_SECONDS=15
 
 TEMPO_FOLLOWUP_1 = 90
 TEMPO_FOLLOWUP_2 = 360
@@ -2360,7 +2360,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     Olhe as suas últimas mensagens anteriores. Você JÁ enviou a mensagem que diz "Fechado então! traz uma garrafinha..."?
                         [CENÁRIO A: PRIMEIRA VEZ (Acabou de salvar o agendamento)]
                         - AÇÃO: Envie a mensagem PADRÃO DE INSTRUÇÕES completa:
-                        "Fechado então! traz uma garrafinha pra agua! e segue nós la no insta! https://www.instagram.com/brooklyn_academia/ ! Já to te esperando em! Bjs."
+                        "Fechado então! traz uma garrafinha pra agua! e segue nós la no insta! https://www.instagram.com/brooklyn_academia/ ! Já to te esperando em!"
 
                     [CENÁRIO B: O CLIENTE RESPONDEU DEPOIS DAS INSTRUÇÕES ("Ok", "Obrigado", "Valeu")]
                         - AÇÃO: É ESTRITAMENTE PROIBIDO repetir a mensagem da garrafinha ou do insta.
