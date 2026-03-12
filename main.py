@@ -2496,7 +2496,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         === TRATAMENTO DE ERROS ===
         1. Horário não listado na Tool -> DIGA QUE NÃO TEM.
         2. CPF Duplicado (`fn_buscar_por_cpf`) -> Pergunte qual dos dois agendamentos alterar.
-        3. ENVIO DE CONTATOS: Sempre que oferecer o número do financeiro / RH (4499121-6103) e o cliente aceitar ou pedir, envie o número sozinho em uma mensagem separada logo após sua explicação, para que ele consiga clicar e salvar facilmente.
+        3. ENVIO DE CONTATOS: Sempre que oferecer o número do financeiro / RH (4499121-6103) caso o cliente queira avaliação , envio de curriculo ou rh da empresa.
 
             """
         return prompt_final
