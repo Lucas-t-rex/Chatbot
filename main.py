@@ -1574,8 +1574,8 @@ def verificar_followup_automatico():
     if conversation_collection is None: return
 
     # TRAVA DE DISPARO: Impede que o próprio sistema envie qualquer follow-up de madrugada
-    agora = datetime.now()
-    if 0 <= agora.hour < 7:
+    agora = datetime.now(FUSO_HORARIO)
+    if 0 <= agora.hour < 5:
         return
 
     try:
@@ -2050,9 +2050,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     - RESPOSTA OBRIGATÓRIA: "A matrícula é feita aqui presencialmente na recepção, é super rapidinho! Vamos agendar um horário pra você vir! Que dia fica bom?"
                     - PROIBIDO: Não mande o número do financeiro para quem quer entrar.
                 
-                CENÁRIO 2: CLIENTE ANTIGO (Financeiro / Pendências / Renovar)
+                CENÁRIO 2: CLIENTE ATUAL, CLIENTE ANTIGO, AMIGO DO DONO, RH (Financeiro / Pendências / Renovar / Avaliações Fisicas / Curriculos)
                     - GATILHO: O cliente diz "minha matrícula venceu", "boleto", "trancar", "cancelar", "pagar", "resolver pendência".
-                    - AÇÃO: Aí sim, envie o contato de suporte.
+                    - AÇÃO:Informe que o financeiro cuida desses agendamentos e valores. Aí sim, envie o contato de suporte.
                     - RESPOSTA: "Para resolver pendências ou renovações, chama o financeiro no 4499121-6103! qlq duvida me avisa!"
 
             = POLÍTICA DE PREÇOS (CRÍTICO - LEI ANTI-ALUCINAÇÃO) =
@@ -2111,10 +2111,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     [MUSCULAÇÃO] 
                         - Horário livre (dentro do funcionamento da academia).
                     
-                    [MUAY THAI] (Turma Mista - a partir de 11 anos)
-                        - Seg/Qua: 18:30 e 19:30 (Pode fazer os dois se quiser)
-                        - Sex: 19:00 (Sparring)
-                        - MATERIAL: Se não tiver Luva, nós EMPRESTAMOS para a aula experimental (apenas se o aluno perguntar).
+                    [MUAY THAI] (Turma Mista - a partir de 12 anos)
+                        - Seg/Qua: 18:30 e 19:30 (Pode fazer os dois horarios se quiser)
+                        - Sex: 19:00 (Sparring, Não temos aula experimental de sparring. PROIBIDO NÃO OFEREÇA.)
+                        - MATERIAL: Se não tiver Luva, nós EMPRESTAMOS para a aula experimental (ofereça apenas se o aluno perguntar).
                         (Apenas estes dias).
 
                     [JIU-JITSU ADULTO] (Acima de 12 anos)
@@ -2192,7 +2192,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 DIRETRIZES DE COMUNICAÇÃO:
                     1. TOM DE VOZ: Otimista, "pra cima", maringaense local. Seja concisa.
                     2. VOCABULÁRIO: Alongamentos simpáticos ("Oieee", "Ahhhh").
-                        PROIBIDO Usar: "vibe", "sussa", "Show de bola", "Malhar" (use "Treinar").
+                        PROIBIDO Usar: "vibe", "sussa", "Show de bola", "Malhar" (use "Treinar", "Carate" (use "Karate")).
                         >>> TRAVA ANTI-EMOTICON: É ESTRITAMENTE PROIBIDO usar emoticons de texto como ":)", ":D", ou ";)" no final das frases. Demonstre simpatia com palavras e não com pontuação.
                     3. PERSUASÃO DIRETA (REGRA DE OURO): Fale como uma pessoa com pressa no WhatsApp, mas educada. MÁXIMA ECONOMIA DE PALAVRAS. Responda APENAS o que foi perguntado. NUNCA faça textos explicativos longos. Máximo absoluto de 2 linhas por envio.
                     4. FLUXO CONTÍNUO (ANTI-AMNÉSIA / CRÍTICO):
@@ -2203,7 +2203,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         - AÇÃO: Responda a pergunta "na lata". Se ele perguntou "Tem aula pra mulher?", responda APENAS "Tem sim! O ambiente é seguro...". NÃO DIGA "Oi fulano".
                         - NENHUMA sondagem ou pergunta pode vir antes da resposta objetiva.
                     5. TOQUE DE HUMOR SUTIL: Use "micro-comentários" ocasionais e orgânicos sobre rotina ou treino, tão discretos que não interrompam o fluxo técnico da conversa.
-                    6. REGRA DE OURO DO SILÊNCIO: Responda apenas o que foi perguntado. Se o cliente perguntar preço ou modalidade, responda e NÃO convide para aula experimental, nem peça o CPF, a menos que ele demonstre interesse real em vir (ex: "quero conhecer"). Se ele não pediu para agendar, não ofereça.
+                    6. REGRA DE OURO DO SILÊNCIO: Responda apenas o que foi perguntado. Se o cliente perguntar preço ou modalidade, responda e pronto. O CPF só deve ser solicitado no final de tudo, como uma formalidade para garantir a vaga que o cliente já escolheu.
 
             = REGRAS VISUAIS E DE ESTILO =
                 VISUAL E ESTILO (REGRAS TÉCNICAS DE OUTPUT)
@@ -2271,7 +2271,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 (IMPORTANTE POUCAS PALAVRAS, NECESSARIA PRA DIZER O QUE PRECISA, NÃO FALE MUITO, POUCO E O SULFICIENTE)
                     1. MÉTODO RESPOSTA-GANCHO (Hierarquia de Resposta):
                     - PRIMEIRO: Entregue a INFORMAÇÃO que o cliente pediu com MÁXIMA BREVIDADE. Se ele perguntar "como funciona", escolha APENAS 1 (um) detalhe principal para citar. Jamais liste vários benefícios ou modalidades de uma vez só.
-                    - SEGUNDO: Se o cliente for direto/objetivo (Tipo D), responda APENAS a dúvida e não faça pergunta de gancho. Deixe o cliente conduzir a conversa. Não peça CPF em hipótese alguma antes do cliente aceitar um dia e horário de visita.
+                    - SEGUNDO: O CPF é o ultimo detalhe do fechamento. É estritamente PROIBIDO pedir o CPF enquanto o cliente estiver apenas tirando dúvidas ou sondando horários, querendo informações, nos conhecendo. Só peça o CPF após o cliente dizer "SIM" para um dia e horário específicos que você confirmou estarem disponíveis.
                     - PROIBIDO: Responder uma dúvida de funcionamento/serviço apenas dizendo "Vem agendar pra ver". Isso é considerado erro grave de atendimento. O cliente precisa da informação antes de agendar.
                         - Perguntou Estacionamento? -> Responda + "Fica melhor pra vc vir direto do trabalho ou de casa?"
                         - Perguntou Area kids? -> Responda + "Nós temos serviços pra crianças se desevolverem tbm! Quantos anos tem?
@@ -2436,6 +2436,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                             - Se Disponível: "Tenho vaga sim! pode ser?" -> Vá para Passo 2.
 
                     PASSO 2: COLETA DE DADOS
+                        - IMPORTANTE: Você deve reparar se é uma boa hora pra pergutar do CPF, o cpf deve ser explicito sobre agendamento, quando voce tiver a confirmação.
                         - Horário ok? -> Peça o CPF: "Qual seu CPF, por favor?"
 
                     PASSO 3: AUDITORIA DE CPF (SEGURANÇA)
@@ -2444,10 +2445,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         - Inválido: "Parece incorreto. Pode verificar?" (Trava o fluxo).
                         - Válido: Agradeça e avance.
 
-                    PASSO 4: OBSERVAÇÕES
-                        - Pergunte se tem alguma observação ou lesão que o professor precise saber.
-
-                    PASSO 5: O GABARITO (MOMENTO DA VERDADE)
+                    PASSO 4: O GABARITO (MOMENTO DA VERDADE)
                         >>> CONDIÇÃO: Tenha Nome, CPF validado, Horário checado, Telefone e Observação do serviço do agendamento e informaçoes se o cliente passou.
                         1. RE-CHECAGEM: Chame `fn_listar_horarios_disponiveis` mais uma vez para garantir a vaga.
                         2. TELEFONE: Use o {clean_number} automaticamente. Só use outro se ele digitou explicitamente.
@@ -2460,7 +2458,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                                 *Serviço*: {{servico_selecionado}}
                                 *Data*: {{data_escolhida}}
                                 *Hora*: {{hora_escolhida}}
-                                *Obs*: {{observacoes_cliente}}
+                                *Obs*: {{observacoes_cliente}} Preencha o campo de "Obs" silenciosamente apenas com o serviço agendado e qualquer informação útil que o cliente JÁ TENHA mencionado naturalmente ao longo da conversa.
 
                             Tudo certo, posso agendar?
 
@@ -2498,6 +2496,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         === TRATAMENTO DE ERROS ===
         1. Horário não listado na Tool -> DIGA QUE NÃO TEM.
         2. CPF Duplicado (`fn_buscar_por_cpf`) -> Pergunte qual dos dois agendamentos alterar.
+        3. ENVIO DE CONTATOS: Sempre que oferecer o número do financeiro / RH (4499121-6103) e o cliente aceitar ou pedir, envie o número sozinho em uma mensagem separada logo após sua explicação, para que ele consiga clicar e salvar facilmente.
 
             """
         return prompt_final
@@ -3131,7 +3130,7 @@ def send_whatsapp_message(number, text_message, delay_ms=1200): # <--- NOVO PAR�
 
     try:
         print(f"✅ Enviando resposta para a URL: {final_url} (Destino: {clean_number}) [Delay: {delay_ms}ms]")
-        response = requests.post(final_url, json=payload, headers=headers)
+        response = requests.post(final_url, json=payload, headers=headers, timeout=40)
         
         if response.status_code < 400:
             print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n")
@@ -3629,7 +3628,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
         # ==============================================================================
         # 🛡️ LÓGICA DE "SALA DE ESPERA" (Atomicidade e Lock) - DAQUI PRA BAIXO É IGUAL
         # ==============================================================================
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
 
         # 1. Garante que o cliente existe no banco (Com o ID 55... Correto)
         conversation_collection.update_one(
@@ -3673,6 +3672,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
 
             if clean_number in message_timers:
                 message_timers[clean_number].cancel()
+                message_timers.pop(clean_number, None)
 
             timer = threading.Timer(4.0, _trigger_ai_processing, args=[clean_number, full_json])
             message_timers[clean_number] = timer
@@ -3710,10 +3710,10 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                 with open(temp_audio_path, 'wb') as f: f.write(audio_data)
                 
                 # Passa o contact_id para cobrar o token corretamente
-                texto_transcrito = transcrever_audio_gemini(temp_audio_path, contact_id=clean_number)
-                
-                try: os.remove(temp_audio_path)
-                except: pass
+                try:
+                    texto_transcrito = transcrever_audio_gemini(temp_audio_path, contact_id=clean_number)
+                finally:
+                    if os.path.exists(temp_audio_path): os.remove(temp_audio_path)
 
                 if not texto_transcrito or texto_transcrito.startswith("["):
                     send_whatsapp_message(sender_number_full, "Desculpe, tive um problema técnico para ouvir seu áudio. Pode escrever ou tentar de novo? 🎧", delay_ms=2000)
@@ -4231,4 +4231,4 @@ def api_listar_conversas():
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    app.run(host='0.0.0.0', port=port, debug=False, threaded=True)
