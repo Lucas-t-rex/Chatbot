@@ -127,85 +127,8 @@ except Exception as e:
     print(f"❌ ERRO: [DB Conversas] Não foi possível conectar ao MongoDB. Erro: {e}")
     conversation_collection = None 
 
-def limpar_cpf(cpf_raw: Optional[str]) -> Optional[str]:
-    if not cpf_raw:
-        return None
-    
-    s = re.sub(r'\D', '', str(cpf_raw))
-    l = len(s)
-    if l == 22 and s[:11] == s[11:]:
-        s = s[:11]
-    return s if len(s) == 11 else None
 
 
-def validar_cpf_logica(cpf_input: str):
-    """
-    Versão Resiliente: Encontra o primeiro padrão de 11 dígitos dentro do texto.
-    Resolve problemas de buffer duplicado ou texto junto com número.
-    """
-    # 1. Tenta encontrar uma sequência de 11 dígitos no meio da bagunça
-    # Isso resolve se o buffer mandar "1234567890112345678901" -> pega só o primeiro
-    match = re.search(r'\d{11}', str(cpf_input))
-    
-    if match:
-        cpf_limpo = match.group(0) # Pega os 11 primeiros dígitos encontrados
-    else:
-        # Se não achou 11 seguidos, limpa tudo e vê o que tem
-        cpf_limpo = re.sub(r'\D', '', str(cpf_input))
-
-    tamanho = len(cpf_limpo)
-
-    # CENÁRIO 1: Tamanho incorreto (mesmo após tentar extrair)
-    if tamanho != 11:
-        return {
-            "valido": False, 
-            "msg": f"O CPF precisa ter 11 números. Identifiquei {tamanho}.",
-            "instrucao_para_ia": "Diga ao cliente que o número está curto ou longo demais e peça para conferir."
-        }
-    
-    # CENÁRIO 2: Todos iguais (111.111.111-11)
-    if cpf_limpo == cpf_limpo[0] * 11:
-        return {
-            "valido": False, 
-            "msg": "CPF inválido (números iguais).",
-            "instrucao_para_ia": "Avise que CPFs com todos números iguais não são válidos."
-        }
-
-    # CENÁRIO 3: Validação Matemática Real
-    # Calcula primeiro dígito
-    soma = 0
-    peso = 10
-    for n in cpf_limpo[:9]:
-        soma += int(n) * peso
-        peso -= 1
-    resto = soma % 11
-    digito1 = '0' if resto < 2 else str(11 - resto)
-
-    # Calcula segundo dígito
-    soma = 0
-    peso = 11
-    for n in cpf_limpo[:9] + digito1:
-        soma += int(n) * peso
-        peso -= 1
-    resto = soma % 11
-    digito2 = '0' if resto < 2 else str(11 - resto)
-
-    cpf_calculado = cpf_limpo[:9] + digito1 + digito2
-
-    if cpf_limpo == cpf_calculado:
-        return {
-            "valido": True, 
-            "msg": "CPF Válido.",
-            "instrucao_para_ia": f"CPF {cpf_limpo} validado com sucesso! Prossiga imediatamente para o próximo passo (Gabarito ou Observações)."
-        }
-    else:
-        # DICA: Para testes, você pode comentar o 'return' abaixo e dar return True se quiser aceitar qualquer número
-        return {
-            "valido": False, 
-            "msg": "CPF inválido (Dígitos verificadores não batem).",
-            "instrucao_para_ia": f"O número {cpf_limpo} existe no formato, mas é matematicamente inválido na Receita Federal. Peça para o cliente conferir se digitou errado."
-        }
-    
 def parse_data(data_str: str) -> Optional[datetime]:
     if not data_str or not isinstance(data_str, str):
         return None
@@ -372,7 +295,7 @@ class Agenda:
 
     def _criar_indices(self):
         try:
-            self.collection.create_index("cpf")
+            self.collection.create_index("telefone")
             self.collection.create_index([("inicio", 1), ("fim", 1)])
             print("✅ [DB Agenda] Índices do MongoDB garantidos.")
         except OperationFailure as e:
@@ -494,15 +417,14 @@ class Agenda:
                 conflitos_encontrados += 1
         return conflitos_encontrados
 
-    def buscar_por_cpf(self, cpf_raw: str) -> Dict[str, Any]:
-        apenas_numeros = re.sub(r'\D', '', str(cpf_raw)) if cpf_raw else ""
-        cpf = limpar_cpf(cpf_raw)
-        if not cpf:
-            return {"erro": f"CPF inválido. Identifiquei {len(apenas_numeros)} números. Digite os 11 números do CPF."}
+    def buscar_por_telefone(self, telefone: str) -> Dict[str, Any]:
+        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
+        if not tel_limpo:
+            return {"erro": "Telefone inválido."}
         
         try:
             agora_sp = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
-            query = {"cpf": cpf, "inicio": {"$gte": agora_sp}}
+            query = {"telefone": tel_limpo, "inicio": {"$gte": agora_sp}}
             resultados_db = self.collection.find(query).sort("inicio", 1)
             
             resultados = []
@@ -518,20 +440,19 @@ class Agenda:
                 })
             
             if not resultados:
-                return {"sucesso": True, "resultados": [], "info": "Nenhum agendamento futuro encontrado para este CPF."}
+                return {"sucesso": True, "resultados": [], "info": "Nenhum agendamento futuro encontrado para este telefone."}
                 
             return {"sucesso": True, "resultados": resultados}
         
         except Exception as e:
-            log_info(f"Erro em buscar_por_cpf: {e}")
-            return {"erro": f"Falha ao buscar CPF no banco de dados: {e}"}
+            log_info(f"Erro em buscar_por_Telefone: {e}")
+            return {"erro": f"Falha ao buscar telefone no banco de dados: {e}"}
 
-    def salvar(self, nome: str, cpf_raw: str, telefone: str, servico: str, data_str: str, hora_str: str, owner_id: str = None, observacao: str = "") -> Dict[str, Any]:
+    def salvar(self, nome: str, telefone: str, servico: str, data_str: str, hora_str: str, owner_id: str = None, observacao: str = "") -> Dict[str, Any]:
         # --- 1. HIGIENIZAÇÃO E VALIDAÇÃO BÁSICA ---
-        apenas_numeros = re.sub(r'\D', '', str(cpf_raw)) if cpf_raw else ""
-        cpf = limpar_cpf(cpf_raw)
-        if not cpf:
-            return {"erro": f"CPF inválido. Identifiquei {len(apenas_numeros)} números. O CPF precisa ter exatamente 11 dígitos."}
+        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
+        if not tel_limpo:
+            return {"erro": "Telefone inválido."}
         
         dt = parse_data(data_str)
         if not dt: return {"erro": "Data inválida."}
@@ -571,19 +492,16 @@ class Agenda:
             inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
             fim_dt = inicio_dt + timedelta(minutes=duracao_minutos)
 
-            # [CORREÇÃO CRÍTICA]: Verifica duplicidade EXATA (Mesmo CPF + Mesmo Início)
-            # Se for o mesmo CPF mas outro horário, o 'find_one' retornará None e o código seguirá para salvar.
             already_booked = self.collection.find_one({
-                "cpf": cpf,
+                "telefone": tel_limpo,
                 "inicio": inicio_dt 
             })
 
             if already_booked:
-                log_info(f"🛡️ [Anti-Bug] Tentativa de duplicidade exata para {cpf} às {hora}. Bloqueando.")
-                # AQUI ESTAVA O ERRO: Antes retornava sucesso falso. Agora retorna erro para a IA saber.
+                log_info(f"🛡️ [Anti-Bug] Tentativa de duplicidade exata para telefone {tel_limpo} às {hora}. Bloqueando.")
                 return {
                     "sucesso": False, 
-                    "msg": f"Atenção: Este CPF já possui um agendamento EXATAMENTE neste dia e horário ({data_str} às {hora}). Pergunte se ele quer manter este ou agendar em outro horário."
+                    "msg": f"Atenção: Este telefone já possui um agendamento EXATAMENTE neste dia e horário ({data_str} às {hora}). Pergunte se ele quer manter este ou agendar em outro horário."
                 }
 
             # Verifica lotação (Se tem mais de 50 pessoas nesse horário)
@@ -598,8 +516,7 @@ class Agenda:
             novo_documento = {
                 "owner_whatsapp_id": owner_id,  
                 "nome": nome.strip(),
-                "cpf": cpf,
-                "telefone": telefone.strip(),
+                "telefone": tel_limpo,
                 "servico": servico.strip(),
                 "observacao": obs_limpa,
                 "duracao_minutos": duracao_minutos,
@@ -624,10 +541,10 @@ class Agenda:
             log_info(f"Erro crítico na função salvar: {e}")
             return {"erro": f"Falha técnica ao salvar no banco de dados: {e}"}
         
-    def excluir(self, cpf_raw: str, data_str: str, hora_str: str) -> Dict[str, Any]:
-        cpf = limpar_cpf(cpf_raw)
-        if not cpf:
-            return {"erro": "CPF inválido."}
+    def excluir(self, telefone: str, data_str: str, hora_str: str) -> Dict[str, Any]:
+        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
+        if not tel_limpo:
+            return {"erro": "Telefone inválido."}
         dt = parse_data(data_str)
         if not dt:
             return {"erro": "Data inválida."}
@@ -640,7 +557,7 @@ class Agenda:
 
         try:
             inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
-            query = {"cpf": cpf, "inicio": inicio_dt}
+            query = {"telefone": tel_limpo, "inicio": inicio_dt}
             
             documento_removido = self.collection.find_one_and_delete(query)
 
@@ -654,32 +571,32 @@ class Agenda:
             log_info(f"Erro em excluir: {e}")
             return {"erro": f"Falha ao excluir do banco de dados: {e}"}
         
-    def excluir_todos_por_cpf(self, cpf_raw: str) -> Dict[str, Any]:
-        """Exclui TODOS os agendamentos FUTUROS de um CPF."""
-        cpf = limpar_cpf(cpf_raw)
-        if not cpf:
-            return {"erro": "CPF inválido."}
+    def excluir_todos_por_telefone(self, telefone: str) -> Dict[str, Any]:
+        """Exclui TODOS os agendamentos FUTUROS de um telefone."""
+        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
+        if not tel_limpo:
+            return {"erro": "Telefone inválido."}
         
         try:
             agora = datetime.now()
-            query = {"cpf": cpf, "inicio": {"$gte": agora}}
+            query = {"telefone": tel_limpo, "inicio": {"$gte": agora}}
 
             resultado = self.collection.delete_many(query)
             
             count = resultado.deleted_count
             if count == 0:
-                return {"erro": "Nenhum agendamento futuro encontrado para este CPF."}
+                return {"erro": "Nenhum agendamento futuro encontrado para este telefone."}
             
             return {"sucesso": True, "msg": f"{count} agendamento(s) futuros foram removidos com sucesso."}
         
         except Exception as e:
-            log_info(f"Erro em excluir_todos_por_cpf: {e}")
+            log_info(f"Erro em excluir_todos_por_telefone: {e}")
             return {"erro": f"Falha ao excluir agendamentos do banco de dados: {e}"}
 
-    def alterar(self, cpf_raw: str, data_antiga: str, hora_antiga: str, data_nova: str, hora_nova: str) -> Dict[str, Any]:
-        cpf = limpar_cpf(cpf_raw)
-        if not cpf:
-            return {"erro": "CPF inválido."}
+    def alterar(self, telefone: str, data_antiga: str, hora_antiga: str, data_nova: str, hora_nova: str) -> Dict[str, Any]:
+        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
+        if not tel_limpo:
+            return {"erro": "Telefone inválido."}
         dt_old = parse_data(data_antiga)
         dt_new = parse_data(data_nova)
         if not dt_old or not dt_new:
@@ -701,7 +618,7 @@ class Agenda:
 
         try:
             inicio_antigo_dt = datetime.combine(dt_old.date(), str_to_time(h_old))
-            item = self.collection.find_one({"cpf": cpf, "inicio": inicio_antigo_dt})
+            item = self.collection.find_one({"telefone": tel_limpo, "inicio": inicio_antigo_dt})
             
             if not item:
                 return {"erro": "Agendamento antigo não encontrado."}
@@ -852,25 +769,24 @@ if agenda_instance:
                     }
                 },
                 {
-                    "name": "fn_buscar_por_cpf",
-                    "description": "Busca todos os agendamentos existentes para um único CPF.",
+                    "name": "fn_buscar_por_telefone",
+                    "description": "Busca todos os agendamentos existentes para o telefone do cliente.",
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
-                            "cpf": {"type_": "STRING", "description": "O CPF de 11 dígitos do cliente."}
+                            "telefone": {"type_": "STRING", "description": "Envie CONFIRMADO_NUMERO_ATUAL para usar o número do WhatsApp."}
                         },
-                        "required": ["cpf"]
+                        "required": ["telefone"]
                     }
                 },
                 {
                     "name": "fn_salvar_agendamento",
-                    "description": "Salva um novo agendamento. Use apenas quando tiver todos os 6 campos obrigatórios E o usuário já tiver confirmado o 'gabarito' (resumo).",
+                    "description": "Salva um novo agendamento. Use apenas quando tiver todos os campos obrigatórios E o usuário já tiver confirmado o 'gabarito' (resumo).",
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
                             "nome": {"type_": "STRING"},
-                            "cpf": {"type_": "STRING"},
-                            "telefone": {"type_": "STRING"},
+                            "telefone": {"type_": "STRING", "description": "Envie CONFIRMADO_NUMERO_ATUAL"},
                             "servico": {
                                 "type_": "STRING",
                                 "description": "O nome EXATO do serviço.",
@@ -883,20 +799,20 @@ if agenda_instance:
                                 "description": "OBRIGATÓRIO: Descreva aqui a modalidade escolhida (ex: Musculação, Muay Thai, Jiu-Jitsu, etc). Se o cliente não citou, pergunte antes de gerar o gabarito."
                             }
                         },  # <--- ESTA CHAVE FECHA O 'PROPERTIES'
-                        "required": ["nome", "cpf", "telefone", "servico", "data", "hora"]
+                        "required": ["nome", "telefone", "servico", "data", "hora"]
                     }
                 },
                 {
                     "name": "fn_excluir_agendamento",
-                    "description": "Exclui um AGENDAMENTO ESPECÍFICO. Requer CPF, data e hora exatos.",
+                    "description": "Exclui um AGENDAMENTO ESPECÍFICO. Requer telefone, data e hora exatos.",
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
-                            "cpf": {"type_": "STRING"},
+                            "telefone": {"type_": "STRING", "description": "Envie CONFIRMADO_NUMERO_ATUAL"},
                             "data": {"type_": "STRING", "description": "A data DD/MM/AAAA do agendamento a excluir."},
                             "hora": {"type_": "STRING", "description": "A hora HH:MM do agendamento a excluir."}
                         },
-                        "required": ["cpf", "data", "hora"]
+                        "required": ["telefone", "data", "hora"]
                     }
                 },
                 {
@@ -905,9 +821,9 @@ if agenda_instance:
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
-                            "cpf": {"type_": "STRING", "description": "O CPF de 11 dígitos do cliente."}
+                            "telefone": {"type_": "STRING", "description": "Envie CONFIRMADO_NUMERO_ATUAL"}
                         },
-                        "required": ["cpf"]
+                        "required": ["telefone"]
                     }
                 },
                 {
@@ -916,13 +832,13 @@ if agenda_instance:
                     "parameters": {
                         "type_": "OBJECT",
                         "properties": {
-                            "cpf": {"type_": "STRING"},
+                            "telefone": {"type_": "STRING", "description": "Envie CONFIRMADO_NUMERO_ATUAL"},
                             "data_antiga": {"type_": "STRING", "description": "Data (DD/MM/AAAA) do agendamento original."},
                             "hora_antiga": {"type_": "STRING", "description": "Hora (HH:MM) do agendamento original."},
                             "data_nova": {"type_": "STRING", "description": "A nova data (DD/MM/AAAA) desejada."},
                             "hora_nova": {"type_": "STRING", "description": "A nova hora (HH:MM) desejada."}
                         },
-                        "required": ["cpf", "data_antiga", "hora_antiga", "data_nova", "hora_nova"]
+                        "required": ["telefone", "data_antiga", "hora_antiga", "data_nova", "hora_nova"]
                     }
                 },
                 
@@ -947,20 +863,6 @@ if agenda_instance:
                             "nome_extraido": {"type_": "STRING", "description": "O nome que o cliente acabou de informar (ex: 'Marcos', 'Ana')."}
                         },
                         "required": ["nome_extraido"]
-                    }
-                },
-                {
-                    "name": "fn_validar_cpf",
-                    "description": "Valida se um número de CPF fornecido pelo usuário é matematicamente real e válido. Use isso sempre que o usuário fornecer um número que pareça um CPF. hame esta função internamente quando o cliente digitar o documento.",
-                    "parameters": {
-                        "type_": "OBJECT",
-                        "properties": {
-                            "cpf_input": {
-                                "type_": "STRING",
-                                "description": "O número do CPF fornecido pelo usuário (com ou sem pontos/traços)."
-                            }
-                        },
-                        "required": ["cpf_input"]
                     }
                 }
             ]
@@ -1119,7 +1021,7 @@ def executar_profiler_cliente(contact_id):
         # [ALTERAÇÃO 1] PREPARAÇÃO DUAL-STREAM (DOIS TEXTOS DIFERENTES)
         # ==============================================================================
         txt_para_historico = "" # Lê TUDO (Bot + Cliente) -> Para o campo 'historico_converssa'
-        txt_para_perfil = ""    # Lê SÓ CLIENTE -> Para os campos de dados (Nome, CPF, Dores...)
+        txt_para_perfil = ""   
 
         for m in mensagens_novas:
             role_raw = m.get('role')
@@ -1157,7 +1059,7 @@ def executar_profiler_cliente(contact_id):
         {txt_para_historico}
 
         FONTE B (Dados do Cliente - Apenas falas do Cliente):
-        Use para preencher TODOS OS OUTROS CAMPOS (Nome, CPF, Dores, Objetivos).
+        Use para preencher TODOS OS OUTROS CAMPOS (Nome, Dores, Objetivos).
         Ignore perguntas do Bot, foque apenas no que o cliente afirmou.
         DADOS:
         {txt_para_perfil}
@@ -1194,7 +1096,6 @@ def executar_profiler_cliente(contact_id):
 
         {{
         "nome": "",
-        "CPF": "", // Capte apenas o CPF que estara dentro de um gabarito de confirmação, pois ele ja esta veficado e correto.
         "genero": "", // Inferir pelo nome ou contexto (Masculino/Feminino).
         "idade_faixa": "",
         "idade_faixa": "",
@@ -1991,7 +1892,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 2. DINÂMICA DE CONVERSA (Ping-Pong Obrigatório):
                     - Regra de Encerramento: A sua resposta da pergunta do cliente deve terminar com uma PERGUNTA sua. Exeto em despedidas.
                         EXCEÇÃO CRÍTICA: Em despedidas e Se o assunto for Financeiro/Suporte ou se o cliente estiver apenas agradecendo, NÃO termine com pergunta. Apenas seja gentil e encerre o turno.
-                    - Fase de Agendamento: Pergunta Técnica (ex: "Qual seu CPF?", "Qual horário?").
+                    - Fase de Agendamento: Pergunta Técnica (ex: "Qual horário?").
                     - Fase de Conversa: Pergunta Relacional Aberta (ex: rotina, objetivos, sentimentos, costumes, motivos, passado).
                     - Continuidade: Se houver saudações no histórico, ignore novas saudações e vá direto ao ponto.
                 3. PERSISTÊNCIA:
@@ -2004,7 +1905,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 >>> PROTOCOLO GLOBAL DE EXECUÇÃO (LEI ABSOLUTA) <<<
                 1. SILÊNCIO TOTAL: A chamada de ferramentas é INVISÍVEL. Jamais responda com "Vou verificar", "Um momento", "Deixe-me ver" ou imprima nomes de funções. Apenas execute e entregue a resposta final.
                 2. PRIORIDADE DE DADOS: O retorno da ferramenta (JSON) é a verdade suprema e substitui qualquer informação textual deste prompt.
-                3. CEGUEIRA: Você não sabe horários ou validade de CPF sem consultar as tools abaixo.
+                3. CEGUEIRA: Você não sabe horários ou validade sem consultar as tools abaixo.
                     1. `fn_listar_horarios_disponiveis`: 
                         - QUANDO USAR: Acione IMEDIATAMENTE se o cliente demonstrar intenção de agendar ou perguntar sobre disponibilidade ("Tem vaga?", "Pode ser dia X?").
                         - PROTOCOLO DE APRESENTAÇÃO (UX): 
@@ -2013,21 +1914,18 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                             VALIDAÇÃO DE LUTAS/DANÇA: A Grade é teórica, mas a fn_listar_horarios_disponiveis é a LEI; chame-a sempre para detectar feriados/folgas e obedeça o retorno da tool acima do texto estático.
 
                     2. `fn_salvar_agendamento`: 
-                        - QUANDO USAR: É o "Salvar Jogo". Use APENAS no final, quando tiver Nome, CPF, Telefone, Serviço, Data, Hora e observação quando tiver confirmados pelo cliente.
-                        - REGRA: Salvar o agendamento apenas quando ja estiver enviado o gabarito e o usuario passar uma resposta positiva do gabarito.
-                            Se ele alterar algo do gabarito, faça a alteração que ele quer e envie o gabarito para confirmar.
-                            REGRA DO TELEFONE: O número atual do cliente é {clean_number}. Use este número automaticamente para o agendamento, a menos que o cliente explicitamente digite um número diferente.
+                         - QUANDO USAR: É o "Salvar Jogo". Use APENAS no final, quando tiver Nome, Serviço, Data e Hora confirmados pelo cliente.
+                         - REGRA: Salvar o agendamento apenas quando ja estiver enviado o gabarito e o usuario passar uma resposta positiva do gabarito.
+                             Se ele alterar algo do gabarito, faça a alteração que ele quer e envie o gabarito para confirmar.
+                             REGRA DO TELEFONE: O número atual do cliente é {clean_number}. Para as tools de agenda, use a string CONFIRMADO_NUMERO_ATUAL no campo de telefone.
                     
                     3. `fn_solicitar_intervencao`: 
                         - QUANDO USAR: O "Botão do Aylla". Use se o cliente quiser falar com humano,  ou se houver um problema técnico ou o cliente parecer frustado ou reclamar do seu atendimento. 
                         - REGRA: Se entender que a pessoa quer falar com o Aylla ou o dono ou alguem resposavel, chame a chave imediatamente. Nunca diga que ira chamar e nao use a tolls.
                             - Caso você não entenda peça pra pessoa ser mais claro na intenção dela.
 
-                    4. `fn_buscar_por_cpf` / `fn_alterar_agendamento` / `fn_excluir_agendamento`:
-                        - QUANDO USAR: Gestão. Use para consultar, remarcar ou cancelar agendamentos existentes.
-                    
-                    5. `fn_validar_cpf`:
-                        - QUANDO USAR: Sempre quando voce pedir o cpf do e ele cliente digitar um número de documento.
+                    4. `fn_buscar_por_telefone` / `fn_alterar_agendamento` / `fn_excluir_agendamento` / `fn_excluir_TODOS_agendamentos`:
+                         - QUANDO USAR: Gestão. Use para consultar, remarcar ou cancelar agendamentos existentes. O telefone já é extraído pelo sistema, basta enviar CONFIRMADO_NUMERO_ATUAL na chamada.
                     
         # ---------------------------------------------------------
         # 2.DADOS DA EMPRESA
@@ -2203,10 +2101,10 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         - AÇÃO: Responda a pergunta "na lata". Se ele perguntou "Tem aula pra mulher?", responda APENAS "Tem sim! O ambiente é seguro...". NÃO DIGA "Oi fulano".
                         - NENHUMA sondagem ou pergunta pode vir antes da resposta objetiva.
                     5. TOQUE DE HUMOR SUTIL: Use "micro-comentários" ocasionais e orgânicos sobre rotina ou treino, tão discretos que não interrompam o fluxo técnico da conversa.
-                    6. REGRA DE OURO DO SILÊNCIO: Responda apenas o que foi perguntado. Se o cliente perguntar preço ou modalidade, responda e pronto. O CPF só deve ser solicitado no final de tudo, como uma formalidade para garantir a vaga que o cliente já escolheu.
+                    6. REGRA DE OURO DO SILÊNCIO: Responda apenas o que foi perguntado. Se o cliente perguntar preço ou modalidade, responda e pronto. O horario só deve ser solicitado de maneira natural primeiro voce sempre deve atender , como uma formalidade para garantir a vaga que o cliente já escolheu.
 
             = REGRAS VISUAIS E DE ESTILO =
-                VISUAL E ESTILO (REGRAS TÉCNICAS DE OUTPUT)
+                VISUAL E ESTILO (REGRAS TÉCNICAS DE OUTPUT)6. REGRA DE OURO DO SILÊNCIO: Responda apenas o que foi perguntado. Se o cliente perguntar preço ou modalidade, responda e pronto. O envio do gabarito só deve ser feito no final de tudo, como uma formalidade para garantir a vaga que o cliente já escolheu.
                     1. FORMATAÇÃO WHATSAPP (LEITURA RÁPIDA):
                         - Quebra de Linha: Use 'Enter' a cada frase ou ideia. Proibido blocos de texto.
                         - TRAVA DE EMOJIS: Nunca termine suas frases com ":)". Evite excesso de emojis. Seja limpa e direta visualmente.
@@ -2271,7 +2169,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 (IMPORTANTE POUCAS PALAVRAS, NECESSARIA PRA DIZER O QUE PRECISA, NÃO FALE MUITO, POUCO E O SULFICIENTE)
                     1. MÉTODO RESPOSTA-GANCHO (Hierarquia de Resposta):
                     - PRIMEIRO: Entregue a INFORMAÇÃO que o cliente pediu com MÁXIMA BREVIDADE. Se ele perguntar "como funciona", escolha APENAS 1 (um) detalhe principal para citar. Jamais liste vários benefícios ou modalidades de uma vez só.
-                    - SEGUNDO: O CPF é o ultimo detalhe do fechamento. É estritamente PROIBIDO pedir o CPF enquanto o cliente estiver apenas tirando dúvidas ou sondando horários, querendo informações, nos conhecendo. Só peça o CPF após o cliente dizer "SIM" para um dia e horário específicos que você confirmou estarem disponíveis.
+                    - SEGUNDO: O gabarito de confirmação é o último detalhe do fechamento. É estritamente PROIBIDO enviar o gabarito enquanto o cliente estiver apenas tirando dúvidas ou sondando horários, querendo informações, nos conhecendo. Só envie o gabarito após o cliente dizer "SIM" para um dia e horário específicos que você confirmou estarem disponíveis.
                     - PROIBIDO: Responder uma dúvida de funcionamento/serviço apenas dizendo "Vem agendar pra ver". Isso é considerado erro grave de atendimento. O cliente precisa da informação antes de agendar.
                         - Perguntou Estacionamento? -> Responda + "Fica melhor pra vc vir direto do trabalho ou de casa?"
                         - Perguntou Area kids? -> Responda + "Nós temos serviços pra crianças se desevolverem tbm! Quantos anos tem?
@@ -2332,7 +2230,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                             2. "Cada cliente tem atenção especial no que precisa, o preço vem depois, primeiro é você. E outra coisa a aula é de graça!
                     - ESTRATÉGIA: Use a incerteza do preço para perguntar se ele quer fazer uma Aula Experimental que é gratís.
 
-                4. CONTROLE DE AGENDAMENTO: É PROIBIDO oferecer aula experimental, pedir CPF ou tentar agendar se o cliente estiver apenas tirando dúvidas de valores ou planos. Só fale de agendamento se o cliente usar palavras como: "quero ir", "vou aí", "queria conhecer", "posso testar?". Caso contrário, responda a dúvida e encerre a mensagem de forma gentil, sem perguntas.- 
+                4. CONTROLE DE AGENDAMENTO: É PROIBIDO oferecer aula experimental ou tentar agendar se o cliente estiver apenas tirando dúvidas de valores ou planos. Só fale de agendamento se o cliente usar palavras como: "quero ir", "vou aí", "queria conhecer", "posso testar?". Caso contrário, responda a dúvida e encerre a mensagem de forma gentil, sem perguntas.- 
                     TÁTICA DA ESCASSEZ (O Pulo do Gato): Nunca diga que a agenda está vazia. Crie valor no horário. Fale como se o agendamento já fosse o próximo passo natural.
                     - SCRIPT DE FECHAMENTO (Use variações disso):
                         * "Olha, to vendo aqui a agenda do Treinador, eu só tenho mais 2 horários vagos nesse periodo ! Vou agendar pra voce não ficar sem!"
@@ -2413,12 +2311,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             = FLUXO DE AGENDAMENTO TÉCNICO =
                 ATENÇÃO: É OBRIGATORIO ENVIAR O GABARITO (PASSO 5) PRO CLIENTE SEMPRE ANTES DELE CONFIRMAR E APÓS ELE CONFIRMAR POSITIVAMENTE Chame `fn_salvar_agendamento`.
                 TRAVA DE SERIALIZAÇÃO (ANTI-CRASH):
-                    O sistema falha se processar duas pessoas simultaneamente.
-                    Se o cliente disser "eu e minha esposa" ou mandar dois CPFs:
-                    1. IGNORE a segunda pessoa temporariamente.
-                    2. AVISE: "Pra não travar aqui, vamos cadastrar um de cada vez! Primeiro o seu..."
-                    3. CADASTRE o primeiro completo.
-                    4. SÓ APÓS o sucesso do primeiro, diga: "Pronto! Agora manda o nome e CPF dela."
+                     O sistema falha se processar duas pessoas simultaneamente.f
+                     Se o cliente quiser agendar para mais de uma pessoa ("eu e minha esposa"):
+                     1. IGNORE a segunda pessoa temporariamente.
+                     2. AVISE: "Pra não travar aqui, vamos agendar um de cada vez! Primeiro o seu..."
+                     3. CADASTRE o primeiro completo.
+                     4. SÓ APÓS o sucesso do primeiro, diga: "Pronto! Agora qual o nome e o telefone dela?"
 
                 REGRAS DE INTEGRIDADE (LEIS DO SISTEMA):
                     1. CEGUEIRA DE AGENDA: É PROIBIDO assumir horário livre. SEMPRE chame `fn_listar_horarios_disponiveis` antes de confirmar.
@@ -2434,35 +2332,25 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         3. RESPOSTA (Só após o retorno da Tool):
                             - Se Ocupado/Vazio: "Poxa, esse horário não tem :/ Só tenho X e Y. Pode ser?" (Negue direto).
                             - Se Disponível: "Tenho vaga sim! pode ser?" -> Vá para Passo 2.
+                        4 .IMPORTANTE: APENAS PASSE PRO NUMERO 2 QUANDO TIVER CERTO DO HORARIO QUE A PESSOA INFORMOU.
 
-                    PASSO 2: COLETA DE DADOS
-                        - IMPORTANTE: Você deve reparar se é uma boa hora pra pergutar do CPF, o cpf deve ser explicito sobre agendamento, quando voce tiver a confirmação.
-                        - Horário ok? -> Peça o CPF: "Qual seu CPF, por favor?"
+                    PASSO 2: O GABARITO (MOMENTO DA VERDADE)
+                         >>> CONDIÇÃO: Tenha Nome, Horário checado, e Serviço do agendamento escolhido. Não peça mais nada, avance direto para cá.
+                         1. RE-CHECAGEM: Chame `fn_listar_horarios_disponiveis` mais uma vez para garantir a vaga.
+                         2. TELEFONE: Use o {clean_number} automaticamente. O sistema cuidará disso.
+                         3. AÇÃO: Envie o texto EXATAMENTE assim e aguarde o "SIM":
 
-                    PASSO 3: AUDITORIA DE CPF (SEGURANÇA)
-                        - Cliente mandou CPF?
-                        - AÇÃO: Chame `fn_validar_cpf`. PROIBIDO validar "de cabeça".
-                        - Inválido: "Parece incorreto. Pode verificar?" (Trava o fluxo).
-                        - Válido: Agradeça e avance.
+                             Só para confirmar, ficou assim:
+                                 *Nome*: {known_customer_name}
+                                 *Telefone*: {clean_number}
+                                 *Serviço*: {{servico_selecionado}}
+                                 *Data*: {{data_escolhida}}
+                                 *Hora*: {{hora_escolhida}}
+                                 *Obs*: {{observacoes_cliente}} Preencha silenciosamente com informações úteis mencionadas.
 
-                    PASSO 4: O GABARITO (MOMENTO DA VERDADE)
-                        >>> CONDIÇÃO: Tenha Nome, CPF validado, Horário checado, Telefone e Observação do serviço do agendamento e informaçoes se o cliente passou.
-                        1. RE-CHECAGEM: Chame `fn_listar_horarios_disponiveis` mais uma vez para garantir a vaga.
-                        2. TELEFONE: Use o {clean_number} automaticamente. Só use outro se ele digitou explicitamente.
-                        3. AÇÃO: Envie o texto EXATAMENTE assim e aguarde o "SIM":
+                             Tudo certo, posso agendar?
 
-                            Só para confirmar, ficou assim:
-                                *Nome*: {known_customer_name}
-                                *CPF*: {{cpf_validado}}
-                                *Telefone*: {clean_number}
-                                *Serviço*: {{servico_selecionado}}
-                                *Data*: {{data_escolhida}}
-                                *Hora*: {{hora_escolhida}}
-                                *Obs*: {{observacoes_cliente}} Preencha o campo de "Obs" silenciosamente apenas com o serviço agendado e qualquer informação útil que o cliente JÁ TENHA mencionado naturalmente ao longo da conversa.
-
-                            Tudo certo, posso agendar?
-
-                    PASSO 6: O SALVAMENTO (COMMIT)
+                    PASSO 3: O SALVAMENTO (COMMIT)
                     >>> GATILHO: Cliente disse "SIM", "Pode", "Ok".
                     - AÇÃO FINAL: Chame `fn_salvar_agendamento`.
                     - Sucesso? Comemore e encerre.
@@ -2487,15 +2375,15 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 Assistant: "Às 19h não tenho, mas tenho uma turma começando às 18:30! Fica ruim pra vc chegar esse horário?"
 
             [EXEMPLO 3: AGENDAMENTO RÁPIDO]
-                User: "Quero marcar musculação pra amanhã cedo."
-                Assistant: (Chamada silenciosa à `fn_listar_horarios_disponiveis`)
-                Assistant: "Bora! Tenho vaga livre a manhã toda. Qual horário fica melhor?"
-                User: "As 07:00."
-                Assistant: "Fechado. Me manda seu CPF pra eu já deixar liberado na portaria?"
+                 User: "Quero marcar musculação pra amanhã cedo."
+                 Assistant: (Chamada silenciosa à `fn_listar_horarios_disponiveis`)
+                 Assistant: "Bora! Tenho vaga livre a manhã toda. Qual horário fica melhor?"
+                 User: "As 07:00."
+                 Assistant: "Fechado. Só vou confirmar aqui: [Gabarito de Confirmação]"
 
         === TRATAMENTO DE ERROS ===
         1. Horário não listado na Tool -> DIGA QUE NÃO TEM.
-        2. CPF Duplicado (`fn_buscar_por_cpf`) -> Pergunte qual dos dois agendamentos alterar.
+        2. Telefone Duplicado (`fn_buscar_por_telefone`) -> Pergunte qual dos dois agendamentos alterar.
         3. ENVIO DE CONTATOS: Sempre que oferecer o número do financeiro / RH (4499121-6103) caso o cliente queira avaliação , envio de curriculo ou rh da empresa.
 
             """
@@ -2573,7 +2461,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
     
     try:
         if not agenda_instance and call_name.startswith("fn_"):
-            if call_name in ["fn_listar_horarios_disponiveis", "fn_buscar_por_cpf", "fn_salvar_agendamento", "fn_excluir_agendamento", "fn_alterar_agendamento"]:
+            if call_name in ["fn_listar_horarios_disponiveis", "fn_buscar_por_telefone", "fn_salvar_agendamento", "fn_excluir_agendamento", "fn_alterar_agendamento"]:
                 return json.dumps({"erro": "A função de agendamento está desabilitada (Sem conexão com o DB da Agenda)."}, ensure_ascii=False)
 
         if call_name == "fn_listar_horarios_disponiveis":
@@ -2582,9 +2470,12 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
             resp = agenda_instance.listar_horarios_disponiveis(data_str=data, servico_str=servico)
             return json.dumps(resp, ensure_ascii=False)
 
-        elif call_name == "fn_buscar_por_cpf":
-            cpf = args.get("cpf")
-            resp = agenda_instance.buscar_por_cpf(cpf)
+        elif call_name == "fn_buscar_por_telefone":
+            telefone_arg = args.get("telefone", "")
+            if telefone_arg == "CONFIRMADO_NUMERO_ATUAL":
+                telefone_arg = contact_id
+                
+            resp = agenda_instance.buscar_por_telefone(telefone_arg)
             return json.dumps(resp, ensure_ascii=False)
 
         elif call_name == "fn_salvar_agendamento":
@@ -2600,7 +2491,6 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
 
             resp = agenda_instance.salvar(
                 nome=args.get("nome", ""),
-                cpf_raw=args.get("cpf", ""),
                 telefone=telefone_arg, # Use a variável modificada
                 servico=args.get("servico", ""),
                 data_str=args.get("data", ""),
@@ -2626,8 +2516,12 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
             return json.dumps(resp, ensure_ascii=False)
 
         elif call_name == "fn_excluir_agendamento":
+            telefone_arg = args.get("telefone", "")
+            if telefone_arg == "CONFIRMADO_NUMERO_ATUAL":
+                telefone_arg = contact_id
+                
             resp = agenda_instance.excluir(
-                cpf_raw=args.get("cpf", ""),
+                telefone=telefone_arg,
                 data_str=args.get("data", ""),
                 hora_str=args.get("hora", "")
             )
@@ -2638,7 +2532,6 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                     msg_admin = (
                         f"🗑️ *AGENDAMENTO CANCELADO*\n\n"
                         f"📅 *Data:* {args.get('data')} às {args.get('hora')}\n"
-                        f"🆔 *CPF:* {args.get('cpf')}\n"
                         f"⚠️ *Status:* Removido via Bot."
                     )
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin)
@@ -2650,13 +2543,20 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
             return json.dumps(resp, ensure_ascii=False)
         
         elif call_name == "fn_excluir_TODOS_agendamentos":
-            cpf = args.get("cpf")
-            resp = agenda_instance.excluir_todos_por_cpf(cpf_raw=cpf)
+            telefone_arg = args.get("telefone", "")
+            if telefone_arg == "CONFIRMADO_NUMERO_ATUAL":
+                telefone_arg = contact_id
+                
+            resp = agenda_instance.excluir_todos_por_telefone(telefone=telefone_arg)
             return json.dumps(resp, ensure_ascii=False)
 
         elif call_name == "fn_alterar_agendamento":
+            telefone_arg = args.get("telefone", "")
+            if telefone_arg == "CONFIRMADO_NUMERO_ATUAL":
+                telefone_arg = contact_id
+                
             resp = agenda_instance.alterar(
-                cpf_raw=args.get("cpf", ""),
+                telefone=telefone_arg,
                 data_antiga=args.get("data_antiga", ""),
                 hora_antiga=args.get("hora_antiga", ""),
                 data_nova=args.get("data_nova", ""),
@@ -2733,19 +2633,6 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         elif call_name == "fn_solicitar_intervencao":
             motivo = args.get("motivo", "Motivo não especificado pela IA.")
             return json.dumps({"sucesso": True, "motivo": motivo, "tag_especial": "[HUMAN_INTERVENTION]"})
-        
-        elif call_name == "fn_validar_cpf":
-            cpf = args.get("cpf_input", "")
-            resp = validar_cpf_logica(cpf)
-            
-            # --- CORREÇÃO AQUI: Adicionamos contexto para a IA falar ---
-            if resp.get("valido"):
-                resp["instrucao_para_ia"] = "O CPF é VÁLIDO. Agradeça o cliente e siga para o próximo passo do agendamento (pergunte se tem observações ou vá para o Gabarito)."
-            else:
-                resp["instrucao_para_ia"] = "O CPF é INVÁLIDO. Avise o cliente educadamente e peça para digitar novamente."
-            # -----------------------------------------------------------
-
-            return json.dumps(resp, ensure_ascii=False)
         
         else:
             return json.dumps({"erro": f"Ferramenta desconhecida: {call_name}"}, ensure_ascii=False)
@@ -2969,7 +2856,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
                 
                 # Se a limpeza apagou tudo, gera um fallback humano amigável
                 if not ai_reply_text:
-                    ai_reply_text = "Certinho! Pode me passar seu CPF para eu validar aqui?"
+                    ai_reply_text = "Tudo certo por aqui! Posso confirmar esse agendamento pra você?"
 
             # --- INTERCEPTOR DE NOME (BACKUP FINAL) ---
             if "fn_capturar_nome" in ai_reply_text:
@@ -3826,14 +3713,12 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                     send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin, delay_ms=1000)
             
             else:
-                # -----------------------------------------------------------
-                # ENVIO ROBUSTO (MANTÉM SUA LÓGICA DE SPLIT)
-                # -----------------------------------------------------------
+
                 ai_reply = ai_reply.strip()
 
                 def is_gabarito(text):
                     text_clean = text.lower().replace("*", "")
-                    required = ["nome:", "cpf:", "telefone:", "serviço:", "servico:", "data:", "hora:"]
+                    required = ["nome:", "telefone:", "serviço:", "servico:", "data:", "hora:"]
                     found = [k for k in required if k in text_clean]
                     return len(found) >= 3
 
@@ -4012,20 +3897,19 @@ def api_meus_agendamentos():
                 created_at_str = created_at_dt.astimezone(FUSO_HORARIO).strftime("%d/%m/%Y %H:%M")
 
             item = {
-                "id": str(ag.get("_id")), 
-                "dia": dia_str,
-                "dia_visual": dia_visual,
-                "hora_inicio": hora_inicio_str, # Vai exatamente o que está no banco (11:00)
-                "hora_fim": hora_fim_str,
-                "servico": ag.get("servico", "Atendimento").capitalize(),
-                "status": status_final,
-                "cliente_nome": ag.get("nome", "Sem Nome").title(),
-                "cliente_telefone": ag.get("cliente_telefone") or ag.get("telefone", ""),
-                "cpf": ag.get("cpf", ""),
-                "observacao": ag.get("observacao", ""),
-                "owner_whatsapp_id": ag.get("owner_whatsapp_id", ""),
-                "created_at": created_at_str
-            }
+                 "id": str(ag.get("_id")), 
+                 "dia": dia_str,
+                 "dia_visual": dia_visual,
+                 "hora_inicio": hora_inicio_str, 
+                 "hora_fim": hora_fim_str,
+                 "servico": ag.get("servico", "Atendimento").capitalize(),
+                 "status": status_final,
+                 "cliente_nome": ag.get("nome", "Sem Nome").title(),
+                 "cliente_telefone": ag.get("cliente_telefone") or ag.get("telefone", ""),
+                 "observacao": ag.get("observacao", ""),
+                 "owner_whatsapp_id": ag.get("owner_whatsapp_id", ""),
+                 "created_at": created_at_str
+             }
             lista_formatada.append(item)
 
         return jsonify(lista_formatada), 200
@@ -4088,7 +3972,6 @@ def api_criar_agendamento():
     
     # Extrai dados do formulário do App
     nome = data.get('nome')
-    cpf = data.get('cpf')
     telefone = data.get('telefone')
     servico = data.get('servico', 'reunião')
     data_str = data.get('data') # DD/MM/YYYY
@@ -4106,7 +3989,6 @@ def api_criar_agendamento():
     # Usa o método salvar() que já tem todas as travas de segurança (conflito, feriado, etc)
     resultado = agenda_instance.salvar(
         nome=nome,
-        cpf_raw=cpf,
         telefone=telefone,
         servico=servico,
         observacao=observacao,
@@ -4165,8 +4047,7 @@ def api_gerenciar_folga():
             "fim": fim_utc,       # Salva em UTC
             "created_at": datetime.now(timezone.utc),
             "owner_whatsapp_id": "admin",
-            "cliente_telefone": "",
-            "cpf": ""
+            "cliente_telefone": ""
         })
         return jsonify({"sucesso": True}), 200
 
