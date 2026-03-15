@@ -4107,6 +4107,18 @@ def api_travar_numero():
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
+@app.route('/api/conversas/travados', methods=['GET'])
+def api_listar_travados():
+    """Retorna a lista de todos os números travados manualmente para exibição no App."""
+    if conversation_collection is None:
+        return jsonify({"erro": "Banco offline"}), 500
+    try:
+        doc = conversation_collection.find_one({'_id': 'numeros_travados'})
+        lista = doc.get('lista', []) if doc else []
+        return jsonify({"sucesso": True, "lista": lista}), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
 @app.route('/api/conversas', methods=['GET'])
 def api_listar_conversas():
     if conversation_collection is None:
