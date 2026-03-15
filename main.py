@@ -943,15 +943,13 @@ def analisar_status_da_conversa(history):
             {historico_texto}
 
             1. SUCESSO (Vitória):
-                - O cliente disse que vai comparecer mais tarde, ou vai vir outro dia. 
+                - O cliente disse que vai comparecer mais tarde, ou vai vir outro dia(Voce notou que a venda é certa). 
                 - Você entendeu que nos ganhamos a venda ou o agendamento.
-                - Se foi engano (alguém mandando mensagem que era pra outra pessoa, pode se dizer que é sucesso pra encerrar a converssa.)
                 - Se o cliente disser que ja esta presencialmente na unidade , se esta na academia, se ja esta no local , ou indo , a caminho é sucesso.
                 - O agendamento foi CONFIRMADO (o bot disse "agendado", "marcado", "te espero").
                 - O Cliente confirmou que vai comparecer.
                 - Cliente disse que vai na academia ou que esta a caminho.
-                - Se o cliente disse que queria falar com financeiro e foi enviado este numero pra ele entrar em contato: 99121-6103
-                - Se o cliente disser , já deu certo!
+                - Se o cliente disser que ja esta dentro da academia, no estabelecimento, já deu certo!
             
             2. FRACASSO (Perda):
                 - Você entendeu que perdemos a venda ou o agendamento.
@@ -965,9 +963,17 @@ def analisar_status_da_conversa(history):
                 - O agendamento AINDA NÃO FOI FINALIZADO (estão escolhendo horário).
                 - A conversa parou no meio de um assunto.
             
+            4. STAND_BY (Neutro/Administrativo):
+                - Alguém querendo vender algo para a academia.
+                - O cliente queria falar com o financeiro/RH, renovar plano, trancar matrícula ou tratar de assuntos de escritório.
+                - Envio de currículos.
+                - Mensagem enviada por engano ("foi engano", "número errado").
+                - Qualquer pessoa que NÃO É UM POSSÍVEL CLIENTE DE VENDAS.
+                - Se o cliente disse que queria falar com financeiro e foi enviado este numero pra ele entrar em contato: 99121-6103
+            
             REGRA FINAL: Na dúvida entre Fracasso e Andamento, escolha ANDAMENTO.
 
-            Responda APENAS uma palavra: SUCESSO, FRACASSO ou ANDAMENTO.
+            Responda APENAS uma palavra: SUCESSO, FRACASSO, ANDAMENTO ou STAND_BY.
             """
             
             resp = modelo_ia.generate_content(prompt_auditoria)
@@ -977,6 +983,7 @@ def analisar_status_da_conversa(history):
             
             if "SUCESSO" in status_ia: return "sucesso", in_tokens, out_tokens
             if "FRACASSO" in status_ia: return "fracasso", in_tokens, out_tokens
+            if "STAND_BY" in status_ia or "STAND BY" in status_ia: return "stand_by", in_tokens, out_tokens
             
             return "andamento", in_tokens, out_tokens
 
@@ -1175,7 +1182,11 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used_
         # --- LÓGICA DE RESET DE ESTÁGIO ---
         should_reset_stage = False
         
-        if status_calculado == 'andamento':
+        if status_calculado == 'stand_by':
+            update_payload['followup_stage'] = 99 # Trava de segurança: congela no estágio inativo
+            should_reset_stage = False # Garante que não vai resetar para 0
+            
+        elif status_calculado == 'andamento':
             should_reset_stage = True
         
         elif status_calculado != status_anterior:
@@ -4060,6 +4071,42 @@ def api_gerenciar_folga():
 
     return jsonify({"erro": "Ação inválida"}), 400
 
+@app.route('/api/conversas/travar', methods=['POST'])
+def api_travar_numero():
+    """Trava ou destrava o bot para um cliente específico."""
+    if conversation_collection is None:
+        return jsonify({"erro": "Banco offline"}), 500
+
+    data = request.json
+    numero = data.get('telefone')
+    acao = data.get('acao') # 'travar' ou 'destravar'
+
+    if not numero:
+        return jsonify({"erro": "Telefone não informado"}), 400
+
+    # Higieniza o número igual a função is_numero_travado
+    num_str = re.sub(r'\D', '', str(numero))
+    if len(num_str) == 13 and num_str.startswith('55'):
+        num_formatado = num_str[:4] + num_str[5:]
+    else:
+        num_formatado = num_str
+
+    try:
+        if acao == 'travar':
+            conversation_collection.update_one(
+                {'_id': 'numeros_travados'},
+                {'$addToSet': {'lista': num_formatado}}, # Adiciona sem duplicar
+                upsert=True
+            )
+        elif acao == 'destravar':
+            conversation_collection.update_one(
+                {'_id': 'numeros_travados'},
+                {'$pull': {'lista': num_formatado}} # Remove da lista
+            )
+        return jsonify({"sucesso": True, "numero": num_formatado, "acao": acao}), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
 @app.route('/api/conversas', methods=['GET'])
 def api_listar_conversas():
     if conversation_collection is None:
@@ -4089,6 +4136,9 @@ def api_listar_conversas():
             pass
 
     try:
+        doc_travados = conversation_collection.find_one({'_id': 'numeros_travados'})
+        lista_travados = doc_travados.get('lista', []) if doc_travados else []
+
         # Busca ordenando da mais recente para a mais antiga
         resultados = list(conversation_collection.find(query).sort("last_interaction", -1))
         
@@ -4096,16 +4146,22 @@ def api_listar_conversas():
         for r in resultados:
             last_int = r.get("last_interaction")
             dt_str = last_int.isoformat() if isinstance(last_int, datetime) else ""
+            
+            # Verifica se o telefone está na lista de travados
+            telefone_id = str(r.get("_id"))
+            is_travado = telefone_id in lista_travados
 
             conversas.append({
-                "telefone": str(r.get("_id")),
+                "telefone": telefone_id,
                 "nome": r.get("customer_name") or r.get("sender_name") or "Sem Nome",
                 "status": r.get("conversation_status", "andamento"),
                 "data_contato": dt_str,
-                "perfil": r.get("client_profile", {})
+                "perfil": r.get("client_profile", {}),
+                "is_travado": is_travado # <--- NOVA FLAG AQUI
             })
             
         return jsonify(conversas), 200
+    
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     
