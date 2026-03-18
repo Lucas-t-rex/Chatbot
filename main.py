@@ -1472,8 +1472,34 @@ def is_evolution_online():
         # Se der erro de conexão (Servidor desligado, fly.io caiu, etc)
         return False
 
+def is_webhook_configurado():
+    """
+    Verifica se o webhook está ATIVO e com URL configurada na Evolution API.
+    Detecta quando o usuário remove o webhook pela UI.
+    """
+    try:
+        base_url = EVOLUTION_API_URL
+        if base_url.endswith('/'):
+            base_url = base_url[:-1]
+
+        url = f"{base_url}/webhook/find/chatbot"
+        headers = {"apikey": EVOLUTION_API_KEY}
+
+        response = requests.get(url, headers=headers, timeout=5)
+
+        if response.status_code == 200:
+            data = response.json()
+            # Suporta Evolution API v1 e v2 (estruturas diferentes)
+            webhook_info = data.get('webhook', data)
+            enabled = webhook_info.get('enabled', False)
+            url_conf = webhook_info.get('url', '')
+            return bool(enabled and url_conf)
+        return False
+    except:
+        return False
+    
 def subtrair_tempo_util(referencia, minutos):
-    """Cronômetro inteligente: subtrai o tempo pausando durante a madrugada (00h às 06h59)."""
+    """Cronômetro inteligente: subtrai o tempo pausando durante a madrugada."""
     resultado = referencia
     while minutos > 0:
         resultado -= timedelta(minutes=1)
@@ -1495,6 +1521,7 @@ def verificar_followup_automatico():
         bot_status = conversation_collection.find_one({'_id': 'BOT_STATUS'})
         bot_ativo = bot_status.get('is_active', True) if bot_status else True
         evolution_online = is_evolution_online()
+        webhook_ativo = is_webhook_configurado() 
 
         regras = [
             {"status": "sucesso",  "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_SUCESSO,  "fallback": "Obrigada! Qualquer coisa estou por aqui."},
@@ -1531,10 +1558,7 @@ def verificar_followup_automatico():
             if resultado_expirados.modified_count > 0:
                 print(f"🗑️ Descartando {resultado_expirados.modified_count} follow-ups atrasados do estágio {r['stage_atual']}.")
 
-            # --- AVALIA SE PODE CONTINUAR ---
-            # Se o bot foi pausado pelo admin OU se a API do WhatsApp caiu, paramos por aqui!
-            # O código não tentará enviar. Na próxima rodada, se tiver ficado atrasado, a Ação 1 joga no lixo.
-            if not bot_ativo or not evolution_online:
+            if not bot_ativo or not evolution_online or not webhook_ativo:
                 continue
 
             # --- AÇÃO 2: ENVIAR PARA OS CLIENTES DENTRO DO PRAZO CERTO ---
@@ -1607,12 +1631,38 @@ def verificar_lembretes_agendados():
     if agenda_instance is None or conversation_collection is None:
         return
 
+    # ── TRAVA 1: MADRUGADA ──────────────────────────────────────────────────
+    agora_check = datetime.now(FUSO_HORARIO)
+    if 0 <= agora_check.hour < 5:
+        print("🌙 [Lembretes] Madrugada. Nenhum lembrete enviado.")
+        return
+
+    # ── TRAVA 2: BOT DESLIGADO (comando 'bot off') ──────────────────────────
+    try:
+        bot_status = conversation_collection.find_one({'_id': 'BOT_STATUS'})
+        bot_ativo = bot_status.get('is_active', True) if bot_status else True
+        if not bot_ativo:
+            print("🤖 [Lembretes] Bot DESLIGADO. Nenhum lembrete enviado.")
+            return
+    except Exception as e:
+        print(f"⚠️ [Lembretes] Erro ao verificar status do bot: {e}")
+
+    # ── TRAVA 3: EVOLUTION OFFLINE ──────────────────────────────────────────
+    if not is_evolution_online():
+        print("⚠️ [Lembretes] Evolution API offline. Nenhum lembrete enviado.")
+        return
+
+    # ── TRAVA 4: WEBHOOK REMOVIDO DA UI ────────────────────────────────────
+    if not is_webhook_configurado():
+        print("⚠️ [Lembretes] Webhook não configurado. Nenhum lembrete enviado.")
+        return
+
     print("⏰ [Job] Verificando lembretes de agendamento (Hora Maringá)...")
-    
+
     try:
         # --- CORREÇÃO DE FUSO HORÁRIO ---
         agora_brasil = datetime.now(FUSO_HORARIO)
-        agora = agora_brasil.replace(tzinfo=None) # Remove timezone para comparar com o banco
+        agora = agora_brasil.replace(tzinfo=None)
         
         janela_limite = agora + timedelta(hours=24)
         
@@ -1790,7 +1840,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                (Procure por: ""Quero informações", Como funciona", "Preço", "Horário", "Onde fica", "Tem tal aula" ).
             
             [CENÁRIO A: EXISTE UMA PERGUNTA ESPECÍFICA (JÁ SEI O QUE ELE QUER)]
-            1. SAÚDE: "Muuuuuito Prazer, {known_customer_name}!"
+            1. SAÚDE: "Muuuuuito Prazer, {known_customer_name}! Aqui é a Helena IA da Brooklyn Academia.""
             2. MATAR A DÚVIDA: Responda a pergunta que ele fez lá atrás IMEDIATAMENTE.
                - Se foi "Como funciona": Explique os equipamentos, professores e ambiente (Use os dados de [SERVIÇOS]).
                - Se foi "Preço": Use a técnica de falar dos planos flexíveis, mas foque no valor da entrega.
@@ -1799,13 +1849,13 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             [CENÁRIO b: PERGUNTA VAGA / GENÉRICA (NÃO SEI O QUE ELE QUER)]
             - Gatilho: Ele disse apenas "Quero informações", "Como funciona", "Queria saber da academia", "Me explica" (sem dizer sobre o que).
             - AÇÃO:
-              1. SAÚDE: "Que bom te ver por aqui {known_customer_name}!"
+              1. SAÚDE: "Que bom te ver por aqui {known_customer_name}! Aqui é a Helena IA da Brooklyn Academia.""
               2. PERGUNTA DE FILTRO: Não explique nada ainda. Pergunte o que ele quer saber.
               - Script Sugerido: "Nós temos musculação, lutas e dança. Vc quer saber sobre valores, horários, localização ou sobre as aulas?"
               (Obrigatório pedir para ele especificar).
 
             [CENÁRIO B: NÃO TEM PERGUNTA NENHUMA, APENAS "OI/OLÁ"]
-            1. SAÚDE: "Muuuuuito Prazer, {known_customer_name}!"
+            1. SAÚDE: "Muuuuuito Prazer, {known_customer_name}! Aqui é a Helena da Brooklyn Academia."
             2. SONDE: "Já treina ou tá querendo começar agora?"
             """
         else:
@@ -2442,11 +2492,11 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             PRIORIDADE 4: RECIPROCIDADE E SAUDAÇÃO (O CORRETOR DE "OI")
             - Olhe o [HISTÓRICO] acima.
             - SITUAÇÃO A: O cliente apenas disse "Oi/Olá"?
-                -> Responda: "Oieee {saudacao}! Td bem por aí?"
+                -> Responda: "Oieee {saudacao}! Aqui é a Helena IA da Brooklyn Academia. Td bem por aí? Como posso te chamar?"
             - SITUAÇÃO B: O cliente perguntou "Tudo bem?" ou "Como vai?"
-                -> Responda: "Tudo ótimo por aqui! E com vc? Como é seu nome?"
+                -> Responda: "Tudo ótimo por aqui! Aqui é a Helena IA da Brooklyn Academia. E com vc? Como é seu nome?"
             - SITUAÇÃO C: O cliente respondeu que está bem ("Tudo joia", "Tudo sim")?
-                -> Responda: "Que bom! E qual seu nome ?"
+                -> Responda: "Que bom! Aqui é a Helena da Brooklyn IA. E qual seu nome?"
             
             PRIORIDADE 5: FILTRO DE ABSURDOS
             - O cliente disse algo sem sentido ou recusou falar o nome?
