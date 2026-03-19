@@ -1711,7 +1711,7 @@ def verificar_lembretes_agendados():
                 # --- MENSAGEM ATUALIZADA ---
                 msg_lembrete = (
                     f"{nome_cliente}! Só reforçando. você tem *{nome_servico}* com a gente {texto_dia} às {hora_formatada}. "
-                    "Te espero ansiosa!"
+                    "Estamos esperando!"
                 )
 
                 jid_destino = f"{destinatario_id}@s.whatsapp.net"
@@ -3694,11 +3694,16 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                 return 
         except: pass
 
-        # --- Checagem Intervenção ---
+ 
         convo_status = conversation_collection.find_one({'_id': clean_number})
         if convo_status and convo_status.get('intervention_active', False):
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
             return 
+
+        # --- Checagem Número Travado (Correção para IDs Fantasmas/LIDs) ---
+        if is_numero_travado(clean_number):
+            print(f"🛑 [Atendimento Humano] Número {clean_number} travado manualmente. IA abortada após resolver o LID.")
+            return
 
         # Pega o nome para passar pra IA
         known_customer_name = convo_status.get('customer_name') if convo_status else None
