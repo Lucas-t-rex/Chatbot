@@ -51,8 +51,8 @@ BLOCOS_DE_TRABALHO = {
     2: [{"inicio": "05:00", "fim": "22:00"}], # Quarta
     3: [{"inicio": "05:00", "fim": "22:00"}], # Quinta
     4: [{"inicio": "05:00", "fim": "21:00"}], # Sexta (Fecha 1h mais cedo)
-    5: [{"inicio": "08:00", "fim": "10:00"}, {"inicio": "15:00", "fim": "17:00"}], # Sábado (Dois turnos)
-    6: [{"inicio": "08:00", "fim": "10:00"}]  # Domingo
+    5: [], # Sábado (Sem blocos para agendamentos)
+    6: []  # Domingo (Sem blocos para agendamentos)
 }
 FOLGAS_DIAS_SEMANA = [] # Folga Domingo
 MAPA_DIAS_SEMANA_PT = { 5: "sábado", 6: "domingo" }
@@ -71,10 +71,10 @@ GRADE_HORARIOS_SERVICOS = {
         0: ["18:30", "19:30"], 2: ["18:30", "19:30"], 4: ["19:00"] # Seg, Qua, Sex
     },
     "jiu-jitsu": {
-        1: ["20:00"], 3: ["20:00"], 5: ["08:30"] # Ter, Qui, Sáb
+        1: ["20:00"], 3: ["20:00"] # Ter e Qui (Sábado removido para agendamentos)
     },
     "jiu-jitsu kids": {
-        1: ["18:15"], 3: ["18:15"], 5: ["09:30"] # Ter e Qui
+        1: ["18:15"], 3: ["18:15"] # Ter e Qui (Sábado removido para agendamentos)
     },
     "capoeira": {
         0: ["20:40"], 2: ["20:40"], 4: ["20:00"] # Seg, Qua, Sex
@@ -84,6 +84,7 @@ GRADE_HORARIOS_SERVICOS = {
         1: ["19:00"], 3: ["19:00"] # Ter e Qui a noite
     }
 }
+
 
 LISTA_SERVICOS_PROMPT = ", ".join(MAPA_SERVICOS_DURACAO.keys())
 SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
@@ -483,9 +484,11 @@ class Agenda:
             return {"erro": f"Serviço '{servico}' não reconhecido. Os serviços válidos são: {LISTA_SERVICOS_PROMPT}"}
 
         # Validação de Horário de Funcionamento
+        if dt.weekday() in [5, 6]:
+            return {"erro": "Não realizamos agendamentos de aulas aos finais de semana. Por favor, escolha um dia entre segunda e sexta."}
+            
         if not self._cabe_no_bloco(dt, hora, duracao_minutos):
-            fim_dt_calc = datetime.combine(dt.date(), str_to_time(hora)) + timedelta(minutes=duracao_minutos)
-            return {"erro": f"O horário {hora} ultrapassa o fechamento da academia."}
+            return {"erro": f"O horário {hora} é inválido ou ultrapassa o fechamento para agendamentos."}
 
         try:
             # --- 3. PREPARAÇÃO PARA O BANCO ---
@@ -920,12 +923,8 @@ def analisar_status_da_conversa(history):
     for msg in msgs_para_analise:
         text = msg.get('text', '')
         role = "Bot" if msg.get('role') in ['assistant', 'model'] else "Cliente"
-        
-        # --- 1. REGRAS DE FERRO (Verificação Automática) ---
-        
-        # SUCESSO ABSOLUTO: Se a função de salvar agendamento foi chamada com sucesso.
-        if "fn_salvar_agendamento" in text or "[HUMAN_INTERVENTION]" in text:
-            print(f"✅ [Auditor] Sucesso detectado via: {'Agendamento' if 'fn_salvar_agendamento' in text else 'Intervenção Humana'}")
+
+        if any(x in text for x in ["fn_salvar_agendamento", "fn_alterar_agendamento", "[HUMAN_INTERVENTION]"]):
             return "sucesso", 0, 0
 
         # Prepara o texto limpo para a IA analisar o restante
@@ -964,6 +963,8 @@ def analisar_status_da_conversa(history):
                 - A conversa parou no meio de um assunto.
             
             4. STAND_BY (Neutro/Administrativo):
+                - Alguém querendo vender algo para a academia (FORNECEDORES).
+                - Pessoas perguntando sobre ESTÁGIO ou vagas de emprego.
                 - Alguém querendo vender algo para a academia.
                 - O cliente queria falar com o financeiro/RH, renovar plano, trancar matrícula ou tratar de assuntos de escritório.
                 - Envio de currículos.
@@ -1114,6 +1115,8 @@ def executar_profiler_cliente(contact_id):
         "perfil_comportamental": "", // Classifique EXECUTOR (D), INFLUENTE (I), ESTÁVEL (S) ou PLANEJADOR (C) baseado no guia acima.
         "estilo_de_comunicacao": "",
         "fatores_de_decisao": "",
+        "origem_contato": "", // Por onde o cliente nos conheceu (Google, Instagram, Facebook, Indicação, Passou na frente, etc).
+        "objecoes:": "",
         "nivel_de_relacionamento": "",
         "objecoes:": "",
         "desejos": "",
@@ -1690,6 +1693,37 @@ def verificar_lembretes_agendados():
                     continue
 
                 data_inicio = ag["inicio"]
+
+                # --- NOVA LÓGICA DE PERÍODOS E ANTECEDÊNCIA DE 12 HORAS ---
+                created_at_utc = ag.get("created_at")
+                if created_at_utc:
+                    # Converte a data de criação para o fuso local para cálculo exato
+                    created_at_local = created_at_utc.replace(tzinfo=timezone.utc).astimezone(FUSO_HORARIO).replace(tzinfo=None)
+                    
+                    # Se agendou com 12h ou menos de antecedência, ignora o lembrete silenciosamente
+                    if (data_inicio - created_at_local) <= timedelta(hours=12):
+                        agenda_instance.collection.update_one({"_id": ag["_id"]}, {"$set": {"reminder_sent": True}})
+                        continue
+                
+                # Definição dos blocos de liberação baseados no horário do agendamento
+                if data_inicio.hour < 12:
+                    # Agendamento de Manhã: Libera envio a partir das 18h do dia anterior
+                    dia_anterior = data_inicio.date() - timedelta(days=1)
+                    hora_liberacao = datetime.combine(dia_anterior, dt_time(18, 0))
+                
+                elif data_inicio.hour <= 18:
+                    # Agendamento de Tarde (até 18h): Libera envio a partir das 08h do mesmo dia
+                    hora_liberacao = datetime.combine(data_inicio.date(), dt_time(8, 0))
+                
+                else:
+                    # Agendamento de Noite (após 18h): Libera envio a partir das 14h do mesmo dia
+                    hora_liberacao = datetime.combine(data_inicio.date(), dt_time(14, 0))
+                
+                # Se o momento atual ainda não atingiu o portão de liberação, pula para o próximo
+                if agora < hora_liberacao:
+                    continue
+                # ------------------------------------------------------------
+
                 nome_cliente = ag.get("nome", "Cliente").split()[0].capitalize()
                 
                 # --- NOVO: PEGA O NOME DO SERVIÇO ---
@@ -1893,6 +1927,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                                 AÇÃO: Afirme! Diga: "Como é sua primeira vez, vamos pegar leve..." ou "Perfeito pra quem tá começando...".
                             -> Se diz "Já treina": É PROIBIDO perguntar se é a primeira vez. Diga: "Como você já tem experiência...".
                         
+                        - Verifique o campo 'origem_contato':
+                            -> Se estiver VAZIO (ou seja, não sabemos de onde ele veio) E a conversa já passou da fase inicial de saudação:
+                                AÇÃO: Encontre uma brecha natural no meio do assunto (na segunda ou terceira mensagem) para perguntar como ele nos conheceu.
+                                SCRIPT SUGERIDO: "Ah, por curiosidade, como vc achou a gente? Foi no Insta, Google, indicação?" (Faça isso de forma leve, parecendo curiosidade real, NUNCA na primeira mensagem).
+                            -> Se já estiver preenchido: É PROIBIDO perguntar novamente de onde ele veio.
+                        
                         - Verifique o campo 'objetivo_principal' ou 'principal_dor_problema':
                             -> Se tem dados (Ex: "Perder peso", "Hipertrofia"): É PROIBIDO perguntar "Qual seu objetivo?".
                                 AÇÃO: Use o dado! "Pra secar como você quer..." ou "Pra ganhar massa...".
@@ -2001,18 +2041,28 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 (Não envie apenas o link solto, envie o endereço escrito acima e o link abaixo).
                 CONTATO: Telefone: (44) 99121-6103 | HORÁRIO: Seg a Qui 05:00-22:00 | Sex 05:00-21:00 | Sáb 08:00-10:00 e 15:00-17:00 | Dom 08:00-10:00.
                 
-            = MATRÍCULA & SUPORTE (DISCERNIMENTO CRÍTICO) =
+            = MATRÍCULA, SUPORTE E TRIAGEM ADMINISTRATIVA (DISCERNIMENTO CRÍTICO) =
                 
-                CENÁRIO 1: CLIENTE NOVO (Quer fazer matrícula / Entrar na academia)
-                    - GATILHO: O cliente diz "quero me matricular", "como faz pra entrar", "quero fazer matrícula".
-                    - AÇÃO: A matrícula é presencial. O seu objetivo é trazer ele para a academia (AGENDAR).
-                    - RESPOSTA OBRIGATÓRIA: "A matrícula é feita aqui presencialmente na recepção, é super rapidinho! Vamos agendar um horário pra você vir! Que dia fica bom?"
-                    - PROIBIDO: Não mande o número do financeiro para quem quer entrar.
-                
-                CENÁRIO 2: CLIENTE ATUAL, CLIENTE ANTIGO, AMIGO DO DONO, RH (Financeiro / Pendências / Renovar / Avaliações Fisicas / Curriculos)
-                    - GATILHO: O cliente diz "minha matrícula venceu", "boleto", "trancar", "cancelar", "pagar", "resolver pendência".
-                    - AÇÃO:Informe que o financeiro cuida desses agendamentos e valores. Aí sim, envie o contato de suporte.
-                    - RESPOSTA: "Para resolver pendências ou renovações, chama o financeiro no 4499121-6103! qlq duvida me avisa!"
+                CENÁRIO 1: CLIENTE NOVO (Vendas / Conversão)
+                    - GATILHO: "quero me matricular", "como faz pra entrar", "valor da mensalidade", "aula experimental", "quero treinar".
+                    - AÇÃO: O foco é trazê-lo para a unidade. A matrícula é presencial.
+                    - RESPOSTA OBRIGATÓRIA: "A matrícula é feita aqui presencialmente na recepção, é rapidinho! Vamos agendar um horário pra você vir conhecer? Que dia fica bom?"
+                    - PROIBIÇÃO: JAMAIS envie o contato do financeiro para interessados em começar. O bot deve converter.
+
+                CENÁRIO 2: ESTÁGIO, CURRÍCULOS E RH
+                    - GATILHO: "vaga de estágio", "entregar currículo", "vaga de emprego", "trabalhar aí", "estágio de educação física".
+                    - AÇÃO: Recue do fluxo de vendas. Não agende aula nem peça objetivos de treino.
+                    - RESPOSTA OBRIGATÓRIA: "Opa! Sobre estágio ou vagas na equipe, o pessoal do administrativo que cuida de toda a análise de currículos. Chama eles nesse número aqui: 44 99121-6103. Boa sorte!"
+
+                CENÁRIO 3: FORNECEDORES E PARCERIAS (B2B)
+                    - GATILHO: Venda de suplementos, equipamentos, manutenção, "falar com o dono sobre produto", "parceria de divulgação".
+                    - AÇÃO: Marcar a conversa como Stand-by mental. Não ofereça aula experimental.
+                    - RESPOSTA OBRIGATÓRIA: "Oie! Pra parcerias ou venda de produtos, você precisa falar direto com nosso setor de compras/financeiro. O contato deles é o 44 99121-6103. Eles conseguem te dar atenção por lá!"
+
+                CENÁRIO 4: CLIENTE ATUAL / EX-ALUNO (Financeiro e Administrativo)
+                    - GATILHO: "matrícula venceu", "boleto", "trancar", "cancelar", "pagar", "pendência", "renovar", "exame médico", "avaliação física".
+                    - AÇÃO: Informe que o financeiro centraliza estes atendimentos e envie o link/número.
+                    - RESPOSTA OBRIGATÓRIA: "Pra resolver renovação, boletos ou trancamento, o pessoal do financeiro te ajuda rapidinho! Chama eles no 44 99121-6103. Qualquer outra dúvida sobre os treinos, estou aqui!"
 
             = POLÍTICA DE PREÇOS (CRÍTICO - LEI ANTI-ALUCINAÇÃO) =
                 1. REGRA: Você não sabe valores.
@@ -2386,6 +2436,13 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     3. FILTRO DE GRADE (Lutas/Dança): Se for Muay Thai/Jiu/Dança, o horário da Tool DEVE bater com a GRADE (#2 DADOS DA EMPRESA). Se não bater, negue.
                 
                 =PROTOCOLO DE AGENDAMENTO IMUTÁVEL=
+
+                    PASSO 0: RECONHECIMENTO DE INTENÇÃO DE REAGENDAMENTO
+                        >>> GATILHO: APENAS SE VOCE NOTAR QUE O CLIENTE QUER ALTERAR OU CANCELAR O HORARIO DELE . Palavras como "mudar o horario", "trocar o horario", "outro horário", "reagendar".
+                        1. AÇÃO: Chame fn_buscar_por_telefone (CONFIRMADO_NUMERO_ATUAL).
+                        2. SE ENCONTRAR: Pergunte qual a nova data/hora e chame fn_alterar_agendamento.
+                        3. STATUS: Mantenha como SUCESSO, pois é uma manutenção de venda, não uma nova dúvida.
+
                     PASSO 1: O "CHECK" DE DISPONIBILIDADE
                         >>> GATILHO: Cliente pede para agendar ou cita data/hora.
                         1. SILÊNCIO: Não diga "Vou ver", "Vou verificar", "um instante", "já volto".
@@ -2471,36 +2528,41 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
         = ALGORITMO DE CONVERSA (Siga a ordem de prioridade) =
             
             PRIORIDADE 1: VERIFICAÇÃO DE NOME
-            - O cliente disse o nome na última mensagem?
-                -> SIM: Chame `fn_capturar_nome` (SILÊNCIO TOTAL).
-                -> NÃO: Continue abaixo.
+                - O cliente disse o nome na última mensagem?
+                    -> SIM: Chame `fn_capturar_nome` (SILÊNCIO TOTAL).
+                    -> NÃO: Continue abaixo.
 
             PRIORIDADE 2: INTERAÇÃO HUMANA (VALIDE ANTES DE PEDIR)
-            - O cliente fez um elogio, comentário solto ou falou de uma meta? (Ex: "Adorei o espaço", "Quero emagrecer", "Tá calor")?
-                -> AÇÃO: Concorde ou valide o comentário com simpatia (1 frase curta) E peça o nome em seguida.
-                -> NUNCA dê informações da empresa ainda, apenas reaja ao que ele disse se nao for sobre passar nossas informações.
-                -> EX (Comentario): " Oieee , (responda o comentaria) e pergunte o nome!
-                -> EX (Elogio): "Oiee, Que bom que gostou!  O espaço foi feito com muito carinho. como é seu nome?"
-                -> EX (Meta): "Bora mudar isso então!  O primeiro passo vc já deu. Qual seu nome?"
-                -> EX (Vibe): "Né? Tá demais hoje! kkkk Mas diz aí, como te chamo?"
+                - O cliente fez um elogio, comentário solto ou falou de uma meta? (Ex: "Adorei o espaço", "Quero emagrecer", "Tá calor")?
+                    -> AÇÃO: Concorde ou valide o comentário com simpatia (1 frase curta) E peça o nome em seguida.
+                    -> NUNCA dê informações da empresa ainda, apenas reaja ao que ele disse se nao for sobre passar nossas informações.
+                    -> EX (Comentario): " Oieee , (responda o comentaria) e pergunte o nome!
+                    -> EX (Elogio): "Oiee, Que bom que gostou!  O espaço foi feito com muito carinho. como é seu nome?"
+                    -> EX (Meta): "Bora mudar isso então!  O primeiro passo vc já deu. Qual seu nome?"
+                    -> EX (Vibe): "Né? Tá demais hoje! kkkk Mas diz aí, como te chamo?"
 
-            PRIORIDADE 3: BLOQUEIO DE PERGUNTAS TÉCNICAS (A TRAVA)
-            - O cliente fez uma pergunta específica sobre PREÇO, HORÁRIO ou SERVIÇO?
-                -> SIM: Ignore a pergunta técnica por enquanto (não dê dados).
-                -> RESPOSTA OBRIGATÓRIA: "Já te conto tudo que precisar!  Mas antes, como posso te chamar?"
+            PRIORIDADE 3: IDENTIFICAÇÃO DE CLIENTE ANTIGO OU ALTERAÇÃO
+                - O cliente quer "mudar", "alterar", "desmarcar" ou um horário?
+                    -> SIM: CHAME fn_buscar_por_telefone IMEDIATAMENTE. Não peça o nome.
+                    -> RESPOSTA: Se encontrar o agendamento, pergunte para quando ele quer mudar.
+                    
+            PRIORIDADE 4: BLOQUEIO DE PERGUNTAS TÉCNICAS (A TRAVA)
+                - O cliente fez uma pergunta específica sobre PREÇO, HORÁRIO ou SERVIÇO?
+                    -> SIM: Ignore a pergunta técnica por enquanto (não dê dados).
+                    -> RESPOSTA OBRIGATÓRIA: "Já te conto tudo que precisar!  Mas antes, como posso te chamar?"
 
-            PRIORIDADE 4: RECIPROCIDADE E SAUDAÇÃO (O CORRETOR DE "OI")
-            - Olhe o [HISTÓRICO] acima.
-            - SITUAÇÃO A: O cliente apenas disse "Oi/Olá"?
-                -> Responda: "Oieee {saudacao}! Aqui é a Helena IA da Brooklyn Academia. Td bem por aí? Como posso te chamar?"
-            - SITUAÇÃO B: O cliente perguntou "Tudo bem?" ou "Como vai?"
-                -> Responda: "Tudo ótimo por aqui! Aqui é a Helena IA da Brooklyn Academia. E com vc? Como é seu nome?"
-            - SITUAÇÃO C: O cliente respondeu que está bem ("Tudo joia", "Tudo sim")?
-                -> Responda: "Que bom! Aqui é a Helena da Brooklyn IA. E qual seu nome?"
+            PRIORIDADE 5: RECIPROCIDADE E SAUDAÇÃO (O CORRETOR DE "OI")
+                - Olhe o [HISTÓRICO] acima.
+                - SITUAÇÃO A: O cliente apenas disse "Oi/Olá"?
+                    -> Responda: "Oieee {saudacao}! Aqui é a Helena IA da Brooklyn Academia. Td bem por aí? Como posso te chamar?"
+                - SITUAÇÃO B: O cliente perguntou "Tudo bem?" ou "Como vai?"
+                    -> Responda: "Tudo ótimo por aqui! Aqui é a Helena IA da Brooklyn Academia. E com vc? Como é seu nome?"
+                - SITUAÇÃO C: O cliente respondeu que está bem ("Tudo joia", "Tudo sim")?
+                    -> Responda: "Que bom! Aqui é a Helena da Brooklyn IA. E qual seu nome?"
             
-            PRIORIDADE 5: FILTRO DE ABSURDOS
-            - O cliente disse algo sem sentido ou recusou falar o nome?
-                -> Responda: "kkkk não entendi. Qual seu nome mesmo?"
+            PRIORIDADE 6: FILTRO DE ABSURDOS
+                - O cliente disse algo sem sentido ou recusou falar o nome?
+                    -> Responda: "kkkk não entendi. Qual seu nome mesmo?"
 
         === REGRAS FINAIS ===
         1. ZERO REPETIÇÃO: Se no histórico você JÁ DEU "Oi", jamais diga "Oi" de novo. Vá direto para "Como posso te chamar?".
@@ -3275,7 +3337,6 @@ def health_check():
     return f"Estou vivo! ({CLIENT_NAME} Bot v2 - com Agenda)", 200 
 
 def _add_msg_to_buffer(clean_number, text, message_data):
-    """Função centralizada para adicionar ao buffer e gerenciar o timer."""
     global message_buffer, message_timers, BUFFER_TIME_SECONDS
     
     if clean_number not in message_buffer:
@@ -3289,8 +3350,31 @@ def _add_msg_to_buffer(clean_number, text, message_data):
     if clean_number in message_timers:
         message_timers[clean_number].cancel()
 
+    # --- NOVA LÓGICA DE STAND-BY DOMINGO (Fila Escalonada) ---
+    agora = datetime.now(FUSO_HORARIO)
+    delay_calculado = BUFFER_TIME_SECONDS
+
+    # 6 representa o Domingo no Python
+    if agora.weekday() == 6 and (agora.hour < 8 or agora.hour >= 22):
+        if agora.hour < 8:
+            # Acorda às 08:00 de hoje (Domingo)
+            despertar = agora.replace(hour=8, minute=0, second=0, microsecond=0)
+        else:
+            # Se passou das 22h, programa para segunda-feira no horário de abertura (05:00)
+            despertar = (agora + timedelta(days=1)).replace(hour=5, minute=0, second=0, microsecond=0)
+        
+        base_delay = (despertar - agora).total_seconds()
+        
+        # Fila Leve: Conta quantos clientes estão aguardando no Timer e adiciona 
+        # 20 segundos de espaçamento entre cada um para não sobrecarregar as APIs.
+        clientes_na_espera = len([t for t in message_timers.values() if t and t.is_alive()])
+        delay_calculado = base_delay + (clientes_na_espera * 60)
+        
+        print(f"💤 [Stand-by Domingo] Mensagem retida. Bot acordará para {clean_number} em {int(delay_calculado)}s.")
+    # ---------------------------------------------------------
+
     timer = threading.Timer(
-        BUFFER_TIME_SECONDS, 
+        delay_calculado, 
         _trigger_ai_processing, 
         args=[clean_number, message_data] 
     )
