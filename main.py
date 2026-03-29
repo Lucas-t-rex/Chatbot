@@ -1,5 +1,6 @@
 
 import google.generativeai as genai
+from app.services.evolution_service import evolution_api
 import requests
 import os
 import pytz 
@@ -23,82 +24,49 @@ from flask_cors import CORS
 from bson.objectid import ObjectId
 
 
-FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
-CLIENT_NAME="Brooklyn Academia"
-RESPONSIBLE_NUMBER="554491216103"
-ADMIN_USER = "brooklyn"
-ADMIN_PASS = "brooklyn2025"
-load_dotenv()
+from app.core.config import config
+from app.core.db import db
+from app.utils.helpers import extrair_tokens_da_resposta
 
-EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
-EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-MODEL_NAME = "gemini-3-flash-preview"
-MONGO_DB_URI = os.environ.get("MONGO_DB_URI") # DB de Conversas
+FUSO_HORARIO = config.FUSO_HORARIO
+CLIENT_NAME = config.CLIENT_NAME
+RESPONSIBLE_NUMBER = config.RESPONSIBLE_NUMBER
+ADMIN_USER = config.ADMIN_USER
+ADMIN_PASS = config.ADMIN_PASS
 
-MONGO_AGENDA_URI = os.environ.get("MONGO_AGENDA_URI")
-MONGO_AGENDA_COLLECTION = os.environ.get("MONGO_AGENDA_COLLECTION", "agendamentos")
+EVOLUTION_API_URL = config.EVOLUTION_API_URL
+EVOLUTION_API_KEY = config.EVOLUTION_API_KEY
+GEMINI_API_KEY = config.GEMINI_API_KEY
+MODEL_NAME = config.MODEL_NAME
 
-clean_client_name_global = CLIENT_NAME.lower().replace(" ", "_").replace("-", "_")
-DB_NAME = "brooklyn_academia"
+MONGO_DB_URI = config.MONGO_DB_URI
+MONGO_AGENDA_URI = config.MONGO_AGENDA_URI
+MONGO_AGENDA_COLLECTION = config.MONGO_AGENDA_COLLECTION
+DB_NAME = config.DB_NAME
 
-INTERVALO_SLOTS_MINUTOS=15
-NUM_ATENDENTES=50
+clean_client_name_global = config.CLEAN_CLIENT_NAME_GLOBAL
+INTERVALO_SLOTS_MINUTOS = config.INTERVALO_SLOTS_MINUTOS
+NUM_ATENDENTES = config.NUM_ATENDENTES
 
-BLOCOS_DE_TRABALHO = {
-    0: [{"inicio": "05:00", "fim": "22:00"}], # Segunda
-    1: [{"inicio": "05:00", "fim": "22:00"}], # Terça
-    2: [{"inicio": "05:00", "fim": "22:00"}], # Quarta
-    3: [{"inicio": "05:00", "fim": "22:00"}], # Quinta
-    4: [{"inicio": "05:00", "fim": "21:00"}], # Sexta (Fecha 1h mais cedo)
-    5: [], # Sábado (Sem blocos para agendamentos)
-    6: []  # Domingo (Sem blocos para agendamentos)
-}
-FOLGAS_DIAS_SEMANA = [] # Folga Domingo
-MAPA_DIAS_SEMANA_PT = { 5: "sábado", 6: "domingo" }
+BLOCOS_DE_TRABALHO = config.BLOCOS_DE_TRABALHO
+FOLGAS_DIAS_SEMANA = config.FOLGAS_DIAS_SEMANA
+MAPA_DIAS_SEMANA_PT = config.MAPA_DIAS_SEMANA_PT
+MAPA_SERVICOS_DURACAO = config.MAPA_SERVICOS_DURACAO
+GRADE_HORARIOS_SERVICOS = config.GRADE_HORARIOS_SERVICOS
 
-MAPA_SERVICOS_DURACAO = {
-    "musculação": 60,
-    "muay thai": 60,
-    "jiu-jitsu": 60,
-    "jiu-jitsu kids": 60,
-    "capoeira": 60,
-    "dança": 60
-}
-
-GRADE_HORARIOS_SERVICOS = {
-    "muay thai": {
-        0: ["19:30"], 2: ["19:30"], 4: ["19:00"] # Seg, Qua, Sex
-    },
-    "jiu-jitsu": {
-        1: ["20:00"], 3: ["20:00"] # Ter e Qui (Sábado removido para agendamentos)
-    },
-    "jiu-jitsu kids": {
-        1: ["18:15"], 3: ["18:15"] # Ter e Qui (Sábado removido para agendamentos)
-    },
-    "capoeira": {
-        0: ["20:40"], 2: ["20:40"], 4: ["20:00"] # Seg, Qua, Sex
-    },
-    "dança": {
-        0: ["08:00"], 2: ["08:00"], # Seg e Qua de manhã
-        1: ["19:00"], 3: ["19:00"] # Ter e Qui a noite
-    }
-}
-
-
-LISTA_SERVICOS_PROMPT = ", ".join(MAPA_SERVICOS_DURACAO.keys())
-SERVICOS_PERMITIDOS_ENUM = list(MAPA_SERVICOS_DURACAO.keys())
+LISTA_SERVICOS_PROMPT = config.LISTA_SERVICOS_PROMPT
+SERVICOS_PERMITIDOS_ENUM = config.SERVICOS_PERMITIDOS_ENUM
 
 message_buffer = {}
 message_timers = {}
-BUFFER_TIME_SECONDS=15
+BUFFER_TIME_SECONDS = config.BUFFER_TIME_SECONDS
 
-TEMPO_FOLLOWUP_1 = 90
-TEMPO_FOLLOWUP_2 = 360
-TEMPO_FOLLOWUP_3 = 22 * 60
+TEMPO_FOLLOWUP_1 = config.TEMPO_FOLLOWUP_1
+TEMPO_FOLLOWUP_2 = config.TEMPO_FOLLOWUP_2
+TEMPO_FOLLOWUP_3 = config.TEMPO_FOLLOWUP_3
 
-TEMPO_FOLLOWUP_SUCESSO = 22 * 60
-TEMPO_FOLLOWUP_FRACASSO = 22 * 60
+TEMPO_FOLLOWUP_SUCESSO = config.TEMPO_FOLLOWUP_SUCESSO
+TEMPO_FOLLOWUP_FRACASSO = config.TEMPO_FOLLOWUP_FRACASSO
 
 logging.basicConfig(
     filename="log.txt",
@@ -110,628 +78,11 @@ def log_info(msg):
     logging.info(msg)
     print(f"[LOG-INFO] {msg}")
 
-try:
-    client_conversas = MongoClient(MONGO_DB_URI)
-   
-    db_conversas = client_conversas[DB_NAME] 
-    conversation_collection = db_conversas.conversations
+client_conversas = db.client_conversas
+conversation_collection = db.conversation_collection
 
-    conversation_collection.create_index([
-        ("conversation_status", 1), 
-        ("last_interaction", 1), 
-        ("followup_stage", 1)
-    ])
-    print("🚀 [Performance] Índices de busca rápida garantidos no DB Conversas.")
-   
-    print(f"✅ [DB Conversas] Conectado ao MongoDB: '{DB_NAME}'")
-except Exception as e:
-    print(f"❌ ERRO: [DB Conversas] Não foi possível conectar ao MongoDB. Erro: {e}")
-    conversation_collection = None 
+from app.models.agenda import Agenda
 
-
-
-def parse_data(data_str: str) -> Optional[datetime]:
-    if not data_str or not isinstance(data_str, str):
-        return None
-    data_str = data_str.strip()
-    if re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', data_str):
-        d, m, y = data_str.split('/')
-        try:
-            return datetime(int(y), int(m), int(d))
-        except Exception:
-            return None
-    try:
-        dt = dateparser.parse(data_str, dayfirst=True)
-        if dt:
-            return datetime(dt.year, dt.month, dt.day)
-    except Exception:
-        return None
-    return None
-
-def validar_hora(hora_str: str) -> Optional[str]:
-    if not hora_str or not isinstance(hora_str, str):
-        return None
-    m = re.match(r'^\s*(\d{1,2}):(\d{1,2})\s*$', hora_str)
-    if not m:
-        return None
-    hh, mm = int(m.group(1)), int(m.group(2))
-    if 0 <= hh <= 23 and 0 <= mm <= 59:
-        return f"{hh:02d}:{mm:02d}"
-    return None
-
-def str_to_time(time_str: str) -> dt_time:
-    return datetime.strptime(time_str, '%H:%M').time()
-
-def time_to_minutes(t: dt_time) -> int:
-    return t.hour * 60 + t.minute
-
-def minutes_to_str(m: int) -> str:
-    return f"{m // 60:02d}:{m % 60:02d}"
-
-def gerar_slots_de_trabalho(intervalo_min: int, data_ref: datetime) -> List[str]:
-    """Gera slots baseados no dia da semana específico da data informada."""
-    dia_semana = data_ref.weekday() 
-    blocos_hoje = BLOCOS_DE_TRABALHO.get(dia_semana, [])
-    
-    slots = []
-    for bloco in blocos_hoje:
-        inicio_min = time_to_minutes(str_to_time(bloco["inicio"]))
-        fim_min = time_to_minutes(str_to_time(bloco["fim"]))
-        current_min = inicio_min
-        
-        # Gera slots enquanto houver tempo (não inclui o horário exato de fechamento como inicio)
-        while current_min < fim_min:
-            slots.append(minutes_to_str(current_min))
-            current_min += intervalo_min
-    return slots
-
-def extrair_tokens_da_resposta(response):
-    """
-    Extrai separadamente tokens de entrada (prompt) e saída (resposta).
-    Retorna uma tupla: (tokens_input, tokens_output)
-    """
-    try:
-        if hasattr(response, 'usage_metadata'):
-            usage = response.usage_metadata
-            # Pega entrada e saída separadamente conforme documentação oficial
-            return (usage.prompt_token_count, usage.candidates_token_count)
-        return (0, 0)
-    except:
-        return (0, 0)
-
-def agrupar_horarios_em_faixas(lista_horarios, step=15):
-    """
-    Agrupa horários sequenciais de forma dinâmica.
-    
-    Args:
-        lista_horarios (list): Lista de strings no formato ['HH:MM', ...]
-        step (int): O intervalo em minutos entre os slots (padrão 15).
-        
-    Returns:
-        str: Texto humanizado com as faixas de horário.
-    """
-    if not lista_horarios:
-        return "Nenhum horário disponível."
-
-    # 1. Conversão e Sanitização
-    # Convertemos para minutos uma única vez para evitar processamento repetitivo de strings
-    minutos = []
-    for h in lista_horarios:
-        try:
-            h_split = h.split(':')
-            m = int(h_split[0]) * 60 + int(h_split[1])
-            minutos.append(m)
-        except (ValueError, IndexError):
-            continue
-
-    if not minutos:
-        return "Horários em formato inválido."
-
-    # 2. Ordenação Garantida
-    minutos.sort()
-
-    faixas = []
-    if not minutos: return ""
-
-    # 3. Algoritmo de Agrupamento (Sliding Window adaptado)
-    inicio_faixa = minutos[0]
-    anterior = minutos[0]
-    count_seq = 1
-
-    for atual in minutos[1:]:
-        if atual == anterior + step:
-            anterior = atual
-            count_seq += 1
-        else:
-            # Fechamento de bloco por quebra de sequência
-            faixas.append(_formatar_bloco(inicio_faixa, anterior, step, count_seq))
-            # Reset para novo bloco
-            inicio_faixa = atual
-            anterior = atual
-            count_seq = 1
-
-    # 4. Processa o último bloco remanescente
-    faixas.append(_formatar_bloco(inicio_faixa, anterior, step, count_seq))
-
-    # 5. Formatação Humanizada (Join Grammar)
-    if len(faixas) == 1:
-        return faixas[0]
-    
-    return ", ".join(faixas[:-1]) + " e " + faixas[-1]
-
-def _formatar_bloco(inicio, fim, step, count):
-    """Função auxiliar interna para formatar a string do bloco."""
-    if count >= 3:
-        fim_real = fim + step
-        str_ini = f"{inicio // 60:02d}:{inicio % 60:02d}"
-        str_fim = f"{fim_real // 60:02d}:{fim_real % 60:02d}"
-        return f"das {str_ini} às {str_fim}"
-    else:
-        # Lista horários individuais se não houver densidade suficiente
-        result = []
-        temp = inicio
-        while temp <= fim:
-            result.append(f"{temp // 60:02d}:{temp % 60:02d}")
-            temp += step
-        return ", ".join(result)
-    
-class Agenda:
-    def __init__(self, uri: str, db_name: str, collection_name: str):
-        try:
-            self.client = MongoClient(
-                uri,
-                server_api=ServerApi('1'),
-                tls=True,
-                appname="NeuroUpBotAgendador" 
-            )
-            self.client.admin.command('ping')
-            print(f"✅ [DB Agenda] Conectado ao MongoDB: '{db_name}'")
-        except ConnectionFailure as e:
-            print(f"❌ FALHA CRÍTICA [DB Agenda] ao conectar ao MongoDB: {e}")
-            raise
-
-        self.db = self.client[db_name]
-        self.collection = self.db[collection_name]
-        self._criar_indices()
-
-    def _criar_indices(self):
-        try:
-            self.collection.create_index("telefone")
-            self.collection.create_index([("inicio", 1), ("fim", 1)])
-            print("✅ [DB Agenda] Índices do MongoDB garantidos.")
-        except OperationFailure as e:
-            print(f"⚠️ [DB Agenda] Aviso ao criar índices (normal se já existem): {e}")
-
-    def _is_dia_bloqueado_admin(self, dt: datetime) -> bool:
-        try:
-            inicio_dia = datetime.combine(dt.date(), dt_time.min)
-            fim_dia = datetime.combine(dt.date(), dt_time.max)
-            
-            # Procura por qualquer agendamento nesse dia que seja "Folga" ou status "bloqueado"
-            bloqueio = self.collection.find_one({
-                "inicio": {"$gte": inicio_dia, "$lte": fim_dia},
-                "$or": [
-                    {"servico": "Folga"}, 
-                    {"status": "bloqueado"}
-                ]
-            })
-            return bloqueio is not None
-        except Exception as e:
-            log_info(f"Erro ao checar bloqueio administrativo: {e}")
-            return False
-        
-    def _checar_dia_de_folga(self, dt: datetime) -> Optional[str]:
-        # 1. Checa folga fixa (Domingos)
-        dia_semana_num = dt.weekday()
-        if dia_semana_num in FOLGAS_DIAS_SEMANA:
-            return MAPA_DIAS_SEMANA_PT.get(dia_semana_num, "dia de folga")
-            
-        # 2. Checa folga administrativa (Banco de Dados) - A MÁGICA ACONTECE AQUI
-        if self._is_dia_bloqueado_admin(dt):
-            return "dia de folga administrativa (feriado ou recesso)"
-
-        return None
-
-    def _get_duracao_servico(self, servico_str: str) -> Optional[int]:
-        servico_key = servico_str.strip().lower()
-        
-        # 1. Tenta encontrar a chave exata
-        if servico_key in MAPA_SERVICOS_DURACAO:
-             return MAPA_SERVICOS_DURACAO.get(servico_key)
-        
-        # 2. Busca Flexível (Dinâmica):
-        # Percorre todas as chaves do mapa configurado lá em cima.
-        # Se o cliente disse "treino de perna" e a chave é "treino", ele acha.
-        # Se o cliente disse "atendimento com personal" e a chave é "atendimento", ele acha.
-        for chave_oficial in MAPA_SERVICOS_DURACAO.keys():
-            if chave_oficial in servico_key or servico_key in chave_oficial:
-                return MAPA_SERVICOS_DURACAO[chave_oficial]
-
-        # 3. Fallback inteligente (se só existir 1 serviço configurado, assume que é ele)
-        # Isso é ótimo para a Academia que só tem "atendimento".
-        # Se o cliente disser "quero ir malhar", o bot entende que é o único serviço disponível.
-        if len(MAPA_SERVICOS_DURACAO) == 1:
-            unica_chave = list(MAPA_SERVICOS_DURACAO.keys())[0]
-            return MAPA_SERVICOS_DURACAO[unica_chave]
-
-        return None
-
-    def _cabe_no_bloco(self, data_base: datetime, inicio_str: str, duracao_min: int) -> bool:
-        dia_semana = data_base.weekday()
-        blocos_hoje = BLOCOS_DE_TRABALHO.get(dia_semana, [])
-        
-        inicio_dt = datetime.combine(data_base.date(), str_to_time(inicio_str))
-        fim_dt = inicio_dt + timedelta(minutes=duracao_min)
-        
-        for bloco in blocos_hoje:
-            bloco_inicio_dt = datetime.combine(data_base.date(), str_to_time(bloco["inicio"]))
-            bloco_fim_dt = datetime.combine(data_base.date(), str_to_time(bloco["fim"]))
-            
-            # Verifica se o inicio e o fim do serviço estão dentro do bloco
-            if inicio_dt >= bloco_inicio_dt and fim_dt <= bloco_fim_dt:
-                return True
-        return False
-
-    def _checar_horario_passado(self, dt_agendamento: datetime, hora_str: str) -> bool:
-        try:
-           
-            agendamento_dt = datetime.combine(dt_agendamento.date(), str_to_time(hora_str))
-            
-            agora_sp_com_fuso = datetime.now(FUSO_HORARIO)
-            
-            agora_sp_naive = agora_sp_com_fuso.replace(tzinfo=None)
-            
-            return agendamento_dt < agora_sp_naive
-        except Exception:
-            return False
-
-    def _contar_conflitos_no_banco(self, novo_inicio_dt: datetime, novo_fim_dt: datetime, excluir_id: Optional[Any] = None) -> int:
-        query = {
-            "inicio": {"$lt": novo_fim_dt},
-            "fim": {"$gt": novo_inicio_dt}
-        }
-        if excluir_id:
-            query["_id"] = {"$ne": excluir_id}
-        try:
-            count = self.collection.count_documents(query)
-            return count
-        except Exception as e:
-            log_info(f"❌ Erro ao contar conflitos no Mongo: {e}")
-            return 999 
-
-    def _buscar_agendamentos_do_dia(self, dt: datetime) -> List[Dict[str, Any]]:
-        try:
-            inicio_dia = datetime.combine(dt.date(), dt_time.min)
-            fim_dia = inicio_dia + timedelta(days=1)
-            query = {"inicio": {"$gte": inicio_dia, "$lt": fim_dia}}
-            return list(self.collection.find(query))
-        except Exception as e:
-            log_info(f"❌ Erro ao buscar agendamentos do dia: {e}")
-            return []
-
-    def _contar_conflitos_em_lista(self, agendamentos_do_dia: List[Dict], novo_inicio_dt: datetime, novo_fim_dt: datetime) -> int:
-        conflitos_encontrados = 0
-        for ag in agendamentos_do_dia:
-            ag_inicio_dt = ag["inicio"] 
-            ag_fim_dt = ag["fim"]
-            if (novo_inicio_dt < ag_fim_dt) and (novo_fim_dt > ag_inicio_dt):
-                conflitos_encontrados += 1
-        return conflitos_encontrados
-
-    def buscar_por_telefone(self, telefone: str) -> Dict[str, Any]:
-        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
-        if not tel_limpo:
-            return {"erro": "Telefone inválido."}
-        
-        try:
-            agora_sp = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
-            query = {"telefone": tel_limpo, "inicio": {"$gte": agora_sp}}
-            resultados_db = self.collection.find(query).sort("inicio", 1)
-            
-            resultados = []
-            for ag in resultados_db:
-                inicio_dt_local = ag["inicio"]
-                resultados.append({
-                    "data": inicio_dt_local.strftime('%d/%m/%Y'),
-                    "hora": inicio_dt_local.strftime('%H:%M'),
-                    "nome": ag.get("nome"),
-                    "telefone": ag.get("telefone"),
-                    "servico": ag.get("servico"),
-                    "duracao_minutos": ag.get("duracao_minutos")
-                })
-            
-            if not resultados:
-                return {"sucesso": True, "resultados": [], "info": "Nenhum agendamento futuro encontrado para este telefone."}
-                
-            return {"sucesso": True, "resultados": resultados}
-        
-        except Exception as e:
-            log_info(f"Erro em buscar_por_Telefone: {e}")
-            return {"erro": f"Falha ao buscar telefone no banco de dados: {e}"}
-
-    def salvar(self, nome: str, telefone: str, servico: str, data_str: str, hora_str: str, owner_id: str = None, observacao: str = "") -> Dict[str, Any]:
-        # --- 1. HIGIENIZAÇÃO E VALIDAÇÃO BÁSICA ---
-        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
-        if not tel_limpo:
-            return {"erro": "Telefone inválido."}
-        
-        dt = parse_data(data_str)
-        if not dt: return {"erro": "Data inválida."}
-        
-        hora = validar_hora(hora_str)
-        if not hora: return {"erro": "Hora inválida."}
-
-        # --- 2. VALIDAÇÃO DE REGRAS DE NEGÓCIO (Grade e Folga) ---
-        folga = self._checar_dia_de_folga(dt)
-        if folga:
-            return {"erro": f"Não é possível agendar. O dia {data_str} é um {folga} e não trabalhamos."}
-        
-        if self._checar_horario_passado(dt, hora):
-             return {"erro": f"Não é possível agendar. O horário {data_str} às {hora} já passou."}
-
-        duracao_minutos = self._get_duracao_servico(servico)
-        
-        # Validação da Grade de Aulas (Muay Thai, Jiu-Jitsu, etc)
-        servico_key = servico.lower().strip()
-        if servico_key in GRADE_HORARIOS_SERVICOS:
-            dia_semana = dt.weekday()
-            horarios_permitidos = GRADE_HORARIOS_SERVICOS[servico_key].get(dia_semana, [])
-            if hora_str not in horarios_permitidos:
-                msg_grade = ", ".join(horarios_permitidos) if horarios_permitidos else "não tem aula neste dia"
-                return {"erro": f"Impossível agendar {servico} às {hora_str}. A grade oficial para esta data é: {msg_grade}."}
-        
-        if duracao_minutos is None:
-            return {"erro": f"Serviço '{servico}' não reconhecido. Os serviços válidos são: {LISTA_SERVICOS_PROMPT}"}
-
-        # Validação de Horário de Funcionamento
-        if dt.weekday() in [5, 6]:
-            return {"erro": "Não realizamos agendamentos de aulas aos finais de semana. Por favor, escolha um dia entre segunda e sexta."}
-            
-        if not self._cabe_no_bloco(dt, hora, duracao_minutos):
-            return {"erro": f"O horário {hora} é inválido ou ultrapassa o fechamento para agendamentos."}
-
-        try:
-            # --- 3. PREPARAÇÃO PARA O BANCO ---
-            inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
-            fim_dt = inicio_dt + timedelta(minutes=duracao_minutos)
-
-            already_booked = self.collection.find_one({
-                "telefone": tel_limpo,
-                "inicio": inicio_dt 
-            })
-
-            if already_booked:
-                log_info(f"🛡️ [Anti-Bug] Tentativa de duplicidade exata para telefone {tel_limpo} às {hora}. Bloqueando.")
-                return {
-                    "sucesso": False, 
-                    "msg": f"Atenção: Este telefone já possui um agendamento EXATAMENTE neste dia e horário ({data_str} às {hora}). Pergunte se ele quer manter este ou agendar em outro horário."
-                }
-
-            # Verifica lotação (Se tem mais de 50 pessoas nesse horário)
-            conflitos_atuais = self._contar_conflitos_no_banco(inicio_dt, fim_dt)
-            if conflitos_atuais >= NUM_ATENDENTES:
-                return {"erro": f"Horário {hora} indisponível (Lotação máxima atingida)."}
-            
-            obs_limpa = str(observacao).strip() if observacao else ""
-            if len(obs_limpa) > 200: obs_limpa = obs_limpa[:200]
-
-            # --- 4. O COMANDO DE SALVAR (INSERT) ---
-            novo_documento = {
-                "owner_whatsapp_id": owner_id,  
-                "nome": nome.strip(),
-                "telefone": tel_limpo,
-                "servico": servico.strip(),
-                "observacao": obs_limpa,
-                "duracao_minutos": duracao_minutos,
-                "inicio": inicio_dt, 
-                "fim": fim_dt,
-                "reminder_sent": False, 
-                "created_at": datetime.now(timezone.utc)
-            }
-            
-            # Executa a gravação no MongoDB
-            result = self.collection.insert_one(novo_documento)
-            
-            # --- 5. VALIDAÇÃO PÓS-GRAVAÇÃO ---
-            if result.inserted_id:
-                # Se imprimiu isso no log, ESTÁ NO BANCO. Não tem erro.
-                print(f"💾 [DB SALVO COM SUCESSO] ID: {result.inserted_id} | Cliente: {nome} | Serviço: {servico}")
-                return {"sucesso": True, "msg": f"Agendamento salvo com sucesso para {nome} em {data_str} às {hora}."}
-            else:
-                return {"erro": "Erro crítico: O banco de dados não retornou o ID de confirmação."}
-        
-        except Exception as e:
-            log_info(f"Erro crítico na função salvar: {e}")
-            return {"erro": f"Falha técnica ao salvar no banco de dados: {e}"}
-        
-    def excluir(self, telefone: str, data_str: str, hora_str: str) -> Dict[str, Any]:
-        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
-        if not tel_limpo:
-            return {"erro": "Telefone inválido."}
-        dt = parse_data(data_str)
-        if not dt:
-            return {"erro": "Data inválida."}
-        hora = validar_hora(hora_str)
-        if not hora:
-            return {"erro": "Hora inválida."}
-
-        if self._checar_horario_passado(dt, hora):
-            return {"erro": f"Não é possível excluir. O agendamento em {data_str} às {hora} já passou."}
-
-        try:
-            inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
-            query = {"telefone": tel_limpo, "inicio": inicio_dt}
-            
-            documento_removido = self.collection.find_one_and_delete(query)
-
-            if not documento_removido:
-                return {"erro": "Agendamento não encontrado com os dados fornecidos."}
-            
-            nome_cliente = documento_removido.get('nome', 'Cliente')
-            return {"sucesso": True, "msg": f"Agendamento de {nome_cliente} em {data_str} às {hora} removido."}
-        
-        except Exception as e:
-            log_info(f"Erro em excluir: {e}")
-            return {"erro": f"Falha ao excluir do banco de dados: {e}"}
-        
-    def excluir_todos_por_telefone(self, telefone: str) -> Dict[str, Any]:
-        """Exclui TODOS os agendamentos FUTUROS de um telefone."""
-        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
-        if not tel_limpo:
-            return {"erro": "Telefone inválido."}
-        
-        try:
-            agora = datetime.now()
-            query = {"telefone": tel_limpo, "inicio": {"$gte": agora}}
-
-            resultado = self.collection.delete_many(query)
-            
-            count = resultado.deleted_count
-            if count == 0:
-                return {"erro": "Nenhum agendamento futuro encontrado para este telefone."}
-            
-            return {"sucesso": True, "msg": f"{count} agendamento(s) futuros foram removidos com sucesso."}
-        
-        except Exception as e:
-            log_info(f"Erro em excluir_todos_por_telefone: {e}")
-            return {"erro": f"Falha ao excluir agendamentos do banco de dados: {e}"}
-
-    def alterar(self, telefone: str, data_antiga: str, hora_antiga: str, data_nova: str, hora_nova: str) -> Dict[str, Any]:
-        tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
-        if not tel_limpo:
-            return {"erro": "Telefone inválido."}
-        dt_old = parse_data(data_antiga)
-        dt_new = parse_data(data_nova)
-        if not dt_old or not dt_new:
-            return {"erro": "Data antiga ou nova inválida."}
-        h_old = validar_hora(hora_antiga)
-        h_new = validar_hora(hora_nova)
-        if not h_old or not h_new:
-            return {"erro": "Hora antiga ou nova inválida."}
-
-        folga = self._checar_dia_de_folga(dt_new)
-        if folga:
-            return {"erro": f"Não é possível alterar para {data_nova}, pois é um {folga} e não trabalhamos."}
-
-        if self._checar_horario_passado(dt_old, h_old):
-            return {"erro": f"Não é possível alterar. O agendamento original em {data_antiga} às {h_old} já passou."}
-
-        if self._checar_horario_passado(dt_new, h_new):
-            return {"erro": f"Não é possível agendar. O novo horário {data_nova} às {h_new} já passou."}
-
-        try:
-            inicio_antigo_dt = datetime.combine(dt_old.date(), str_to_time(h_old))
-            item = self.collection.find_one({"telefone": tel_limpo, "inicio": inicio_antigo_dt})
-            
-            if not item:
-                return {"erro": "Agendamento antigo não encontrado."}
-
-            duracao_minutos = item.get("duracao_minutos")
-            if duracao_minutos is None: 
-                duracao_minutos = self._get_duracao_servico(item.get("servico", ""))
-            
-            if duracao_minutos is None:
-                return {"erro": f"O serviço '{item.get('servico')}' do agendamento original não é mais válido."}
-
-            if not self._cabe_no_bloco(dt_new, h_new, duracao_minutos):
-                return {"erro": f"O novo horário {h_new} (duração {duracao_minutos} min) ultrapassa o horário de atendimento."}
-
-            novo_inicio_dt = datetime.combine(dt_new.date(), str_to_time(h_new))
-            novo_fim_dt = novo_inicio_dt + timedelta(minutes=duracao_minutos)
-            
-            conflitos_atuais = self._contar_conflitos_no_banco(
-                novo_inicio_dt, novo_fim_dt, excluir_id=item["_id"] 
-            )
-            
-            if conflitos_atuais >= NUM_ATENDENTES:
-                return {"erro": f"Novo horário {h_new} indisponível. O proprietário já estará ocupado."}
-
-            documento_id = item["_id"] 
-            novos_dados = {
-                "inicio": novo_inicio_dt, 
-                "fim": novo_fim_dt
-            }
-            resultado = self.collection.update_one(
-                {"_id": documento_id},
-                {"$set": novos_dados}
-            )
-            
-            if resultado.matched_count == 0:
-                 log_info(f"Falha ao alterar: update_one não encontrou o _id {documento_id}")
-                 return {"erro": "Falha ao encontrar o documento para atualizar, pode ter sido removido."}
-
-            # --- ALTERAÇÃO AQUI: Retornar dados extras para notificação ---
-            return {
-                "sucesso": True, 
-                "msg": f"Agendamento alterado para {dt_new.strftime('%d/%m/%Y')} às {h_new}.",
-                "nome_cliente": item.get("nome", "Cliente"),
-                "telefone_cliente": item.get("telefone", "Não informado")
-            }
-        
-        except Exception as e:
-            log_info(f"Erro em alterar: {e}") 
-            return {"erro": f"Falha ao alterar no banco de dados: {e}"}
-        
-    def listar_horarios_disponiveis(self, data_str: str, servico_str: str) -> Dict[str, Any]:
-        dt = parse_data(data_str)
-        if not dt:
-            return {"erro": "Data inválida."}
-        
-        folga = self._checar_dia_de_folga(dt)
-        if folga:
-            return {"erro": f"Desculpe, não trabalhamos aos {folga}s. O dia {data_str} está indisponível."}
-
-        servico_key = servico_str.lower().strip()
-        dia_semana = dt.weekday()
-        
-        # --- NOVA LÓGICA DE FILTRO POR GRADE ---
-        # Se o serviço estiver na grade (Lutas/Dança), usamos apenas os horários dela
-        if servico_key in GRADE_HORARIOS_SERVICOS:
-            slots_para_testar = GRADE_HORARIOS_SERVICOS[servico_key].get(dia_semana, [])
-            if not slots_para_testar:
-                return {"erro": f"Não temos aula de {servico_str} disponível neste dia da semana."}
-        else:
-            # Se for musculação ou outro, usa o horário geral da academia
-            slots_para_testar = gerar_slots_de_trabalho(INTERVALO_SLOTS_MINUTOS, dt)
-
-        agora = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
-        duracao_minutos = self._get_duracao_servico(servico_key) or 60
-        agendamentos_do_dia = self._buscar_agendamentos_do_dia(dt)
-        horarios_disponiveis = []
-
-        # 1. Loop de Verificação
-        for slot_hora_str in slots_para_testar:
-            slot_dt_completo = datetime.combine(dt.date(), str_to_time(slot_hora_str))
-
-            if slot_dt_completo < agora:
-                continue
-
-            if not self._cabe_no_bloco(dt, slot_hora_str, duracao_minutos):
-                continue
-
-            slot_fim_dt = slot_dt_completo + timedelta(minutes=duracao_minutos)
-            
-            conflitos_atuais = self._contar_conflitos_em_lista(
-                agendamentos_do_dia, slot_dt_completo, slot_fim_dt
-            )
-
-            if conflitos_atuais < NUM_ATENDENTES:
-                horarios_disponiveis.append(slot_hora_str)
-        
-        if not horarios_disponiveis:
-            resumo_humanizado = "Não há horários livres para este serviço nesta data."
-        else:
-            texto_faixas = agrupar_horarios_em_faixas(horarios_disponiveis, INTERVALO_SLOTS_MINUTOS)
-            resumo_humanizado = f"Para {servico_str}, tenho estes horários: {texto_faixas}."
-            
-        return {
-            "sucesso": True,
-            "data": dt.strftime('%d/%m/%Y'),
-            "servico_consultado": servico_str,
-            "resumo_humanizado": resumo_humanizado,
-            "horarios_disponiveis": horarios_disponiveis
-        }
-    
 agenda_instance = None
 if MONGO_AGENDA_URI and GEMINI_API_KEY:
     try:
@@ -748,6 +99,7 @@ else:
         print("⚠️ AVISO: MONGO_AGENDA_URI não definida. Funções de agendamento desabilitadas.")
     if not GEMINI_API_KEY:
          print("⚠️ AVISO: GEMINI_API_KEY não definida. Bot desabilitado.")
+
 
 
 tools = []
@@ -3109,89 +2461,11 @@ def verificar_nome_com_ia(push_name):
         print(f"⚠️ Erro no agente verificador de nome: {e}")
         return None
 
-def send_whatsapp_message(number, text_message, delay_ms=1200): # <--- NOVO PARÂMETRO AQUI
-    INSTANCE_NAME = "chatbot"
-    clean_number = number.split('@')[0]
-
-    mensagem_limpa = remove_emojis(text_message)
-    if not mensagem_limpa:
-        return
-    
-    payload = {
-        "number": clean_number, 
-        "textMessage": {
-            "text": mensagem_limpa
-        },
-        "options": {
-            "delay": delay_ms,    
-            "presence": "composing", 
-            "linkPreview": True
-        }
-    }
-    
-    headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
-
-    base_url = EVOLUTION_API_URL
-    api_path = f"/message/sendText/{INSTANCE_NAME}"
-    
-    final_url = ""
-    if not base_url:
-        print("❌ ERRO: EVOLUTION_API_URL não está definida no .env")
-        return
-
-    if base_url.endswith(api_path):
-        final_url = base_url
-    elif base_url.endswith('/'):
-        final_url = base_url[:-1] + api_path
-    else:
-        final_url = base_url + api_path
-
-    try:
-        print(f"✅ Enviando resposta para a URL: {final_url} (Destino: {clean_number}) [Delay: {delay_ms}ms]")
-        response = requests.post(final_url, json=payload, headers=headers, timeout=40)
-        
-        if response.status_code < 400:
-            print(f"✅ Resposta da IA enviada com sucesso para {clean_number}\n")
-        else:
-            print(f"❌ ERRO DA API EVOLUTION ao enviar para {clean_number}: {response.status_code} - {response.text}")
-            
-    except requests.exceptions.RequestException as e:
-        print(f"❌ Erro de CONEXÃO ao enviar mensagem para {clean_number}: {e}")
+def send_whatsapp_message(number, text_message, delay_ms=1200):
+    evolution_api.send_whatsapp_message(number, text_message, delay_ms)
         
 def enviar_simulacao_digitacao(number):
-    """
-    Envia o status de 'digitando...' com a correção do objeto 'options'.
-    """
-    INSTANCE_NAME = "chatbot" 
-    clean_number = number.split('@')[0]
-    
-    payload = {
-        "number": clean_number,
-        "options": {
-            "presence": "composing",
-            "delay": 12000 # 12 segundos enquanto a IA pensa (não afeta o envio final)
-        }
-    }
-    
-    headers = {"apikey": EVOLUTION_API_KEY, "Content-Type": "application/json"}
-    
-    base_url = EVOLUTION_API_URL
-    if base_url.endswith('/'):
-        base_url = base_url[:-1]
-
-    url_v2 = f"{base_url}/chat/sendPresence/{INSTANCE_NAME}"
-    
-    try:
-        # AUMENTADO PARA 20 SEGUNDOS PARA EVITAR ERRO NO LOG
-        response = requests.post(url_v2, json=payload, headers=headers, timeout=20)
-        
-        if response.status_code in [200, 201]:
-            print(f"💬 SUCESSO! 'Digitando...' ativado para {clean_number}")
-        else:
-            print(f"⚠️ Falha ao enviar 'Digitando'. Código: {response.status_code}. Resposta: {response.text}")
-
-    except Exception as e:
-        print(f"⚠️ Erro de conexão no 'Digitando': {e}")
+    evolution_api.enviar_simulacao_digitacao(number)
 
 def gerar_e_enviar_relatorio_diario():
     if conversation_collection is None or not RESPONSIBLE_NUMBER:
