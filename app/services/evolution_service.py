@@ -76,7 +76,6 @@ class EvolutionService:
     def send_whatsapp_message(self, number: str, text_message: str, delay_ms: int = 1200) -> bool:
         clean_number = number.split('@')[0]
         
-        from app.utils.helpers import remove_emojis # Assuming it's in helpers, actually let's define it here or import
         # I didn't put remove_emojis in helpers.py yet. I will define it here for encapsulation.
         def remove_emojis_func(text):
             if not text: return ""
