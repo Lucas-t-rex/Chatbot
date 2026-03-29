@@ -87,11 +87,7 @@ agenda_instance = None
 if MONGO_AGENDA_URI and GEMINI_API_KEY:
     try:
         print(f"ℹ️ [DB Agenda] Tentando conectar no banco: '{DB_NAME}'")
-        agenda_instance = Agenda(
-            uri=MONGO_AGENDA_URI, 
-            db_name=DB_NAME,  
-            collection_name=MONGO_AGENDA_COLLECTION
-        )
+        agenda_instance = Agenda()
     except Exception as e:
         print(f"❌ ERRO CRÍTICO: Não foi possível conectar ao MongoDB da Agenda. Funções de agendamento desabilitadas. Erro: {e}")
 else:
