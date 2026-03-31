@@ -217,9 +217,13 @@ class Agenda:
         try:
             inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
             fim_dt = inicio_dt + timedelta(minutes=duracao_minutos)
-            already_booked = self.collection.find_one({"telefone": tel_limpo, "inicio": inicio_dt})
+            already_booked = self.collection.find_one({
+                "telefone": tel_limpo, 
+                "inicio": inicio_dt,
+                "nome": {"$regex": f"^{re.escape(nome.strip())}$", "$options": "i"}
+            })
             if already_booked:
-                return {"sucesso": False, "msg": f"Atenção: Este telefone já possui um agendamento EXATAMENTE neste dia e horário ({data_str} às {hora}). Pergunte se ele quer manter este ou agendar em outro horário."}
+                return {"sucesso": False, "msg": f"Atenção: A pessoa informada ({nome.strip()}) já possui um agendamento EXATAMENTE neste dia e horário ({data_str} às {hora}) sob este número de telefone. Se quiser agendar para uma segunda pessoa no mesmo celular e horário, por favor cadastre com o NOME COMPLETO dessa outra pessoa."}
 
             conflitos_atuais = self._contar_conflitos_no_banco(inicio_dt, fim_dt)
             if conflitos_atuais >= config.NUM_ATENDENTES:
