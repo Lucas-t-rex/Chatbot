@@ -25,7 +25,7 @@ class Config:
     # Application settings
     INTERVALO_SLOTS_MINUTOS = 15
     NUM_ATENDENTES = 50
-    BUFFER_TIME_SECONDS = 15
+    BUFFER_TIME_SECONDS = 25
     
     # Follow-up times
     TEMPO_FOLLOWUP_1 = 90

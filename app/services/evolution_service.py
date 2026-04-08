@@ -73,7 +73,7 @@ class EvolutionService:
             log.warning(f"⚠️ Erro de conexão no 'Digitando': {e}")
             return False
 
-    def send_whatsapp_message(self, number: str, text_message: str, delay_ms: int = 1200) -> bool:
+    def send_whatsapp_message(self, number: str, text_message: str, delay_ms: int = 3000) -> bool:
         clean_number = number.split('@')[0]
         
         # I didn't put remove_emojis in helpers.py yet. I will define it here for encapsulation.

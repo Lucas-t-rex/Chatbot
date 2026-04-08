@@ -892,11 +892,14 @@ def verificar_followup_automatico():
 
             condicao_estagio = {"$in": [0, None]} if r["stage_atual"] == 0 else r["stage_atual"]
 
+            # Para sucesso, usar a data e hora em que a pessoa vai fazer a aula. Se for andamento/fracasso usa last_interaction.
+            campo_data_ref = "scheduled_datetime" if r["status"] == "sucesso" else "last_interaction"
+
             # --- AÇÃO 1: VARREDURA (ESQUECER OS ATRASADOS) ---
             # Pega quem deveria ter recebido a mais de 15 minutos atrás e avança o estágio sem mandar nada.
             query_expirados = {
                 "conversation_status": r["status"],
-                "last_interaction": {"$lt": tempo_limite_esquecimento}, 
+                campo_data_ref: {"$exists": True, "$lt": tempo_limite_esquecimento}, 
                 "followup_stage": condicao_estagio,
                 "processing": {"$ne": True},
                 "intervention_active": {"$ne": True}
@@ -916,7 +919,7 @@ def verificar_followup_automatico():
             # --- AÇÃO 2: ENVIAR PARA OS CLIENTES DENTRO DO PRAZO CERTO ---
             query_validos = {
                 "conversation_status": r["status"],
-                "last_interaction": {
+                campo_data_ref: {
                     "$lt": tempo_ideal_envio,            # Já deu a hora de enviar
                     "$gte": tempo_limite_esquecimento    # E NÃO está atrasado (dentro dos 15 min)
                 },
@@ -1238,7 +1241,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
               (Obrigatório pedir para ele especificar).
 
             [CENÁRIO B: NÃO TEM PERGUNTA NENHUMA, APENAS "OI/OLÁ"]
-            1. SAÚDE: "Muuuuuito Prazer, {known_customer_name}! Aqui é a Helena da Brooklyn Academia."
+            1. SAÚDE: "Muuuuuito Prazer, {known_customer_name}! Aqui é a Helena IA da Brooklyn Academia."
             2. SONDE: "Já treina ou tá querendo começar agora?"
             """
         else:
@@ -1248,7 +1251,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
             
             [REGRA DE SAUDAÇÃO INTELIGENTE]:
             Analise o [HISTÓRICO RECENTE]:
-            - Se o histórico NÃO TEM NENHUMA MENSAGEM SUA ("Atendente: ..."), significa que esta é a PRIMEIRA mensagem que você vai mandar! Você DEVE iniciar respondendo com o nome do cliente (Ex: "{saudacao} {known_customer_name}! Tudo bem?").
+            - Se o histórico NÃO TEM NENHUMA MENSAGEM SUA ("Atendente: ..."), significa que esta é a PRIMEIRA mensagem que você vai mandar! Você DEVE iniciar se apresentando como Helena IA da Brooklyn Academia (Ex: "{saudacao} {known_customer_name}! Tudo bem? Aqui é a Helena IA da Brooklyn Academia.").
             - Se já tem mensagens suas no histórico, a conversa já está rolando. NÃO repita saudações e NÃO chame pelo nome de novo para não ficar repetitivo, apenas continue o assunto.
             """
         prompt_final = f"""
@@ -1423,11 +1426,15 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                     - RESPOSTA OBRIGATÓRIA: "Pra resolver renovação, boletos ou trancamento, o pessoal do financeiro te ajuda rapidinho! Chama eles no 44 99121-6103. Qualquer outra dúvida sobre os treinos, estou aqui!"
 
             = POLÍTICA DE PREÇOS E TRANSPARÊNCIA =
-                1. MENSALIDADE BÁSICA X MODALIDADES: Você só sabe que os planos INICIAM a partir de R$ 99,90 (referência geral). As aulas coletivas (Jiu-Jitsu, Muay Thai, Dança, Capoeira) têm valores COMPOSIÇÃO E PACOTES ESPECÍFICOS que você NÃO SABE de cor.
-                2. SE PERGUNTAREM O PREÇO DE LUTA OU DANÇA: É PROIBIDO dizer que a aula coletiva custa 99,90. Responda assim: "Temos planos que iniciam a partir de R$ 99,90, mas o valor do(a) [Modalidade] depende do pacote que você escolher (mensal, combos, etc). Como cada plano tem suas peculiaridades, as meninas explicam tudo certinho presencialmente. Quer vir fazer uma aula de graça pra testar e já tirar essa dúvida?"
-                3. SE PERGUNTAREM O PREÇO GERAL OU MUSCULAÇÃO: "Nossos planos começam a partir de R$ 99,90! Como temos opções variadas (plano mensal, trimestral), as meninas da recepção ajudam a ver qual encaixa melhor pra você presencialmente."
-                4. PROIBIDO FORÇAR VISITA FORA DE HORA: Se a conversa for sobre preço e do nada o cliente pedir "Como funciona?", NÃO FALE DE PREÇO NEM DE AGENDAMENTO IMEDIATO. Explique a infraestrutura baseada nos [BENEFÍCIOS].
-                5. PROIBIÇÃO CRÍTICA: JAMAIS INVENTE NÚMEROS ou crie promoções. Se o cliente bater o pé exigindo valores exatos da luta/dança pelo WhatsApp e não aceitar o convite para a aula grátis, CHAME `fn_solicitar_intervencao`.
+                1. MENSALIDADE BÁSICA X MODALIDADES: A intenção é trazer o cliente para a academia oferecendo aula experimental, então use o valor de R$ 99,90 como referência inicial.
+                2. SE PERGUNTAREM O PREÇO DE LUTA OU DANÇA SEM INSISTIR: Responda assim para atrair para a unidade: "Temos planos que iniciam a partir de R$ 99,90! Mas o valor do(a) [Modalidade] depende do pacote que você escolher (mensal, combos, etc). Quer vir fazer uma aula de graça pra testar e conhecer a energia da galera? Aí presencialmente te explico os formatos!"
+                3. SE O CLIENTE FICAR FRUSTRADO, INSISTIR OU QUISER REALMENTE O VALOR EXATO DAS MODALIDADES:
+                   JAMAIS esconda preços do cliente caso ele insista. Entregue os valores abaixo de forma simpática:
+                   - Lutas (Capoeira, Muay Thai, Jiu-Jitsu): R$ 160,00 mensal avulso.
+                   - Ritmos: R$ 90,00 mensal.
+                   - Combo Total (Lutas + Ritmos + Musculação, todos os dias): R$ 259,00 -> Destaque entusiasticamente que este combo "compensa muito".
+                4. SE PERGUNTAREM O PREÇO GERAL OU MUSCULAÇÃO: "Nossos planos começam a partir de R$ 99,90! Como temos opções variadas (plano mensal, trimestral), as meninas da recepção ajudam a ver qual encaixa melhor pra você presencialmente."
+                5. PROIBIDO FORÇAR VISITA FORA DE HORA: Se a conversa for sobre preço e do nada o cliente pedir "Como funciona?", NÃO FALE DE PREÇO NEM DE AGENDAMENTO IMEDIATO. Explique a infraestrutura baseada nos [BENEFÍCIOS].
                 
             = SERVIÇOS =
                 - Musculação Completa: (Equipamentos novos e área de pesos livres).
@@ -1690,14 +1697,15 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         * Se focar no objetivo físico -> Conecte levemente com uma modalidade adequada (ex: Muay Thai para desestressar, Musculação para dores/fortalecer), citando APENAS 1 benefício curto, mas SEM fazer o convite.
                         - Observação: Seja EXTREMAMENTE concisa e humana. Troque a "venda" por um papo de amiga. É PROIBIDO empurrar o agendamento ou enviar convites no final da frase, a não ser que o cliente peça explicitamente para agendar ou conhecer o espaço. O objetivo é fazer o cliente se sentir acolhido e ouvido.
 
-                3. BLINDAGEM DE PREÇO (TÉCNICA DO PIVÔ COM TRANSPARÊNCIA):
+                3. BLINDAGEM DE PREÇO E VALORES DE MODALIDADES (PIVÔ COM TRANSPARÊNCIA):
                     - GATILHO: Pergunta sobre valor/mensalidade.
-                    - AÇÃO MENTAL: O preço frio às vezes assusta, então tente amortecer garantindo que existem planos acessíveis. PORÉM, se o cliente insistir, for curto e grosso, ou demonstrar que está incomodado com a falta de uma resposta clara, PARE DE DRIBLAR E DÊ O PREÇO IMEDIATAMENTE.
+                    - AÇÃO MENTAL: O preço frio às vezes assusta, então tente amortecer garantindo que existem planos acessíveis e convidando para aula. PORÉM, se o cliente insistir, for curto e grosso, ou demonstrar que está incomodado com a falta de uma resposta clara, PARE DE DRIBLAR E DÊ OS PREÇOS EXATOS.
                         - Drible inicial (se a pergunta for leve):
-                            1. "Temos planos flexíveis que cabem no bolso! Mas varia do que vc procura. O mais importante primeiro é saber se vc vai gostar do nosso espaço."
-                        - Se ele insistir ou for direto ("Qual o valor?", "Só quero saber o preço"):
-                            2. "Nossos planos começam em R$ 99,90 e variam dependendo da modalidade e do pacote escolhido! Como cada caso é um caso, a gente sempre libera a primeira aula de graça pra vc vir testar sem compromisso."
-                    - ESTRATÉGIA: Use a aula experimental grátis como atrativo principal, mas NUNCA irrite o cliente escondendo informação. Se notar que ele quer o número, seja transparente e passe o valor inicial que você sabe.
+                            1. "Temos planos flexíveis começando em R$ 99,90! Mas varia do que vc procura. O ideal é você vir fazer uma aula de graça pra testar e já conhecer nossa energia sem compromisso!"
+                        - Se ele insistir, ficar frustrado com o drible ou for direto exigindo o preço da luta/ritmo:
+                            2. REVELE OS PREÇOS DE FORMA AMIGÁVEL E VENDA O COMBO: 
+                               "Pra Lutas (Muay Thai, Jiu, Capoeira) o mensal avulso fica R$ 160,00. Ritmos é R$ 90,00. Mas o que a galera mais pega é o nosso Combo que libera TUDO para treinar a semana toda por R$ 259,00! Esse compensa muito meeeesmo. O que acha de vir testar uma aula nossa de graça?"
+                    - ESTRATÉGIA: Use a aula experimental grátis como atrativo principal sempre, mas NUNCA irrite o cliente escondendo informação. Se notar que ele insiste ou chateia, passe imediatamente os valores exatos e destaque o combo (259,00).
 
                 4. CONTROLE DE AGENDAMENTO: É PROIBIDO oferecer aula experimental ou tentar agendar se o cliente estiver apenas tirando dúvidas de valores ou planos. Só fale de agendamento se o cliente usar palavras como: "quero ir", "vou aí", "queria conhecer", "posso testar?". Caso contrário, responda a dúvida e encerre a mensagem de forma gentil, sem perguntas.- 
                     TÁTICA DA ESCASSEZ (O Pulo do Gato): Nunca diga que a agenda está vazia. Crie valor no horário. Fale como se o agendamento já fosse o próximo passo natural.
@@ -1915,7 +1923,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 - SITUAÇÃO B: O cliente perguntou "Tudo bem?" ou "Como vai?"
                     -> Responda: "Tudo ótimo por aqui! Aqui é a Helena IA da Brooklyn Academia. E com vc? Como é seu nome?"
                 - SITUAÇÃO C: O cliente respondeu que está bem ("Tudo joia", "Tudo sim")?
-                    -> Responda: "Que bom! Aqui é a Helena da Brooklyn IA. E qual seu nome?"
+                    -> Responda: "Que bom! Aqui é a Helena IA da Brooklyn Academia. E qual seu nome?"
             
             PRIORIDADE 6: FILTRO DE ABSURDOS
                 - O cliente disse algo sem sentido ou recusou falar o nome?
@@ -1979,19 +1987,37 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 observacao=args.get("observacao", "")
             )
 
-            if resp.get("sucesso") and RESPONSIBLE_NUMBER:
-                msg_aviso_admin = (
-                    f"🔔 *NOVO AGENDAMENTO*\n\n"
-                    f"👤 *Cliente:* {nome_cliente}\n"
-                    f"📅 *Data:* {data_agendada}\n"
-                    f"⏰ *Horário:* {hora_agendada}\n"
-                    f"💪 *Serviço:* {servico_tipo}\n"
-                    f"📞 *Telefone:* {telefone_arg}\n"
-                )
+            if resp.get("sucesso"):
+                try:
+                    from app.utils.helpers import parse_data, str_to_time
+                    dt_agen = parse_data(data_agendada)
+                    hr_agen = str_to_time(hora_agendada)
+                    if dt_agen and hr_agen:
+                        s_datetime = datetime.combine(dt_agen.date(), hr_agen)
+                        conversation_collection.update_one(
+                            {'_id': contact_id}, 
+                            {'$set': {
+                                'scheduled_datetime': s_datetime,
+                                'intervention_active': True
+                            }}
+                        )
+                except Exception as e:
+                    print(f"⚠️ Erro ao salvar scheduled_datetime para follow-up de sucesso: {e}")
 
-                destinatario_admin = f"{RESPONSIBLE_NUMBER}@s.whatsapp.net"
-                print(f"📢 Notificando administrador {RESPONSIBLE_NUMBER} sobre novo agendamento...")
-                send_whatsapp_message(destinatario_admin, msg_aviso_admin, delay_ms=500)
+                if RESPONSIBLE_NUMBER:
+                    msg_aviso_admin = (
+                        f"🔔 *NOVO AGENDAMENTO*\n\n"
+                        f"👤 *Cliente:* {nome_cliente}\n"
+                        f"📅 *Data:* {data_agendada}\n"
+                        f"⏰ *Horário:* {hora_agendada}\n"
+                        f"💪 *Serviço:* {servico_tipo}\n"
+                        f"📞 *Telefone:* {telefone_arg}\n\n"
+                        f"🔒 _Bot pausado automaticamente (Intervenção ativada) para você analisar o contato._"
+                    )
+
+                    destinatario_admin = f"{RESPONSIBLE_NUMBER}@s.whatsapp.net"
+                    print(f"📢 Notificando administrador {RESPONSIBLE_NUMBER} sobre novo agendamento (intervenção ativa)...")
+                    send_whatsapp_message(destinatario_admin, msg_aviso_admin, delay_ms=500)
 
             return json.dumps(resp, ensure_ascii=False)
 
@@ -2198,6 +2224,14 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         perfil_cliente_dados = convo_data.get('client_profile', {})
         janela_recente = history_from_db[-10:] 
         
+        # --- SOLUÇÃO ANTI-ECO E ANTI-ALUCINAÇÃO ---
+        # Como o buffer salva a mensagem quebrada na DB antes desta função ser chamada,
+        # o histórico passado ao Gemini carregava a mensagem duplicada (1x na DB e 1x na current turn).
+        # Vamos omitir todas as mensagens do 'user' no final do histórico, pois enviamos a 
+        # versão consolidada no chat_session.send_message logo abaixo.
+        while janela_recente and janela_recente[-1].get('role') == 'user':
+            janela_recente.pop()
+        
         for m in janela_recente:
             role_name = "Cliente" if m.get('role') == 'user' else ""
             txt = m.get('text', '').replace('\n', ' ')
@@ -2220,6 +2254,10 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
         client_profile_json=perfil_cliente_dados,
         transition_stage=stage_to_pass # <--- Passando Inteiro (0 ou 1)
     )
+
+    # GABARITO INVISÍVEL
+    # Ancoramos a mensagem para evitar o bug do Gemini de alucinar com números e respostas mono-silábicas
+    user_message_wrapped = f"Apenas responda isso de acordo com o historico se houver [MENSAGEM DO CLIENTE]: {user_message}"
 
     max_retries = 3 
     for attempt in range(max_retries):
@@ -2244,7 +2282,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
             )
             
             chat_session = modelo_com_sistema.start_chat(history=old_history_gemini_format) 
-            resposta_ia = chat_session.send_message(user_message)
+            resposta_ia = chat_session.send_message(user_message_wrapped)
             
             turn_input = 0
             turn_output = 0
@@ -2458,7 +2496,7 @@ def verificar_nome_com_ia(push_name):
         print(f"⚠️ Erro no agente verificador de nome: {e}")
         return None
 
-def send_whatsapp_message(number, text_message, delay_ms=1200):
+def send_whatsapp_message(number, text_message, delay_ms=3000):
     evolution_api.send_whatsapp_message(number, text_message, delay_ms)
         
 def enviar_simulacao_digitacao(number):
