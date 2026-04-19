@@ -215,6 +215,16 @@ if agenda_instance:
                         },
                         "required": ["nome_extraido"]
                     }
+                },
+                {
+                    "name": "fn_enviar_contato_financeiro",
+                    "description": "Envia o VCard (contato clicável) do financeiro da empresa. Use SEMPRE que o cliente quiser falar com o financeiro, ver mensalidade, renovar plano, ou conversar sobre dinheiro.",
+                    "parameters": {
+                        "type_": "OBJECT",
+                        "properties": {
+                            "observacao": {"type_": "STRING", "description": "Qualquer detalhe extra (opcional)"}
+                        }
+                    }
                 }
             ]
         }
@@ -271,6 +281,9 @@ def analisar_status_da_conversa(history):
     for msg in msgs_para_analise:
         text = msg.get('text', '')
         role = "Bot" if msg.get('role') in ['assistant', 'model'] else "Cliente"
+
+        if "fn_enviar_contato_financeiro" in text:
+            return "stand_by", 0, 0
 
         if any(x in text for x in ["fn_salvar_agendamento", "fn_alterar_agendamento", "[HUMAN_INTERVENTION]"]):
             return "sucesso", 0, 0
@@ -876,7 +889,6 @@ def verificar_followup_automatico():
         webhook_ativo = is_webhook_configurado() 
 
         regras = [
-            {"status": "sucesso",  "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_SUCESSO,  "fallback": "Obrigada! Qualquer coisa estou por aqui."},
             {"status": "fracasso", "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_FRACASSO, "fallback": "Se mudar de ideia, é só chamar!"},
             {"status": "andamento", "stage_atual": 0, "prox_stage": 1, "time": TEMPO_FOLLOWUP_1, "fallback": "Ainda está por aí?"},
             {"status": "andamento", "stage_atual": 1, "prox_stage": 2, "time": TEMPO_FOLLOWUP_2, "fallback": "Ficou alguma dúvida?"},
@@ -1117,6 +1129,101 @@ def verificar_lembretes_agendados():
 
     except Exception as e:
         print(f"❌ Erro crítico no Job de Lembretes: {e}")
+
+def gerar_msg_pos_agendamento_ia(nome_cliente, status):
+    if modelo_ia is None: return None
+    nome_fala = f"{nome_cliente}, " if (nome_cliente and str(nome_cliente).lower() not in ['cliente', 'none', 'null', 'unknown']) else ""
+    
+    if status == 'concluido':
+        prompt = f"""
+        O cliente ({nome_fala}) acabou de concluir uma aula/visita na Brooklyn Academia ontem.
+        SUA MISSÃO: Mandar uma mensagem super amigável de PÓS-VENDA.
+        
+        1. Pergunte como foi a experiência, se deu tudo certo.
+        2. Peça educadamente uma avaliação no Google usando este link exato: https://share.google/wb1tABFEPXQIc0aMy
+        3. Convide para acompanhar o Instagram usando este link exato: https://www.instagram.com/brooklyn_academia/
+        
+        Regras:
+        - Pule uma linha entre o texto e os links.
+        - Deixe os links bem visíveis.
+        - Seja breve, gente boa e motivadora! Não faça texto gigante.
+        """
+    else:  # ausencia
+        prompt = f"""
+        O cliente ({nome_fala}) estava agendado para vir na Brooklyn Academia ontem, mas notamos que ele não pôde comparecer.
+        SUA MISSÃO: Mandar uma mensagem empática.
+        
+        1. Diga que notou que ele não conseguiu vir ontem.
+        2. Pergunte de forma muito amigável se aconteceu algum imprevisto e se está tudo bem.
+        3. Fale que a rotina é corrida mesmo e que as portas estão abertas para se ele quiser remarcar o treino.
+        
+        Regras:
+        - JAMAIS emita tom de cobrança ou ofensa.
+        - Seja extremamente acolhedora e humana.
+        - Use no máximo 2 frases. Curto e direto.
+        """
+        
+    try:
+        resp = modelo_ia.generate_content(prompt)
+        return resp.text.strip()
+    except Exception as e:
+        print(f"⚠️ Erro ao gerar IA pós agendamento: {e}")
+        return None
+
+def verificar_followup_pos_agendamento():
+    if agenda_instance is None: return
+    
+    agora_check = datetime.now(FUSO_HORARIO)
+    if 0 <= agora_check.hour < 5:
+        return
+        
+    if not is_evolution_online():
+        return
+
+    try:
+        agora_utc = datetime.now(timezone.utc)
+        limite_24h = agora_utc - timedelta(hours=24)
+        
+        query = {
+            "status": {"$in": ["concluido", "ausencia"]},
+            "post_attendance_followup_sent": {"$ne": True},
+            "data_atualizacao_status": {"$lte": limite_24h, "$exists": True}
+        }
+        
+        pendentes = list(agenda_instance.collection.find(query))
+        if not pendentes: return
+        
+        for ag in pendentes:
+            destinatario_id = ag.get("owner_whatsapp_id")
+            if not destinatario_id:
+                raw_tel = ag.get("telefone", "")
+                destinatario_id = re.sub(r'\D', '', str(raw_tel))
+            if not destinatario_id: continue
+                
+            nome_cliente = ag.get("nome", "").split()[0].capitalize()
+            status_ag = ag.get("status")
+            
+            msg = gerar_msg_pos_agendamento_ia(nome_cliente, status_ag)
+            
+            if not msg:
+                if status_ag == 'concluido':
+                    msg = f"{nome_cliente}, como foi o treino? Se puder, avalia a gente: https://share.google/wb1tABFEPXQIc0aMy e segue lá no Insta! https://www.instagram.com/brooklyn_academia/"
+                else:
+                    msg = f"{nome_cliente}, notamos que não conseguiu vir ontem! Tá tudo bem por aí? Quando quiser remarcar, é só chamar!"
+                    
+            jid_destino = f"{destinatario_id}@s.whatsapp.net"
+            print(f"🚀 Enviando followup pós-agendamento ({status_ag}) para {jid_destino}...")
+            send_whatsapp_message(jid_destino, msg)
+            append_message_to_db(destinatario_id, 'assistant', msg)
+            
+            agenda_instance.collection.update_one(
+                {"_id": ag["_id"]},
+                {"$set": {"post_attendance_followup_sent": True}}
+            )
+            time.sleep(2)
+            
+    except Exception as e:
+        print(f"❌ Erro no verificar_followup_pos_agendamento: {e}")
 
 def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_customer_name: str, clean_number: str, historico_str: str = "", client_profile_json: dict = None, transition_stage: int = 0, is_recursion: bool = False) -> str:
     try:
@@ -1737,13 +1844,11 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         - AÇÃO: Envie a mensagem PADRÃO DE INSTRUÇÕES completa:
                         "Fechado então! traz uma garrafinha pra agua! e segue nós la no insta! https://www.instagram.com/brooklyn_academia/ ! Já to te esperando em!"
 
-                    [CENÁRIO B: O CLIENTE RESPONDEU DEPOIS DAS INSTRUÇÕES ("Ok", "Obrigado", "Valeu")]
+                    [CENÁRIO B: O CLIENTE CONTINUA CONVERSANDO APÓS AGENDAR]
                         - AÇÃO: É ESTRITAMENTE PROIBIDO repetir a mensagem da garrafinha ou do insta.
-                        - O QUE FAZER: Apenas seja educada e encerre o papo definitivamente.
-                        - Script: "Imagina! Até lá! " ou "Por nada! Qualquer coisa grita. "
-                            - Se ele der um retorno das mensagens a cima, diga só "TMJ!"! (pra encerrar logo)
+                        - O QUE FAZER: Responda as dúvidas extras da pessoa com simpatia, naturalidade e sem forçar vendas! Se for só um agradecimento ("Valeu"), responda "TMJ!" ou "Imagina, até lá!".
 
-                    - GATILHO DE SUCESSO: encerre se já agendou, ou APÓS a função `fn_salvar_agendamento` retornar sucesso.
+                    - CONTINUIDADE: Continue atendendo com calma após o agendamento salvo. NADA de tentar vender.
                     - GATILHO DE DESISTÊNCIA: encerre se já tentou as quebras de objeções APENAS se você já rodou o [PROTOCOLO DE RESGATE] 3 vezes e o cliente continuou dizendo "não".
                     - TRAVA DE SEGURANÇA: Se o cliente disser "Tchau", "Valeu" ou "Obrigado" e AINDA NÃO TIVER AGENDADO, É PROIBIDO USAR ESTE PROTOCOLO. Você deve ignorar a despedida e pular imediatamente para o [PROTOCOLO DE RESGATE].
 
@@ -1997,8 +2102,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                         conversation_collection.update_one(
                             {'_id': contact_id}, 
                             {'$set': {
-                                'scheduled_datetime': s_datetime,
-                                'intervention_active': True
+                                'scheduled_datetime': s_datetime
                             }}
                         )
                 except Exception as e:
@@ -2139,6 +2243,17 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         elif call_name == "fn_solicitar_intervencao":
             motivo = args.get("motivo", "Motivo não especificado pela IA.")
             return json.dumps({"sucesso": True, "motivo": motivo, "tag_especial": "[HUMAN_INTERVENTION]"})
+            
+        elif call_name == "fn_enviar_contato_financeiro":
+            contato_enviado = evolution_api.send_whatsapp_contact(
+                number=f"{contact_id}@s.whatsapp.net",
+                contact_name="Financeiro - Brooklyn",
+                contact_number="554491216103"
+            )
+            if contato_enviado:
+                return json.dumps({"sucesso": True, "msg": "Deu certo. O cliente já recebeu o cartão do VCard do Financeiro."})
+            else:
+                return json.dumps({"erro": "Falha técnica ao enviar o VCard pela API. Avise que ocorreu um erro técnico."})
         
         else:
             return json.dumps({"erro": f"Ferramenta desconhecida: {call_name}"}, ensure_ascii=False)
@@ -3196,7 +3311,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
 
                 if is_gabarito(ai_reply):
                     print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}")
-                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=8000) # Ajustado para 8 segundos fixos
+                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=4000) # Ajustado para 4 segundos fixos
                 
                 elif should_split:
                     print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}")
@@ -3205,17 +3320,17 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                     if not paragraphs: return
 
                     for i, para in enumerate(paragraphs):
-                        tempo_leitura = len(para) * 30 
-                        current_delay = 8000 + tempo_leitura 
+                        tempo_leitura = int(len(para) * 15) # Reduzido pela metade o multiplicador do texto também
+                        current_delay = 4000 + tempo_leitura 
                         
-                        if current_delay > 14000: current_delay = 14000 
+                        if current_delay > 7000: current_delay = 7000 
 
                         send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
                         time.sleep(current_delay / 1000)
 
                 else:
                     print(f"🤖 Resposta da IA (Curta) para {sender_name_from_wpp}")
-                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=8000) 
+                    send_whatsapp_message(sender_number_full, ai_reply, delay_ms=4000) 
 
             try:
                 if ai_reply:
@@ -3256,6 +3371,9 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
 
     scheduler.add_job(verificar_lembretes_agendados, 'interval', minutes=60)
     print("⏰ Agendador de Lembretes (24h antes) iniciado.")
+    
+    scheduler.add_job(verificar_followup_pos_agendamento, 'interval', minutes=30)
+    print("⏰ Agendador de Follow-up Pós-Agendamento (24h depois) iniciado.")
     
     if not scheduler.running:
         scheduler.start()
@@ -3395,7 +3513,11 @@ def api_atualizar_status():
     try:
         agenda_instance.collection.update_one(
             {"_id": ObjectId(ag_id)},
-            {"$set": {"status": novo_status}}
+            {"$set": {
+                "status": novo_status,
+                "data_atualizacao_status": datetime.now(timezone.utc),
+                "post_attendance_followup_sent": False
+            }}
         )
         return jsonify({"sucesso": True}), 200
     except Exception as e:
