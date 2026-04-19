@@ -119,25 +119,24 @@ class EvolutionService:
         clean_number = number.split('@')[0]
         payload = {
             "number": clean_number,
-            "contact": [
+            "contactMessage": [
                 {
                     "fullName": contact_name,
                     "wuid": contact_number
                 }
             ]
         }
-        # Notice we use /chatbot to maintain convention with the connected instance
         url = f"{self.base_url}/message/sendContact/chatbot"
         try:
             response = self._session.post(url, json=payload, timeout=20)
             if response.status_code < 400:
-                log.info(f"✅ Contato ({contact_name}) enviado com sucesso para {clean_number}")
+                print(f"✅ Contato ({contact_name}) enviado com sucesso para {clean_number}")
                 return True
             else:
-                log.error(f"❌ ERRO ao enviar contato para {clean_number}: {response.status_code}")
+                print(f"❌ ERRO API EVOLUTION VCard ({response.status_code}): {response.text}")
                 return False
         except requests.exceptions.RequestException as e:
-            log.error(f"❌ Erro de CONEXÃO ao enviar contato para {clean_number}: {e}")
+            print(f"❌ Erro de CONEXÃO ao enviar contato para {clean_number}: {e}")
             return False
 
 evolution_api = EvolutionService()
