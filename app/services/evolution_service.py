@@ -122,7 +122,8 @@ class EvolutionService:
             "contactMessage": [
                 {
                     "fullName": contact_name,
-                    "wuid": contact_number
+                    "wuid": contact_number,
+                    "phoneNumber": contact_number
                 }
             ]
         }

@@ -11,7 +11,10 @@ import logging
 import base64
 import time
 import threading
-from flask import Flask, request, jsonify
+import io
+import openpyxl
+from openpyxl.styles import PatternFill, Font, Alignment
+from flask import Flask, request, jsonify, send_file
 from datetime import datetime, timedelta, timezone, time as dt_time
 from dateutil import parser as dateparser
 from dotenv import load_dotenv
@@ -26,7 +29,7 @@ from bson.objectid import ObjectId
 
 from app.core.config import config
 from app.core.db import db
-from app.utils.helpers import extrair_tokens_da_resposta
+from app.utils.helpers import extrair_tokens_da_resposta, parse_data
 
 FUSO_HORARIO = config.FUSO_HORARIO
 CLIENT_NAME = config.CLIENT_NAME
@@ -1542,6 +1545,15 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                    - Combo Total (Lutas + Ritmos + Musculação, todos os dias): R$ 259,00 -> Destaque entusiasticamente que este combo "compensa muito".
                 4. SE PERGUNTAREM O PREÇO GERAL OU MUSCULAÇÃO: "Nossos planos começam a partir de R$ 99,90! Como temos opções variadas (plano mensal, trimestral), as meninas da recepção ajudam a ver qual encaixa melhor pra você presencialmente."
                 5. PROIBIDO FORÇAR VISITA FORA DE HORA: Se a conversa for sobre preço e do nada o cliente pedir "Como funciona?", NÃO FALE DE PREÇO NEM DE AGENDAMENTO IMEDIATO. Explique a infraestrutura baseada nos [BENEFÍCIOS].
+                6. SE O CLIENTE INSISTIR NO PREÇO EXATO:
+                    - MENSAGEM 1: Valide a pergunta e plante curiosidade antes do número.
+                      "Vou te falar sim! Mas deixa eu te contar uma coisa antes pra fazer sentido o valor..."
+                      "A gente tem musculação, lutas e dança num só lugar, com instrutor que realmente te acompanha."
+                    
+                    - MENSAGEM 2 (logo após): Entregue o valor com ancoragem natural, sem soar vendedor.
+                      "Pra ter tudo isso, nossos planos começam em R$ 99,90. 
+                       Dependendo do que você quiser, pode ser bem menos do que imagina.
+                       Quer vir testar de graça primeiro pra ver se faz sentido pra você?"
                 
             = SERVIÇOS =
                 - Musculação Completa: (Equipamentos novos e área de pesos livres).
@@ -1588,6 +1600,12 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                 GRADE REAL DE AULAS (LEI ABSOLUTA)
                     (Estes são os horários de referência. Porém, SEMPRE que o cliente pedir QUALQUER horário, você é OBRIGADA a chamar a função `fn_listar_horarios_disponiveis` para confirmar a disponibilidade real no sistema antes de responder).
                     
+                    [REGRA DE AULA EXPERIMENTAL NO FIM DE SEMANA - CRÍTICO]
+                    Nós TEMOS treinos e aulas aos finais de semana (Sábado e Domingo) para nossos alunos matriculados. Porém, NÃO AGENDAMOS AULA EXPERIMENTAL nos finais de semana. 
+                    Se o cliente perguntar se tem aula no sábado/domingo, responda que SIM! Temos treinos rolando para os alunos.
+                    Se ele quiser AGENDAR para conhecer (experimental), explique com muita simpatia: "Aos finais de semana nós temos os treinos sim para a galera matriculada, mas para quem vem fazer a primeira aula experimental para conhecer, a gente agenda só durante a semana (Seg a Sex), porque o professor consegue te dar muito mais atenção e passar os fundamentos básicos! Qual dia de segunda a sexta fica melhor pra você?"
+                    NUNCA diga que a academia não tem aula no fim de semana, apenas direcione o agendamento da experimental para os dias de semana.
+
                     [MUSCULAÇÃO] 
                         - Horário livre (dentro do funcionamento da academia).
                     
@@ -1600,13 +1618,13 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
 
                     [JIU-JITSU ADULTO] (Acima de 12 anos)
                         - Ter/Qui: 20:00
-                        - Sáb: 08:30
+                        - Sáb: 08:30 e 15:00
                         - MATERIAL: Se não tiver Kimono, nós EMPRESTAMOS para a aula experimental (apenas se o aluno perguntar).
                         (Apenas estes dias).
 
                     [JIU-JITSU KIDS] (5 a 12 anos)
                         - Ter/Qui: 18:15
-                        - Sáb: 09:30
+                        - Sáb: 09:30 e 15:00
                         - MATERIAL: Se não tiver Kimono, nós EMPRESTAMOS para a aula experimental (apenas se o aluno perguntar).
                         (Apenas estes dias).
 
@@ -1707,6 +1725,9 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         D) CLIENTE "TÉCNICO" (Planejador - C):
                             - Sintoma: Pergunta marca do aparelho, metodologia exata, detalhes contratuais, detalhes tecnicos.
                             - Sua Reação: SEJA TÉCNICA. Dê dados, explique o método científico, mostre organização.
+                        E) CLIENTE "COMPRADOR DECIDIDO" (Quente):
+                            - Sintoma: Já sabe o que quer, pergunta direto "quanto é", "tem vaga hoje", "quero marcar".
+                            - Sua Reação: CANCELE toda sondagem. Vá direto ao agendamento. Cada pergunta desnecessária esfria esse lead.
                     3. COMPORTAMENTO E TOM (CAMALEÃO):
                         - Rapport: espelhe para gerar conexão.
                         - Espelhamento: Se o cliente for breve, seja breve (exceto quando ele pede informações). Mantenha o tom amigável e focado.
@@ -3500,7 +3521,7 @@ def api_meus_agendamentos():
         return jsonify(lista_formatada), 200
 
     except Exception as e:
-        print(f"❌ Erro na API Admin: {e}")
+        print(f"Erro em api_meus_agendamentos: {e}")
         return jsonify({"erro": str(e)}), 500
 
 @app.route('/api/agendamento/atualizar-status', methods=['POST'])
@@ -3590,7 +3611,6 @@ def api_criar_agendamento():
         return jsonify(resultado), 400 # Retorna erro 400 se falhar (ex: horário ocupado)
         
     return jsonify(resultado), 200
-
 @app.route('/api/folga/gerenciar', methods=['POST'])
 def api_gerenciar_folga():
     data = request.json
@@ -3603,24 +3623,14 @@ def api_gerenciar_folga():
     dt = parse_data(data_str)
     if not dt: return jsonify({"erro": "Data inválida"}), 400
     
-    # --- CORREÇÃO DE FUSO HORÁRIO AQUI ---
-    # 1. Cria a data "Ingênua" (Naive)
-    inicio_naive = datetime.combine(dt.date(), dt_time.min) # 00:00
-    fim_naive = datetime.combine(dt.date(), dt_time.max)    # 23:59
+    # --- CONSISTÊNCIA COM AGENDA (DATETIME NAIVE) ---
+    inicio_naive = datetime.combine(dt.date(), dt_time.min)
+    fim_naive = datetime.combine(dt.date(), dt_time.max)
     
-    # 2. Localiza para o Brasil (Diz: "Isso é 00:00 no Brasil")
-    inicio_br = FUSO_HORARIO.localize(inicio_naive)
-    fim_br = FUSO_HORARIO.localize(fim_naive)
-    
-    # 3. Converte para UTC para salvar no Mongo corretamente
-    inicio_utc = inicio_br.astimezone(timezone.utc)
-    fim_utc = fim_br.astimezone(timezone.utc)
-    # -------------------------------------
-
     if acao == 'criar':
-        # Verifica conflitos usando as datas UTC
+        # Verifica conflitos usando as mesmas datas Naive da Agenda
         conflitos = agenda_instance.collection.count_documents({
-            "inicio": {"$gte": inicio_utc, "$lte": fim_utc},
+            "inicio": {"$gte": inicio_naive, "$lte": fim_naive},
             "servico": {"$ne": "Folga"}, 
             "status": {"$nin": ["cancelado", "ausencia", "bloqueado"]}
         })
@@ -3632,8 +3642,8 @@ def api_gerenciar_folga():
             "nome": "BLOQUEIO ADMINISTRATIVO",
             "servico": "Folga",
             "status": "bloqueado",
-            "inicio": inicio_utc, # Salva em UTC
-            "fim": fim_utc,       # Salva em UTC
+            "inicio": inicio_naive, 
+            "fim": fim_naive,      
             "created_at": datetime.now(timezone.utc),
             "owner_whatsapp_id": "admin",
             "cliente_telefone": ""
@@ -3642,7 +3652,7 @@ def api_gerenciar_folga():
 
     elif acao == 'remover':
         resultado = agenda_instance.collection.delete_many({
-            "inicio": {"$gte": inicio_utc, "$lte": fim_utc},
+            "inicio": {"$gte": inicio_naive, "$lte": fim_naive},
             "$or": [{"servico": "Folga"}, {"status": "bloqueado"}]
         })
         return jsonify({"sucesso": True}), 200
@@ -3752,6 +3762,133 @@ def api_listar_conversas():
             
         return jsonify(conversas), 200
     
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+@app.route('/api/conversas/exportar', methods=['GET'])
+def api_exportar_conversas_excel():
+    if conversation_collection is None:
+        return jsonify({"erro": "Banco de conversas offline"}), 500
+
+    status_filter = request.args.get('status')
+    data_inicio = request.args.get('data_inicio')
+    data_fim = request.args.get('data_fim')
+
+    query = {"_id": {"$ne": "BOT_STATUS"}}
+
+    # Trata o filtro de status, permitindo "stand_by"
+    if status_filter and status_filter != 'todos':
+        query['conversation_status'] = status_filter
+
+    if data_inicio and data_fim:
+        try:
+            dt_ini = datetime.strptime(data_inicio, "%Y-%m-%d")
+            dt_fim = datetime.strptime(data_fim, "%Y-%m-%d")
+            query['last_interaction'] = {
+                "$gte": dt_ini,
+                "$lt": dt_fim + timedelta(days=1)
+            }
+        except:
+            pass
+
+    try:
+        doc_travados = conversation_collection.find_one({'_id': 'numeros_travados'})
+        lista_travados = doc_travados.get('lista', []) if doc_travados else []
+
+        resultados = list(conversation_collection.find(query).sort("last_interaction", -1))
+
+        # Cria a planilha
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Conversas"
+
+        # Define cabeçalhos e estilos (UX Senior - Full Profile)
+        headers = [
+            "Telefone", "Nome", "Status", "Data Contato", 
+            "Gênero", "Idade Faixa", "Estrutura Familiar", "Ocupação",
+            "Histórico Esportivo", "Objetivo Principal", "Dor/Problema",
+            "Perfil Comportamental", "Estilo Comunicação", "Fatores Decisão",
+            "Origem", "Objeções", "Nível Relacionamento", "Desejos", "Medos",
+            "Agrados", "Observações Importantes", "Histórico Conversa", "Travado?"
+        ]
+        ws.append(headers)
+
+        header_fill = PatternFill(start_color="4F46E5", end_color="4F46E5", fill_type="solid")
+        header_font = Font(color="FFFFFF", bold=True)
+        center_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = center_align
+
+        # Preenche os dados
+        for r in resultados:
+            last_int = r.get("last_interaction")
+            dt_str = last_int.astimezone(FUSO_HORARIO).strftime("%d/%m/%Y %H:%M") if isinstance(last_int, datetime) else ""
+            
+            telefone_id = str(r.get("_id"))
+            is_travado = "Sim" if telefone_id in lista_travados else "Não"
+            nome = r.get("customer_name") or r.get("sender_name") or "Sem Nome"
+            status = r.get("conversation_status", "andamento")
+
+            perfil = r.get("client_profile", {}) or {}
+            
+            # Extraindo todos os campos do MongoDB de forma segura
+            genero = perfil.get("genero") or perfil.get("gender") or "-"
+            idade = perfil.get("idade_faixa") or "-"
+            familiar = perfil.get("estrutura_familiar") or "-"
+            ocupacao = perfil.get("ocupacao_principal") or "-"
+            esportivo = perfil.get("historico_esportivo") or "-"
+            objetivo = perfil.get("objetivo_principal") or perfil.get("objetivo_treino") or perfil.get("goal") or "-"
+            dor = perfil.get("principal_dor_problema") or "-"
+            comportamental = perfil.get("perfil_comportamental") or "-"
+            estilo_com = perfil.get("estilo_de_comunicacao") or "-"
+            fatores = perfil.get("fatores_de_decisao") or "-"
+            origem = perfil.get("origem_contato") or "-"
+            objecoes = perfil.get("objecoes") or perfil.get("objecoes:") or "-"
+            relacionamento = perfil.get("nivel_de_relacionamento") or "-"
+            desejos = perfil.get("desejos") or "-"
+            medos = perfil.get("medos") or "-"
+            agrados = perfil.get("agrados") or perfil.get("preferencias") or "-"
+            obs_imp = perfil.get("observacoes_importantes") or "-"
+            historico = perfil.get("historico_converssa") or perfil.get("resumo_conversa") or perfil.get("historico") or "-"
+
+            row_data = [
+                telefone_id, nome, status, dt_str,
+                genero, idade, familiar, ocupacao, esportivo, objetivo, dor,
+                comportamental, estilo_com, fatores, origem, objecoes, 
+                relacionamento, desejos, medos, agrados, obs_imp, historico, is_travado
+            ]
+            ws.append(row_data)
+
+        # Ajusta larguras das colunas (UX Senior - Perfil Completo)
+        # Como são muitas colunas, vamos definir uma largura padrão confortável
+        for col in range(1, len(headers) + 1):
+            col_letter = openpyxl.utils.get_column_letter(col)
+            if col_letter in ["H", "J", "K", "O", "P", "U", "V"]: # Colunas de texto longo
+                ws.column_dimensions[col_letter].width = 40
+            else:
+                ws.column_dimensions[col_letter].width = 20
+
+        # Alinhamento vertical e horizontal para todas as células
+        for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=len(headers)):
+            for cell in row:
+                cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+        # Salva em memória
+        excel_file = io.BytesIO()
+        wb.save(excel_file)
+        excel_file.seek(0)
+
+        # Retorna o arquivo
+        return send_file(
+            excel_file,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name='conversas_exportadas.xlsx'
+        )
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
     
