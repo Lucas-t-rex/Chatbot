@@ -1,0 +1,13 @@
+# Arquivos de ambiente e segredos
+.env
+segredos.txt
+
+# Cache do Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Diretórios de ambiente virtual
+.venv
+venv/
