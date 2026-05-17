@@ -2954,7 +2954,31 @@ def handle_admin_manual_message(message_data):
     try:
         key_info = message_data.get('key', {})
         remote_jid = key_info.get('remoteJid', '')
-        recipient_number = remote_jid.split('@')[0]
+        raw_number = remote_jid.split('@')[0]
+
+        if not raw_number:
+            return
+
+        # Resolve LID (ID interno do WhatsApp iOS/Web) para número real.
+        # O remoteJid chega como "173749009662084@s.whatsapp.net" mas o lid_mappings
+        # armazena a chave como "173749009662084@lid" — por isso montamos a chave manualmente.
+        is_lid = raw_number.isdigit() and len(raw_number) > 13 and not raw_number.startswith('55')
+        if is_lid and conversation_collection is not None:
+            try:
+                db_lids = client_conversas[DB_NAME]['lid_mappings']
+                lid_key = f"{raw_number}@lid"
+                mapping = db_lids.find_one({'_id': lid_key})
+                if mapping:
+                    recipient_number = mapping['real_number']
+                    print(f"🔗 [Admin manual] LID {raw_number} → {recipient_number}")
+                else:
+                    print(f"❌ [Admin manual] LID {raw_number} não mapeado. Aguardando mensagem do cliente.")
+                    return
+            except Exception as e:
+                print(f"⚠️ [Admin manual] Erro ao resolver LID: {e}")
+                return
+        else:
+            recipient_number = raw_number
 
         if not recipient_number:
             return
