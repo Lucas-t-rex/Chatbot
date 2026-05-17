@@ -2983,6 +2983,15 @@ def handle_admin_manual_message(message_data):
         if not recipient_number:
             return
 
+        # Dedup: evita salvar duas vezes se a Evolution API disparar o evento duplicado
+        msg_id = key_info.get('id')
+        if msg_id:
+            if msg_id in processed_messages:
+                return
+            processed_messages.add(msg_id)
+            if len(processed_messages) > 1000:
+                processed_messages.clear()
+
         message = message_data.get('message', {})
         text_content = None
 
