@@ -3486,12 +3486,13 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                 if len(ai_reply) > 30: should_split = True
                 if "\n" in ai_reply: should_split = True
 
+                reply_resumo = ai_reply.replace('\n', ' | ')[:120]
                 if is_gabarito(ai_reply):
-                    print(f"🤖 Resposta da IA (Bloco Único/Gabarito) para {sender_name_from_wpp}")
+                    print(f"🤖 [{sender_name_from_wpp}] Enviando: '{reply_resumo}'")
                     send_whatsapp_message(sender_number_full, ai_reply, delay_ms=4000) # Ajustado para 4 segundos fixos
-                
+
                 elif should_split:
-                    print(f"🤖 Resposta da IA (Fracionada) para {sender_name_from_wpp}")
+                    print(f"🤖 [{sender_name_from_wpp}] Enviando: '{reply_resumo}'")
                     paragraphs = [p.strip() for p in re.split(r'(?<=[.!?])\s+|\n+', ai_reply) if p.strip()]
 
                     if not paragraphs: return
@@ -3506,7 +3507,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                         time.sleep(current_delay / 1000)
 
                 else:
-                    print(f"🤖 Resposta da IA (Curta) para {sender_name_from_wpp}")
+                    print(f"🤖 [{sender_name_from_wpp}] Enviando: '{reply_resumo}'")
                     send_whatsapp_message(sender_number_full, ai_reply, delay_ms=4000) 
 
             try:
