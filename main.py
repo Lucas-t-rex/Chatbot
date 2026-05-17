@@ -2216,7 +2216,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
         elif call_name == "fn_capturar_nome":
             try:
                 nome_bruto = args.get("nome_extraido", "").strip()
-                print(f"--- [DEBUG RASTREIO 1] IA extraiu: nome_bruto='{nome_bruto}'")
+                print(f"🪄 [Captura nome] IA extraiu: '{nome_bruto}'")
                 if not nome_bruto:
                     return json.dumps({"erro": "Nome estava vazio."}, ensure_ascii=False)
 
@@ -2245,7 +2245,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                     print(f"Aviso: Exceção na limpeza de nome: {e}")
                     nome_limpo = nome_bruto.capitalize() # Fallback 
                 
-                print(f"--- [DEBUG RASTREIO 2] Python limpou: nome_limpo='{nome_limpo}'")
+                print(f"🪄 [Captura nome] Nome limpo: '{nome_limpo}'")
 
                 if conversation_collection is not None:
                     conversation_collection.update_one(
@@ -3082,9 +3082,8 @@ def _trigger_ai_processing(clean_number, last_message_data):
 
     full_user_message = "\n".join(messages_to_process)
 
-    log_info(f"[DEBUG RASTREIO | PONTO 1] Buffer para {clean_number}: '{full_user_message}'")
-    
-    print(f"⚡️ DISPARANDO IA para {clean_number} com mensagem agrupada: '{full_user_message}'")
+    msg_resumo = full_user_message.replace('\n', ' | ')[:80]
+    print(f"⚡️ [{clean_number}] Mensagem recebida: '{msg_resumo}'")
 
     threading.Thread(target=process_message_logic, args=(last_message_data, full_user_message)).start()
 
@@ -3374,7 +3373,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             if user_message_content:
                 append_message_to_db(clean_number, 'user', user_message_content)
 
-        print(f"🧠 IA Pensando para {clean_number}: '{user_message_content}'")
+        print(f"🧠 [{clean_number}] Processando para IA...")
         
         # --- Checagem de Admin ---
         if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
@@ -3431,7 +3430,6 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             )
             print(f"🔒 [ESTÁGIO] Cliente {clean_number} respondeu após capturar nome. Evoluindo para Estágio 1 (Manutenção).")
 
-        log_info(f"[DEBUG RASTREIO | PONTO 2] Conteúdo final para IA (Cliente {clean_number}): '{user_message_content}'")
 
         # Chama a IA
         ai_reply = gerar_resposta_ia_com_tools(
