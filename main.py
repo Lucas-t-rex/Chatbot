@@ -3553,8 +3553,8 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
     scheduler.add_job(verificar_followup_pos_agendamento, 'interval', minutes=30)
     print("⏰ Agendador de Follow-up Pós-Agendamento (24h depois) iniciado.")
 
-    scheduler.add_job(evolution_api.verificar_e_reconfigurar_webhook, 'interval', seconds=30)
-    print("⏰ Agendador de Webhook Auto-Heal iniciado (verificação a cada 30 min).")
+    scheduler.add_job(evolution_api.verificar_e_reconfigurar_webhook, 'interval', minutes=15)
+    print("⏰ Agendador de Webhook Auto-Heal iniciado (verificação a cada 15 min).")
 
     if not scheduler.running:
         scheduler.start()
