@@ -1616,7 +1616,7 @@ def get_system_prompt_unificado(saudacao: str, horario_atual: str, known_custome
                         (Apenas estes dias).
 
                     [JIU-JITSU ADULTO] (Acima de 12 anos)
-                        - Ter/Qui: 20:00
+                        - Seg/Qua: 19:30
                         - Sáb: 08:30 (sem agendamento experimental — sábado é treino dos alunos matriculados)
                         - MATERIAL: Se não tiver Kimono, nós EMPRESTAMOS para a aula experimental (apenas se o aluno perguntar).
                         (Apenas estes dias).

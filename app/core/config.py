@@ -63,7 +63,7 @@ class Config:
             1: ["20:00"], 3: ["20:00"]   # Ter/Qui 20:00 | Sex (sparring) sem agendamento
         },
         "jiu-jitsu": {
-            1: ["20:00"], 3: ["20:00"]
+            0: ["19:30"], 2: ["19:30"]  # Seg/Qua 19:30
         },
         "jiu-jitsu kids": {
             1: ["18:00"], 3: ["18:00"]
