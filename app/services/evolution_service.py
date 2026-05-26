@@ -89,6 +89,62 @@ class EvolutionService:
             log.warning("⚠️ [Webhook] Não encontrado ou desativado. Tentando registrar...")
             self.configurar_webhook()
 
+    def get_connection_state(self) -> str:
+        """Retorna o estado atual da conexão WhatsApp: 'open', 'connecting', 'close' ou 'unknown'."""
+        try:
+            url = f"{self.base_url}/instance/connectionState/chatbot"
+            response = self._session.get(url, timeout=5)
+            if response.status_code == 200:
+                data = response.json()
+                # A Evolution API v1/v2 retorna o estado em campos diferentes
+                state = (
+                    data.get('instance', {}).get('state')
+                    or data.get('state')
+                    or ""
+                ).lower()
+                return state if state else ("open" if "open" in response.text.lower() else "unknown")
+            return "unknown"
+        except Exception:
+            return "unknown"
+
+    def tentar_reconectar(self) -> bool:
+        """
+        Tenta reconectar a instância WhatsApp quando o estado não é 'open'.
+        Chama o endpoint de connect/restart da Evolution API.
+        Retorna True se a chamada foi aceita.
+        """
+        try:
+            url = f"{self.base_url}/instance/connect/chatbot"
+            response = self._session.get(url, timeout=10)
+            if response.status_code in [200, 201]:
+                log.info("🔄 [Reconexão] Solicitação de reconexão enviada com sucesso.")
+                return True
+            else:
+                log.warning(f"⚠️ [Reconexão] Falha na solicitação. Status: {response.status_code}")
+                return False
+        except Exception as e:
+            log.error(f"❌ [Reconexão] Erro de conexão: {e}")
+            return False
+
+    def verificar_e_reconectar_whatsapp(self) -> None:
+        """
+        Job periódico: verifica se o WhatsApp está conectado (estado 'open').
+        Se não estiver, tenta reconectar automaticamente e reconfigura o webhook.
+        Isso evita o problema de mensagens presas em 'Aguardando mensagem'
+        após um restart da Evolution API.
+        """
+        state = self.get_connection_state()
+        if state == "open":
+            return  # Tudo certo, nada a fazer
+
+        log.warning(f"⚠️ [Saúde] WhatsApp não está 'open' (estado atual: '{state}'). Tentando reconectar...")
+        reconectou = self.tentar_reconectar()
+        if reconectou:
+            # Após reconectar, garante que o webhook ainda está registrado
+            self.verificar_e_reconfigurar_webhook()
+        else:
+            log.error("❌ [Saúde] Reconexão falhou. Será tentado novamente no próximo ciclo.")
+
     def enviar_simulacao_digitacao(self, number: str) -> bool:
         clean_number = number.split('@')[0]
         payload = {
@@ -112,7 +168,7 @@ class EvolutionService:
 
     def send_whatsapp_message(self, number: str, text_message: str, delay_ms: int = 3000) -> bool:
         clean_number = number.split('@')[0]
-        
+
         # I didn't put remove_emojis in helpers.py yet. I will define it here for encapsulation.
         def remove_emojis_func(text):
             if not text: return ""
@@ -122,23 +178,31 @@ class EvolutionService:
                 r'\u2700-\u27bf'
                 r'\ufe0f]'
                 , '', text).strip()
-                
+
         mensagem_limpa = remove_emojis_func(text_message)
         if not mensagem_limpa:
             return False
-        
+
+        # Limita o delay a no m\u00e1ximo 5s para evitar timeout na Evolution API
+        delay_seguro = min(delay_ms, 5000)
+
+        # linkPreview s\u00f3 faz sentido quando h\u00e1 URL; ativ\u00e1-lo em textos comuns
+        # faz o WhatsApp ficar no estado "aguardando mensagem" quando o servi\u00e7o
+        # de preview do Meta est\u00e1 lento ou indispon\u00edvel.
+        tem_link = "http://" in mensagem_limpa or "https://" in mensagem_limpa
+
         payload = {
-            "number": clean_number, 
+            "number": clean_number,
             "textMessage": {
                 "text": mensagem_limpa
             },
             "options": {
-                "delay": delay_ms,    
-                "presence": "composing", 
-                "linkPreview": True
+                "delay": delay_seguro,
+                "presence": "composing",
+                "linkPreview": tem_link
             }
         }
-        
+
         url = f"{self.base_url}/message/sendText/chatbot"
         try:
             response = self._session.post(url, json=payload, timeout=40)

@@ -3498,13 +3498,14 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                     if not paragraphs: return
 
                     for i, para in enumerate(paragraphs):
-                        tempo_leitura = int(len(para) * 15) # Reduzido pela metade o multiplicador do texto também
-                        current_delay = 4000 + tempo_leitura 
-                        
-                        if current_delay > 7000: current_delay = 7000 
-
-                        send_whatsapp_message(sender_number_full, para, delay_ms=current_delay)
-                        time.sleep(current_delay / 1000)
+                        # O delay interno da Evolution API já simula a digitação;
+                        # o time.sleep adicional era redundante e causava duplo-bloqueio
+                        # que deixava mensagens presas no estado "Aguardando mensagem".
+                        # Agora usamos um intervalo fixo pequeno entre parágrafos (1.5s)
+                        # só para garantir a ordem de entrega sem stress na API.
+                        send_whatsapp_message(sender_number_full, para, delay_ms=3000)
+                        if i < len(paragraphs) - 1:
+                            time.sleep(1.5)
 
                 else:
                     print(f"🤖 [{sender_name_from_wpp}] Enviando: '{reply_resumo}'")
@@ -3555,6 +3556,9 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
 
     scheduler.add_job(evolution_api.verificar_e_reconfigurar_webhook, 'interval', minutes=15)
     print("⏰ Agendador de Webhook Auto-Heal iniciado (verificação a cada 15 min).")
+
+    scheduler.add_job(evolution_api.verificar_e_reconectar_whatsapp, 'interval', minutes=5)
+    print("⏰ Agendador de Reconexão WhatsApp iniciado (verificação a cada 5 min).")
 
     if not scheduler.running:
         scheduler.start()
@@ -3876,6 +3880,58 @@ def api_listar_travados():
         return jsonify({"sucesso": True, "lista": lista}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
+
+@app.route('/api/conversas/historico/<telefone>', methods=['GET'])
+def api_historico_conversa(telefone):
+    """Retorna o history completo de uma conversa (espelho do MongoDB) para exibição estilo WhatsApp no app."""
+    if conversation_collection is None:
+        return jsonify({"erro": "Banco de conversas offline"}), 500
+
+    num_str = re.sub(r'\D', '', str(telefone or ''))
+    if not num_str:
+        return jsonify({"erro": "Telefone inválido"}), 400
+
+    try:
+        doc = conversation_collection.find_one({"_id": num_str})
+        if not doc:
+            return jsonify({"erro": "Conversa não encontrada"}), 404
+
+        history_raw = doc.get("history", []) or []
+        mensagens = []
+        for msg in history_raw:
+            role = msg.get("role", "")
+            texto = msg.get("text", "") or ""
+            ts_raw = msg.get("ts", "")
+
+            ts_iso = ""
+            if isinstance(ts_raw, datetime):
+                ts_iso = ts_raw.isoformat()
+            elif isinstance(ts_raw, str):
+                ts_iso = ts_raw
+
+            tipo = "texto"
+            if texto.startswith("Chamando função:"):
+                tipo = "ferramenta"
+            elif "[Áudio transcrito]" in texto or "[Transcrição de áudio]" in texto or "[AUDIO]" in texto.upper():
+                tipo = "audio"
+
+            mensagens.append({
+                "role": role,
+                "text": texto,
+                "ts": ts_iso,
+                "tipo": tipo,
+            })
+
+        return jsonify({
+            "telefone": str(doc.get("_id")),
+            "nome": doc.get("customer_name") or doc.get("sender_name") or "Sem Nome",
+            "status": doc.get("conversation_status", "andamento"),
+            "mensagens": mensagens,
+        }), 200
+
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
 
 @app.route('/api/conversas', methods=['GET'])
 def api_listar_conversas():
