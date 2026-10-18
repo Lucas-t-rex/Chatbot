@@ -269,10 +269,14 @@ def main():
         if destino in analista.variantes_numero("554491216103"):
             sys.exit("Recusado: esse é o número do dono. A prévia só vai para o celular de teste.")
         aviso = "🧪 *PRÉVIA - dados fictícios* (não são conversas reais)\n\n"
+        resultados = []
         for texto in (d18["texto"], semana["texto"]):
-            evolution_api.send_whatsapp_message(destino, aviso + texto, delay_ms=1000, manter_emojis=True)
-        evolution_api.send_whatsapp_document(destino, xlsx, "previa_planilha_semana.xlsx", "PRÉVIA - dados fictícios")
-        print(f"\nPrévia enviada para {destino}.")
+            resultados.append(evolution_api.send_whatsapp_message(destino, aviso + texto, delay_ms=1000, manter_emojis=True))
+        resultados.append(evolution_api.send_whatsapp_document(
+            destino, xlsx, "previa_planilha_semana.xlsx", "PRÉVIA - dados fictícios"))
+        if not all(resultados):
+            sys.exit(f"ATENÇÃO: nem tudo foi aceito pela Evolution (texto diário, texto semanal, planilha): {resultados}")
+        print(f"\nPrévia enviada para {destino}: 2 mensagens + planilha, todas aceitas pela Evolution.")
 
 
 if __name__ == "__main__":
