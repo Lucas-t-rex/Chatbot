@@ -18,18 +18,20 @@ from flask import Flask, request, jsonify, send_file
 from datetime import datetime, timedelta, timezone, time as dt_time
 from dateutil import parser as dateparser
 from dotenv import load_dotenv
-from pymongo import MongoClient
-from pymongo.server_api import ServerApi
-from pymongo.errors import ConnectionFailure, OperationFailure
 from apscheduler.schedulers.background import BackgroundScheduler
 from typing import Any, Dict, List, Optional
+from functools import wraps
 from flask_cors import CORS
-from bson.objectid import ObjectId
+from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
 
 from app.core.config import config
 from app.core.db import db
 from app.utils.helpers import extrair_tokens_da_resposta, parse_data
+from app.repositories import contatos_repo, mensagens_repo, agenda_repo, config_repo
+from app.services import analista, analista_rodada, ia_cliente
+
+AUDITOR_TRANSCREVER_AUDIO = config.AUDITOR_TRANSCREVER_AUDIO
 
 FUSO_HORARIO = config.FUSO_HORARIO
 CLIENT_NAME = config.CLIENT_NAME
@@ -41,11 +43,6 @@ EVOLUTION_API_URL = config.EVOLUTION_API_URL
 EVOLUTION_API_KEY = config.EVOLUTION_API_KEY
 GEMINI_API_KEY = config.GEMINI_API_KEY
 MODEL_NAME = config.MODEL_NAME
-
-MONGO_DB_URI = config.MONGO_DB_URI
-MONGO_AGENDA_URI = config.MONGO_AGENDA_URI
-MONGO_AGENDA_COLLECTION = config.MONGO_AGENDA_COLLECTION
-DB_NAME = config.DB_NAME
 
 clean_client_name_global = config.CLEAN_CLIENT_NAME_GLOBAL
 INTERVALO_SLOTS_MINUTOS = config.INTERVALO_SLOTS_MINUTOS
@@ -81,23 +78,21 @@ def log_info(msg):
     logging.info(msg)
     print(f"[LOG-INFO] {msg}")
 
-client_conversas = db.client_conversas
-conversation_collection = db.conversation_collection
+# Banco único (Supabase). db.disponivel = False se SUPABASE_DB_URL faltar.
+DB_OK = db.disponivel
 
 from app.models.agenda import Agenda
 
 agenda_instance = None
-if MONGO_AGENDA_URI and GEMINI_API_KEY:
+if DB_OK:
     try:
-        print(f"ℹ️ [DB Agenda] Tentando conectar no banco: '{DB_NAME}'")
         agenda_instance = Agenda()
     except Exception as e:
-        print(f"❌ ERRO CRÍTICO: Não foi possível conectar ao MongoDB da Agenda. Funções de agendamento desabilitadas. Erro: {e}")
+        print(f"❌ ERRO CRÍTICO: Não foi possível iniciar a Agenda. Funções de agendamento desabilitadas. Erro: {e}")
 else:
-    if not MONGO_AGENDA_URI:
-        print("⚠️ AVISO: MONGO_AGENDA_URI não definida. Funções de agendamento desabilitadas.")
-    if not GEMINI_API_KEY:
-         print("⚠️ AVISO: GEMINI_API_KEY não definida. Bot desabilitado.")
+    print("⚠️ AVISO: Banco indisponível. Funções de agendamento desabilitadas.")
+if not GEMINI_API_KEY:
+    print("⚠️ AVISO: GEMINI_API_KEY não definida. Modo chat e transcrição de áudio desabilitados.")
 
 
 
@@ -248,22 +243,22 @@ else:
     print("AVISO: A variável de ambiente GEMINI_API_KEY não foi definida.")
 
 
-def append_message_to_db(contact_id, role, text, message_id=None):
-    if conversation_collection is None:
-        return False  # Adiciona o "return False"
-    try:  # Indenta o "try" para ficar dentro da função
-        tz = pytz.timezone('America/Sao_Paulo')
-        now = datetime.now(tz)
-        entry = {'role': role, 'text': text, 'ts': now.isoformat()}
-        if message_id:
-            entry['msg_id'] = message_id
-
-        conversation_collection.update_one(
-            {'_id': contact_id},
-            {'$push': {'history': entry}, '$setOnInsert': {'created_at': now}},
-            upsert=True
+def append_message_to_db(contact_id, role, text, message_id=None, origem=None, tipo=None, ts=None):
+    """
+    Grava uma mensagem no histórico (tabela mensagens). Ponto ÚNICO de gravação.
+    origem = quem falou de verdade: 'cliente' | 'atendente' | 'bot' | 'sistema'.
+    Se não informada: role 'user' = cliente, 'assistant' = bot.
+    Com o analista ligado, recalcula as métricas da conversa na hora.
+    """
+    if not DB_OK:
+        return False
+    try:
+        gravou = mensagens_repo.adicionar(
+            contact_id, role, text, origem=origem, tipo=tipo, msg_id=message_id, ts=ts
         )
-        return True
+        if gravou and config_repo.analista_ligado():
+            analista.recalcular_contato(contact_id)
+        return gravou
     except Exception as e:
         print(f"❌ Erro ao append_message_to_db: {e}")
         return False
@@ -364,30 +359,24 @@ def executar_profiler_cliente(contact_id):
     1. Lê BOT + USER para gerar o resumo narrativo (historico_converssa).
     2. Lê EXCLUSIVAMENTE USER para preencher dados demográficos (evita alucinação).
     """
-    if conversation_collection is None or not GEMINI_API_KEY:
+    if not DB_OK or not GEMINI_API_KEY:
         return
 
     try:
         # 1. Busca os dados atuais
-        doc = conversation_collection.find_one({'_id': contact_id})
+        doc = contatos_repo.obter(contact_id)
         if not doc: return
 
-        history_completo = doc.get('history', [])
-        perfil_atual = doc.get('client_profile', {})
+        perfil_atual = doc.get('client_profile') or {}
         
         # --- LÓGICA DE CHECKPOINT ---
-        ultimo_ts_lido = doc.get('profiler_last_ts', "2000-01-01T00:00:00")
-        
-        # Pega mensagens novas cronologicamente
-        mensagens_novas = [
-            m for m in history_completo 
-            if m.get('ts', '') > ultimo_ts_lido
-        ]
+        # Pega só as mensagens depois da última leitura do profiler
+        mensagens_novas = mensagens_repo.historico_desde(contact_id, doc.get('profiler_last_ts'))
 
         if not mensagens_novas:
             return
 
-        novo_checkpoint_ts = mensagens_novas[-1].get('ts')
+        novo_checkpoint_ts = datetime.fromisoformat(mensagens_novas[-1]['ts'])
 
         # ==============================================================================
         # [ALTERAÇÃO 1] PREPARAÇÃO DUAL-STREAM (DOIS TEXTOS DIFERENTES)
@@ -412,7 +401,7 @@ def executar_profiler_cliente(contact_id):
         
         # Se não tem nada em nenhum dos dois, sai
         if not txt_para_historico.strip():
-            conversation_collection.update_one({'_id': contact_id}, {'$set': {'profiler_last_ts': novo_checkpoint_ts}})
+            contatos_repo.atualizar(contact_id, profiler_last_ts=novo_checkpoint_ts)
             return
 
         # ==============================================================================
@@ -503,32 +492,20 @@ def executar_profiler_cliente(contact_id):
         # 6. Contabilidade de Tokens
         in_tok, out_tok = extrair_tokens_da_resposta(response)
 
-        # 7. Atualização no MongoDB
-        conversation_collection.update_one(
-            {'_id': contact_id},
-            {
-                '$set': {
-                    'client_profile': novo_perfil_json,
-                    'profiler_last_ts': novo_checkpoint_ts
-                },
-                '$inc': {
-                    'total_tokens_consumed': in_tok + out_tok,
-                    'tokens_input': in_tok,
-                    'tokens_output': out_tok
-                }
-            }
-        )
+        # 7. Atualização no banco
+        contatos_repo.atualizar(contact_id, client_profile=novo_perfil_json, profiler_last_ts=novo_checkpoint_ts)
+        contatos_repo.incrementar_tokens(contact_id, in_tok, out_tok)
         print(f"🕵️ [Profiler Dual-Stream] Dossiê de {contact_id} atualizado.")
 
     except Exception as e:
         print(f"⚠️ Erro no Agente Profiler: {e}")
 
 def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used_chat_in, tokens_used_chat_out, ultima_msg_gerada=None):
-    if conversation_collection is None: return
+    if not DB_OK: return
     try:
-        doc_atual = conversation_collection.find_one({'_id': contact_id})
-        historico_atual = doc_atual.get('history', []) if doc_atual else []
-        status_anterior = doc_atual.get('conversation_status', 'andamento') if doc_atual else 'andamento'
+        doc_atual = contatos_repo.obter(contact_id)
+        historico_atual = mensagens_repo.historico(contact_id, ultimas=30)
+        status_anterior = (doc_atual.get('conversation_status') or 'andamento') if doc_atual else 'andamento'
 
         if ultima_msg_gerada:
             historico_atual.append({'role': 'assistant', 'text': ultima_msg_gerada})
@@ -542,7 +519,7 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used_
         
         update_payload = {
             'sender_name': sender_name,
-            'last_interaction': datetime.now(),
+            'last_interaction': datetime.now(timezone.utc),
             'conversation_status': status_calculado,
         }
 
@@ -566,46 +543,36 @@ def save_conversation_to_db(contact_id, sender_name, customer_name, tokens_used_
         if customer_name:
             update_payload['customer_name'] = customer_name
 
-        conversation_collection.update_one(
-            {'_id': contact_id},
-            {
-                '$set': update_payload,
-                '$inc': {
-                    'total_tokens_consumed': total_combined, # Total Geral
-                    'tokens_input': final_input,             # Novo Campo: Só entrada (barato)
-                    'tokens_output': final_output            # Novo Campo: Só saída (caro)
-                } 
-            },
-            upsert=True
-        )
+        contatos_repo.atualizar(contact_id, **update_payload)
+        contatos_repo.incrementar_tokens(contact_id, final_input, final_output)
     except Exception as e:
         print(f"❌ Erro ao salvar metadados: {e}")
 
 def load_conversation_from_db(contact_id):
-    if conversation_collection is None: return None
+    """Contato + histórico, no mesmo formato de dict que o código usava no Mongo."""
+    if not DB_OK: return None
     try:
-        result = conversation_collection.find_one({'_id': contact_id})
+        result = contatos_repo.obter(contact_id)
         if result:
-            history = result.get('history', [])
-            history_filtered = [msg for msg in history if not msg.get('text', '').strip().startswith("A data e hora atuais são:")]
-            history_sorted = sorted(history_filtered, key=lambda m: m.get('ts', ''))
-            result['history'] = history_sorted
-            print(f"🧠 Histórico anterior encontrado e carregado para {contact_id} ({len(history_sorted)} entradas).")
+            history = mensagens_repo.historico(contact_id)
+            history_filtered = [msg for msg in history if not (msg.get('text') or '').strip().startswith("A data e hora atuais são:")]
+            result['_id'] = contact_id
+            result['history'] = history_filtered
+            print(f"🧠 Histórico anterior encontrado e carregado para {contact_id} ({len(history_filtered)} entradas).")
             return result
     except Exception as e:
-        print(f"❌ Erro ao carregar conversa do MongoDB para {contact_id}: {e}")
+        print(f"❌ Erro ao carregar conversa do banco para {contact_id}: {e}")
     return None
 
 def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
     """
     Função especialista: Gera Copywriting persuasivo baseado em estágios psicológicos.
     """
-    if modelo_ia is None or conversation_collection is None:
+    if modelo_ia is None or not DB_OK:
         return None
 
     try:
-        convo_data = conversation_collection.find_one({'_id': contact_id})
-        history = convo_data.get('history', [])[-10:]
+        history = mensagens_repo.historico(contact_id, ultimas=10)
         
         historico_texto = ""
         for m in history:
@@ -801,14 +768,7 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         in_tok, out_tok = extrair_tokens_da_resposta(resp)
         
         if in_tok > 0 or out_tok > 0:
-            conversation_collection.update_one(
-                {'_id': contact_id},
-                {'$inc': {
-                    'total_tokens_consumed': in_tok + out_tok, # Mantém o total
-                    'tokens_input': in_tok,                    # Input (Prompt + Histórico)
-                    'tokens_output': out_tok                   # Output (Resposta Gerada)
-                }}
-            )
+            contatos_repo.incrementar_tokens(contact_id, in_tok, out_tok)
 
         return resp.text.strip()
 
@@ -877,7 +837,9 @@ def subtrair_tempo_util(referencia, minutos):
     return resultado
 
 def verificar_followup_automatico():
-    if conversation_collection is None: return
+    if not DB_OK: return
+    # Só fala com cliente quando o Chat está ligado (modos "chat" ou "ambos")
+    if not config_repo.chat_ligado(): return
 
     # TRAVA DE DISPARO: Impede que o próprio sistema envie qualquer follow-up de madrugada
     agora = datetime.now(FUSO_HORARIO)
@@ -886,8 +848,7 @@ def verificar_followup_automatico():
 
     try:
         # 1. VERIFICA OS DOIS STATUS (O comando 'bot off' E a conexão da Evolution API)
-        bot_status = conversation_collection.find_one({'_id': 'BOT_STATUS'})
-        bot_ativo = bot_status.get('is_active', True) if bot_status else True
+        bot_ativo = config_repo.bot_ativo()
         evolution_online = is_evolution_online()
         webhook_ativo = is_webhook_configurado() 
 
@@ -905,51 +866,32 @@ def verificar_followup_automatico():
             # O momento que a mensagem é considerada "velha demais" (passou 15 min do ideal)
             tempo_limite_esquecimento = subtrair_tempo_util(tempo_ideal_envio, 15) 
 
-            condicao_estagio = {"$in": [0, None]} if r["stage_atual"] == 0 else r["stage_atual"]
-
             # Para sucesso, usar a data e hora em que a pessoa vai fazer a aula. Se for andamento/fracasso usa last_interaction.
             campo_data_ref = "scheduled_datetime" if r["status"] == "sucesso" else "last_interaction"
 
             # --- AÇÃO 1: VARREDURA (ESQUECER OS ATRASADOS) ---
             # Pega quem deveria ter recebido a mais de 15 minutos atrás e avança o estágio sem mandar nada.
-            query_expirados = {
-                "conversation_status": r["status"],
-                campo_data_ref: {"$exists": True, "$lt": tempo_limite_esquecimento}, 
-                "followup_stage": condicao_estagio,
-                "processing": {"$ne": True},
-                "intervention_active": {"$ne": True}
-            }
-            
-            resultado_expirados = conversation_collection.update_many(
-                query_expirados,
-                {'$set': {'followup_stage': r["prox_stage"]}}
+            qtd_expirados = contatos_repo.expirar_followups(
+                r["status"], campo_data_ref, tempo_limite_esquecimento, r["stage_atual"], r["prox_stage"]
             )
-            
-            if resultado_expirados.modified_count > 0:
-                print(f"🗑️ Descartando {resultado_expirados.modified_count} follow-ups atrasados do estágio {r['stage_atual']}.")
+
+            if qtd_expirados > 0:
+                print(f"🗑️ Descartando {qtd_expirados} follow-ups atrasados do estágio {r['stage_atual']}.")
 
             if not bot_ativo or not evolution_online or not webhook_ativo:
                 continue
 
             # --- AÇÃO 2: ENVIAR PARA OS CLIENTES DENTRO DO PRAZO CERTO ---
-            query_validos = {
-                "conversation_status": r["status"],
-                campo_data_ref: {
-                    "$lt": tempo_ideal_envio,            # Já deu a hora de enviar
-                    "$gte": tempo_limite_esquecimento    # E NÃO está atrasado (dentro dos 15 min)
-                },
-                "followup_stage": condicao_estagio,
-                "processing": {"$ne": True},
-                "intervention_active": {"$ne": True}
-            }
-
-            candidatos = list(conversation_collection.find(query_validos).limit(50))
+            # Já deu a hora de enviar E não está atrasado (dentro dos 15 min)
+            candidatos = contatos_repo.candidatos_followup(
+                r["status"], campo_data_ref, tempo_ideal_envio, tempo_limite_esquecimento, r["stage_atual"]
+            )
             
             if candidatos:
                 print(f"🕵️ Processando Follow-up '{r['status']}' (Estágio {r['stage_atual']}->{r['prox_stage']}) para {len(candidatos)} clientes.")
 
             for cliente in candidatos:
-                cid = cliente['_id']
+                cid = cliente['telefone']
                 nome_oficial = cliente.get('customer_name') 
                 nome_log = nome_oficial or cliente.get('sender_name') or "Desconhecido"
 
@@ -962,7 +904,7 @@ def verificar_followup_automatico():
                 send_whatsapp_message(f"{cid}@s.whatsapp.net", msg)
                 append_message_to_db(cid, 'assistant', msg) 
 
-                conversation_collection.update_one({'_id': cid}, {'$set': {'followup_stage': r["prox_stage"]}})
+                contatos_repo.atualizar(cid, followup_stage=r["prox_stage"])
 
     except Exception as e:
         print(f"❌ Erro no Loop de Follow-up: {e}")
@@ -998,7 +940,10 @@ def get_last_messages_summary(history, max_messages=4):
     return "\n".join(relevant_summary)
 
 def verificar_lembretes_agendados():
-    if agenda_instance is None or conversation_collection is None:
+    if agenda_instance is None or not DB_OK:
+        return
+    # Só fala com cliente quando o Chat está ligado (modos "chat" ou "ambos")
+    if not config_repo.chat_ligado():
         return
 
     # ── TRAVA 1: MADRUGADA ──────────────────────────────────────────────────
@@ -1009,8 +954,7 @@ def verificar_lembretes_agendados():
 
     # ── TRAVA 2: BOT DESLIGADO (comando 'bot off') ──────────────────────────
     try:
-        bot_status = conversation_collection.find_one({'_id': 'BOT_STATUS'})
-        bot_ativo = bot_status.get('is_active', True) if bot_status else True
+        bot_ativo = config_repo.bot_ativo()
         if not bot_ativo:
             print("🤖 [Lembretes] Bot DESLIGADO. Nenhum lembrete enviado.")
             return
@@ -1036,13 +980,9 @@ def verificar_lembretes_agendados():
         
         janela_limite = agora + timedelta(hours=24)
         
-        query = {
-            "inicio": {"$gt": agora, "$lte": janela_limite},
-            "reminder_sent": {"$ne": True},
-            "created_at": {"$lte": datetime.now(timezone.utc) - timedelta(hours=2)} 
-        }
-
-        pendentes = list(agenda_instance.collection.find(query))
+        pendentes = agenda_repo.pendentes_de_lembrete(
+            agora, janela_limite, datetime.now(timezone.utc) - timedelta(hours=2)
+        )
         
         if not pendentes:
             return 
@@ -1065,11 +1005,13 @@ def verificar_lembretes_agendados():
                 created_at_utc = ag.get("created_at")
                 if created_at_utc:
                     # Converte a data de criação para o fuso local para cálculo exato
-                    created_at_local = created_at_utc.replace(tzinfo=timezone.utc).astimezone(FUSO_HORARIO).replace(tzinfo=None)
-                    
+                    if created_at_utc.tzinfo is None:
+                        created_at_utc = created_at_utc.replace(tzinfo=timezone.utc)
+                    created_at_local = created_at_utc.astimezone(FUSO_HORARIO).replace(tzinfo=None)
+
                     # Se agendou com 12h ou menos de antecedência, ignora o lembrete silenciosamente
                     if (data_inicio - created_at_local) <= timedelta(hours=12):
-                        agenda_instance.collection.update_one({"_id": ag["_id"]}, {"$set": {"reminder_sent": True}})
+                        agenda_repo.atualizar(ag["id"], reminder_sent=True)
                         continue
                 
                 # Definição dos blocos de liberação baseados no horário do agendamento
@@ -1091,10 +1033,10 @@ def verificar_lembretes_agendados():
                     continue
                 # ------------------------------------------------------------
 
-                nome_cliente = ag.get("nome", "Cliente").split()[0].capitalize()
+                nome_cliente = (ag.get("nome") or "Cliente").split()[0].capitalize()
                 
                 # --- NOVO: PEGA O NOME DO SERVIÇO ---
-                nome_servico = ag.get("servico", "compromisso") # Se não tiver, usa "compromisso"
+                nome_servico = ag.get("servico") or "compromisso" # Se não tiver, usa "compromisso"
                 
                 hora_formatada = data_inicio.strftime('%H:%M')
                 
@@ -1119,10 +1061,7 @@ def verificar_lembretes_agendados():
                 print(f"🚀 Enviando lembrete para {jid_destino}...")
                 send_whatsapp_message(jid_destino, msg_lembrete)
 
-                agenda_instance.collection.update_one(
-                    {"_id": ag["_id"]},
-                    {"$set": {"reminder_sent": True}}
-                )
+                agenda_repo.atualizar(ag["id"], reminder_sent=True)
                 
                 append_message_to_db(destinatario_id, 'assistant', msg_lembrete)
                 time.sleep(2) 
@@ -1174,6 +1113,8 @@ def gerar_msg_pos_agendamento_ia(nome_cliente, status):
 
 def verificar_followup_pos_agendamento():
     if agenda_instance is None: return
+    # Só fala com cliente quando o Chat está ligado (modos "chat" ou "ambos")
+    if not config_repo.chat_ligado(): return
     
     agora_check = datetime.now(FUSO_HORARIO)
     if 0 <= agora_check.hour < 5:
@@ -1186,13 +1127,7 @@ def verificar_followup_pos_agendamento():
         agora_utc = datetime.now(timezone.utc)
         limite_24h = agora_utc - timedelta(hours=24)
         
-        query = {
-            "status": {"$in": ["concluido", "ausencia"]},
-            "post_attendance_followup_sent": {"$ne": True},
-            "data_atualizacao_status": {"$lte": limite_24h, "$exists": True}
-        }
-        
-        pendentes = list(agenda_instance.collection.find(query))
+        pendentes = agenda_repo.pendentes_pos_atendimento(limite_24h)
         if not pendentes: return
         
         for ag in pendentes:
@@ -1202,7 +1137,7 @@ def verificar_followup_pos_agendamento():
                 destinatario_id = re.sub(r'\D', '', str(raw_tel))
             if not destinatario_id: continue
                 
-            nome_cliente = ag.get("nome", "").split()[0].capitalize()
+            nome_cliente = ((ag.get("nome") or "").split() or [""])[0].capitalize()
             status_ag = ag.get("status")
             
             msg = gerar_msg_pos_agendamento_ia(nome_cliente, status_ag)
@@ -1218,10 +1153,7 @@ def verificar_followup_pos_agendamento():
             send_whatsapp_message(jid_destino, msg)
             append_message_to_db(destinatario_id, 'assistant', msg)
             
-            agenda_instance.collection.update_one(
-                {"_id": ag["_id"]},
-                {"$set": {"post_attendance_followup_sent": True}}
-            )
+            agenda_repo.atualizar(ag["id"], post_attendance_followup_sent=True)
             time.sleep(2)
             
     except Exception as e:
@@ -2067,10 +1999,10 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
     """
     Processa a chamada de ferramenta vinda da IA.
     NOTAS: 
-    - 'agenda_instance' e 'conversation_collection' são globais.
+    - 'agenda_instance' é global; contatos/mensagens vêm dos repositórios.
     - Inclui métrica de leitura de histórico profundo.
     """
-    global agenda_instance, conversation_collection
+    global agenda_instance
     
     try:
         if not agenda_instance and call_name.startswith("fn_"):
@@ -2119,12 +2051,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                     hr_agen = str_to_time(hora_agendada)
                     if dt_agen and hr_agen:
                         s_datetime = datetime.combine(dt_agen.date(), hr_agen)
-                        conversation_collection.update_one(
-                            {'_id': contact_id}, 
-                            {'$set': {
-                                'scheduled_datetime': s_datetime
-                            }}
-                        )
+                        contatos_repo.atualizar(contact_id, scheduled_datetime=s_datetime)
                 except Exception as e:
                     print(f"⚠️ Erro ao salvar scheduled_datetime para follow-up de sucesso: {e}")
 
@@ -2247,15 +2174,9 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                 
                 print(f"🪄 [Captura nome] Nome limpo: '{nome_limpo}'")
 
-                if conversation_collection is not None:
-                    conversation_collection.update_one(
-                        {'_id': contact_id},
-                        {'$set': {
-                            'customer_name': nome_limpo,
-                            'name_transition_stage': 0 # <--- DEFINE ESTÁGIO 0 AQUI
-                        }}, 
-                        upsert=True
-                    )
+                if DB_OK:
+                    # name_transition_stage 0 = acabou de capturar o nome
+                    contatos_repo.atualizar(contact_id, customer_name=nome_limpo, name_transition_stage=0)
                 return json.dumps({"sucesso": True, "nome_salvo": nome_limpo}, ensure_ascii=False)
             except Exception as e:
                 return json.dumps({"erro": f"Erro ao salvar nome no DB: {e}"}, ensure_ascii=False)
@@ -2310,7 +2231,7 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
 
     if modelo_ia is None:
         return "Desculpe, estou com um problema interno (modelo IA não carregado)."
-    if conversation_collection is None:
+    if not DB_OK:
         return "Desculpe, estou com um problema interno (DB de conversas não carregado)."
 
     def _normalize_name(n: Optional[str]) -> Optional[str]:
@@ -2669,51 +2590,63 @@ Responda APENAS o primeiro nome (uma palavra) ou exatamente: NAO"""
 
 
 def try_auto_capture_name(recipient_number, text_content):
-    """Se a msg do admin tem nome próprio, atualiza customer_name no Mongo."""
-    if conversation_collection is None:
+    """Se a msg do admin tem nome próprio, atualiza customer_name no banco."""
+    if not DB_OK:
         return
     try:
         nome_extraido = extrair_nome_da_msg_admin(text_content)
         if not nome_extraido:
             return
-        doc_atual = conversation_collection.find_one({'_id': recipient_number}, {'customer_name': 1})
+        doc_atual = contatos_repo.obter(recipient_number)
         nome_atual = doc_atual.get('customer_name') if doc_atual else None
         if nome_extraido != nome_atual:
-            conversation_collection.update_one(
-                {'_id': recipient_number},
-                {'$set': {'customer_name': nome_extraido, 'name_transition_stage': 1}},
-                upsert=True
-            )
+            contatos_repo.atualizar(recipient_number, customer_name=nome_extraido, name_transition_stage=1)
             print(f"🪄 [Auto-nome via admin] {recipient_number} → '{nome_extraido}' (anterior: {nome_atual or 'nenhum'})")
     except Exception as e:
         print(f"⚠️ Erro auto-nome: {e}")
 
 
-def send_whatsapp_message(number, text_message, delay_ms=3000):
-    evolution_api.send_whatsapp_message(number, text_message, delay_ms)
+def _envio_permitido(number):
+    """
+    TRAVA DE SEGURANÇA: com o Chat desligado (modo "analista"), o bot não manda
+    NADA para cliente — só para o número do responsável (resumos). Vale para
+    qualquer caminho do código que tente enviar.
+    """
+    destino = str(number).split('@')[0]
+    if config_repo.chat_ligado() or destino in analista.variantes_numero(RESPONSIBLE_NUMBER):
+        return True
+    print(f"🔇 [Modo analista] Envio bloqueado para {destino}: o bot não fala com clientes neste modo.")
+    return False
+
+def send_whatsapp_message(number, text_message, delay_ms=3000, manter_emojis=False):
+    if not _envio_permitido(number):
+        return False
+    return evolution_api.send_whatsapp_message(number, text_message, delay_ms, manter_emojis=manter_emojis)
+
+def send_whatsapp_document(number, conteudo, nome_arquivo, legenda=""):
+    """Envia um arquivo (ex.: planilha). Passa pela mesma trava de segurança do texto."""
+    if not _envio_permitido(number):
+        return False
+    return evolution_api.send_whatsapp_document(number, conteudo, nome_arquivo, legenda)
 
 def enviar_simulacao_digitacao(number):
-    evolution_api.enviar_simulacao_digitacao(number)
+    if not _envio_permitido(number):
+        return False
+    return evolution_api.enviar_simulacao_digitacao(number)
 
 def gerar_e_enviar_relatorio_diario():
-    if conversation_collection is None or not RESPONSIBLE_NUMBER:
+    # Relatório de tokens da IA: só faz sentido com o Chat ligado
+    if not config_repo.chat_ligado():
+        return
+    if not DB_OK or not RESPONSIBLE_NUMBER:
         print("⚠️ Relatório diário desabilitado. (DB de Conversas ou RESPONSIBLE_NUMBER indisponível).")
         return
 
     hoje = datetime.now()
     
     try:
-        query_filter = {"_id": {"$ne": "BOT_STATUS"}}
-        usuarios_do_bot = list(conversation_collection.find(query_filter))
-        
-        numero_de_contatos = len(usuarios_do_bot)
-        total_geral_tokens = 0
-        media_por_contato = 0
-
-        if numero_de_contatos > 0:
-            for usuario in usuarios_do_bot:
-                total_geral_tokens += usuario.get('total_tokens_consumed', 0)
-            media_por_contato = total_geral_tokens / numero_de_contatos
+        numero_de_contatos, total_geral_tokens = contatos_repo.total_tokens()
+        media_por_contato = (total_geral_tokens / numero_de_contatos) if numero_de_contatos > 0 else 0
         
         corpo_whatsapp_texto = f"""
             📊 *Relatório Diário de Tokens* 📊
@@ -2743,11 +2676,30 @@ def gerar_e_enviar_relatorio_diario():
         except:
             pass # Se falhar em notificar, apenas loga no console
 
+def enviar_resumo_analista(hora):
+    """
+    Resumo do atendimento no WhatsApp do dono (12h = manhã; 18h e 22h = dia todo).
+    Só roda com o Analista ligado (modos "analista" ou "ambos").
+    """
+    if not DB_OK or not RESPONSIBLE_NUMBER:
+        return
+    if not config_repo.analista_ligado():
+        return
+    # A rodada lê as conversas com a IA (se estiver ligada), monta o resumo e envia.
+    # No sábado às 18h sai o resumo da semana, com a planilha. Os envios passam
+    # pelas funções daqui para a trava de segurança continuar valendo.
+    analista_rodada.executar(
+        hora,
+        f"{RESPONSIBLE_NUMBER}@s.whatsapp.net",
+        lambda destino, texto: send_whatsapp_message(destino, texto, manter_emojis=True),
+        send_whatsapp_document,
+    )
+
 scheduler = BackgroundScheduler(daemon=True, timezone=FUSO_HORARIO)
 scheduler.start()
 
 app = Flask(__name__)
-CORS(app) 
+CORS(app, expose_headers=["Content-Disposition"])
 processed_messages = set()
 retry_counters = {}
 
@@ -2763,8 +2715,47 @@ def register_bot_msg(msg_id):
     if len(bot_sent_ids) > BOT_SENT_IDS_MAX:
         bot_sent_ids.clear()
 
+def _ja_processada(msg_id):
+    """
+    Dedup de eventos repetidos da Evolution. Primeiro na memória (rápido);
+    depois no banco (msg_id único), que sobrevive a reinício do servidor.
+    """
+    if not msg_id:
+        return False
+    if msg_id in processed_messages:
+        return True
+    processed_messages.add(msg_id)
+    if len(processed_messages) > 1000:
+        processed_messages.clear()
+    try:
+        return mensagens_repo.msg_id_existe(msg_id)
+    except Exception:
+        return False
+
+def _ts_da_mensagem(message_data):
+    """
+    Momento REAL em que a mensagem foi enviada no WhatsApp (messageTimestamp da
+    Evolution). Importante para o tempo de resposta: áudio leva segundos para
+    transcrever e o buffer segura mensagens, então "agora" não serve.
+    Devolve None se não vier ou vier absurdo; aí quem grava usa "agora".
+    """
+    try:
+        bruto = message_data.get('messageTimestamp')
+        if isinstance(bruto, dict):  # alguns builds mandam como Long {low, high}
+            bruto = bruto.get('low')
+        valor = int(bruto)
+        if valor > 10**12:  # veio em milissegundos
+            valor //= 1000
+        dt = datetime.fromtimestamp(valor, tz=timezone.utc)
+        agora = datetime.now(timezone.utc)
+        if dt > agora + timedelta(minutes=5) or dt < agora - timedelta(days=7):
+            return None
+        return dt
+    except Exception:
+        return None
+
 def is_numero_travado(numero_webhook):
-    if conversation_collection is None: 
+    if not DB_OK:
         return False
     
     try:
@@ -2778,12 +2769,8 @@ def is_numero_travado(numero_webhook):
         else:
             num_formatado = num_str # Mantém como está se já vier com 12 ou outro tamanho
             
-        # 3. Busca super rápida no MongoDB
-        doc = conversation_collection.find_one({'_id': 'numeros_travados'})
-        if doc and 'lista' in doc:
-            return num_formatado in doc['lista']
-            
-        return False
+        # 3. Busca super rápida no banco
+        return contatos_repo.numero_travado(num_formatado)
         
     except Exception as e:
         print(f"Erro ao verificar numeros_travados: {e}")
@@ -2837,21 +2824,37 @@ def receive_webhook():
             return jsonify({"status": "admin_manual_saved"}), 200
         
         clean_number_check = sender_number_full.split('@')[0]
+
+        # ======================================================================
+        # MODO (trocado pelo app, sem reiniciar):
+        #   analista -> só escuta: salva a mensagem do cliente e encerra aqui.
+        #               Nenhuma IA de resposta, agenda ou follow-up é acionada.
+        #   chat     -> fluxo original do bot.
+        #   ambos    -> fluxo original do bot + o analista mede tudo.
+        # ======================================================================
+        modo = config_repo.obter_modo()
+
+        if modo == "analista":
+            if _ja_processada(key_info.get('id')):
+                return jsonify({"status": "ignored_duplicate"}), 200
+            handle_captura_auditor(message_data, full_json=data)
+            return jsonify({"status": "analista_capturado"}), 200
+
         if is_numero_travado(clean_number_check):
             # Se achou na lista, ele encerra a requisição aqui mesmo com o 'return'.
             # O código para, a IA nem é acionada e nenhum token é gasto!
-            print(f"🛑 [Atendimento Humano] Mensagem ignorada do número: {clean_number_check}")
+            print(f"🛑 [Atendimento Humano] Mensagem ignorada pelo bot: {clean_number_check}")
+            # No modo "ambos" o analista ainda precisa ver a conversa humana
+            if modo == "ambos" and not _ja_processada(key_info.get('id')):
+                handle_captura_auditor(message_data, full_json=data)
             return jsonify({"status": "ignored_numero_travado"}), 200
 
         message_id = key_info.get('id')
         if not message_id:
             return jsonify({"status": "ignored_no_id"}), 200
 
-        if message_id in processed_messages:
+        if _ja_processada(message_id):
             return jsonify({"status": "ignored_duplicate"}), 200
-        processed_messages.add(message_id)
-        if len(processed_messages) > 1000:
-            processed_messages.clear()
 
         handle_message_buffering(message_data)
         
@@ -2948,8 +2951,9 @@ def _process_audio_buffer_worker(clean_number, message_data):
 
 def handle_admin_manual_message(message_data):
     """
-    Salva no histórico do cliente mensagens que o admin digitou MANUALMENTE no celular do bot.
-    NÃO dispara IA — só entra como contexto para quando o cliente responder.
+    Mensagem que um HUMANO da equipe digitou no celular da academia (fromMe que
+    não foi o bot). Vale em todos os modos: grava no histórico do cliente com
+    origem 'atendente'. NÃO dispara IA.
     """
     try:
         key_info = message_data.get('key', {})
@@ -2963,19 +2967,16 @@ def handle_admin_manual_message(message_data):
         # O remoteJid chega como "173749009662084@s.whatsapp.net" mas o lid_mappings
         # armazena a chave como "173749009662084@lid" — por isso montamos a chave manualmente.
         is_lid = raw_number.isdigit() and len(raw_number) > 13 and not raw_number.startswith('55')
-        if is_lid and conversation_collection is not None:
+        if is_lid and DB_OK:
             try:
-                db_lids = client_conversas[DB_NAME]['lid_mappings']
-                lid_key = f"{raw_number}@lid"
-                mapping = db_lids.find_one({'_id': lid_key})
-                if mapping:
-                    recipient_number = mapping['real_number']
-                    print(f"🔗 [Admin manual] LID {raw_number} → {recipient_number}")
+                recipient_number = contatos_repo.resolver_lid(f"{raw_number}@lid")
+                if recipient_number:
+                    print(f"🔗 [Atendente] LID {raw_number} → {recipient_number}")
                 else:
-                    print(f"❌ [Admin manual] LID {raw_number} não mapeado. Aguardando mensagem do cliente.")
+                    print(f"❌ [Atendente] LID {raw_number} não mapeado. Aguardando mensagem do cliente.")
                     return
             except Exception as e:
-                print(f"⚠️ [Admin manual] Erro ao resolver LID: {e}")
+                print(f"⚠️ [Atendente] Erro ao resolver LID: {e}")
                 return
         else:
             recipient_number = raw_number
@@ -2985,47 +2986,207 @@ def handle_admin_manual_message(message_data):
 
         # Dedup: evita salvar duas vezes se a Evolution API disparar o evento duplicado
         msg_id = key_info.get('id')
-        if msg_id:
-            if msg_id in processed_messages:
-                return
-            processed_messages.add(msg_id)
-            if len(processed_messages) > 1000:
-                processed_messages.clear()
+        if _ja_processada(msg_id):
+            return
 
         message = message_data.get('message', {})
-        text_content = None
+        ts_real = _ts_da_mensagem(message_data)
 
-        if message.get('conversation'):
-            text_content = message['conversation']
-        elif message.get('extendedTextMessage'):
-            text_content = message['extendedTextMessage'].get('text')
-        elif message.get('audioMessage') and message.get('base64'):
-            try:
-                audio_data = base64.b64decode(message['base64'])
-                os.makedirs("/tmp", exist_ok=True)
-                tmp_path = f"/tmp/admin_audio_{recipient_number}.ogg"
-                with open(tmp_path, 'wb') as f:
-                    f.write(audio_data)
-                transcrito = transcrever_audio_gemini(tmp_path, contact_id=recipient_number)
-                try:
-                    os.remove(tmp_path)
-                except Exception:
-                    pass
-                if transcrito and not transcrito.startswith("["):
-                    text_content = transcrito
-            except Exception as e:
-                print(f"⚠️ Erro ao transcrever áudio manual do admin: {e}")
+        if message.get('audioMessage'):
+            if AUDITOR_TRANSCREVER_AUDIO and GEMINI_API_KEY and message.get('base64'):
+                threading.Thread(
+                    target=_capturar_audio_auditor,
+                    args=(recipient_number, message_data, 'assistant', 'atendente')
+                ).start()
+            else:
+                _salvar_mensagem_auditor(
+                    recipient_number, 'assistant', "[Áudio do atendente — não transcrito]",
+                    msg_id, origem='atendente', ts=ts_real
+                )
+            return
 
+        # Texto ou mídia. A análise precisa saber que o atendente mandou mídia
+        # (tabela de preços, foto da academia, localização), mesmo sem o binário.
+        text_content = _extrair_conteudo_mensagem(message, origem="atendente")
         if not text_content:
             return
 
-        append_message_to_db(recipient_number, 'assistant', text_content)
-        print(f"📤 [Admin manual] Mensagem salva no histórico de {recipient_number}: '{text_content[:60]}...'")
+        _salvar_mensagem_auditor(
+            recipient_number, 'assistant', text_content, msg_id, origem='atendente', ts=ts_real
+        )
 
-        try_auto_capture_name(recipient_number, text_content)
+        # Captura de nome pela fala do atendente usa Gemini: só com o Chat ligado
+        if config_repo.chat_ligado():
+            try_auto_capture_name(recipient_number, text_content)
 
     except Exception as e:
         print(f"❌ Erro em handle_admin_manual_message: {e}")
+
+
+def _salvar_mensagem_auditor(contact_id, role, texto, msg_id=None, push_name=None, origem=None, ts=None):
+    """
+    Grava a mensagem (cliente ou atendente) e atualiza o contato.
+    O append_message_to_db já recalcula as métricas do Analista.
+    """
+    if not DB_OK:
+        print("❌ [Analista] DB indisponível. Mensagem NÃO salva.")
+        return False
+
+    try:
+        campos = {'last_interaction': datetime.now(timezone.utc)}
+        if push_name and role == 'user':
+            campos['sender_name'] = push_name
+        contatos_repo.atualizar(contact_id, **campos)
+
+        gravou = append_message_to_db(contact_id, role, texto, message_id=msg_id, origem=origem, ts=ts)
+        if gravou:
+            quem = "Cliente" if role == 'user' else "Atendente"
+            print(f"🎧 [Analista] {quem} {contact_id}: '{texto[:60]}'")
+        return gravou
+    except Exception as e:
+        print(f"❌ [Analista] Erro ao salvar mensagem de {contact_id}: {e}")
+        return False
+
+
+def _extrair_conteudo_mensagem(message, origem="cliente"):
+    """
+    Converte qualquer tipo de mensagem do WhatsApp em texto auditável.
+    Áudio NÃO é tratado aqui (exige transcrição assíncrona) — retorna None.
+    """
+    if message.get('conversation'):
+        return message['conversation']
+
+    if message.get('extendedTextMessage'):
+        return message['extendedTextMessage'].get('text')
+
+    if message.get('imageMessage'):
+        legenda = message['imageMessage'].get('caption') or ''
+        return f"[Imagem enviada pelo {origem}]" + (f": {legenda}" if legenda else "")
+
+    if message.get('videoMessage'):
+        legenda = message['videoMessage'].get('caption') or ''
+        return f"[Vídeo enviado pelo {origem}]" + (f": {legenda}" if legenda else "")
+
+    if message.get('documentMessage'):
+        nome_doc = message['documentMessage'].get('fileName') or 'arquivo'
+        return f"[Documento enviado pelo {origem}: {nome_doc}]"
+
+    if message.get('stickerMessage'):
+        return f"[Figurinha enviada pelo {origem}]"
+
+    if message.get('locationMessage'):
+        return f"[Localização enviada pelo {origem}]"
+
+    if message.get('contactMessage') or message.get('contactsArrayMessage'):
+        return f"[Contato enviado pelo {origem}]"
+
+    return None
+
+
+def _capturar_audio_auditor(clean_number, message_data, role='user', origem='cliente'):
+    """Transcreve o áudio e salva. NÃO dispara IA de resposta."""
+    temp_path = None
+    try:
+        message = message_data.get('message', {})
+        key_info = message_data.get('key', {})
+        msg_id = key_info.get('id')
+
+        audio_base64 = message.get('base64')
+        if not audio_base64:
+            return
+
+        os.makedirs("/tmp", exist_ok=True)
+        temp_path = f"/tmp/analista_audio_{clean_number}_{msg_id or int(time.time())}.ogg"
+        with open(temp_path, 'wb') as f:
+            f.write(base64.b64decode(audio_base64))
+
+        transcrito = transcrever_audio_gemini(temp_path, contact_id=clean_number)
+
+        if transcrito and not transcrito.startswith("["):
+            texto = f"[Áudio do {origem}]: {transcrito}"
+        else:
+            texto = f"[Áudio do {origem} — falha na transcrição]"
+
+        _salvar_mensagem_auditor(
+            clean_number, role, texto, msg_id,
+            push_name=message_data.get('pushName'),
+            origem=origem,
+            ts=_ts_da_mensagem(message_data),
+        )
+
+    except Exception as e:
+        print(f"❌ [Analista] Erro ao transcrever áudio de {clean_number}: {e}")
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+def handle_captura_auditor(message_data, full_json=None):
+    """
+    ANALISTA — captura a mensagem do CLIENTE sem acionar nada.
+    Espelha a resolução de LID do process_message_logic para gravar no contact_id certo.
+    Nada aqui responde, agenda ou dispara follow-up.
+    """
+    try:
+        key_info = message_data.get('key', {})
+        incoming_jid = key_info.get('remoteJid', '')
+
+        sender_pn = key_info.get('senderPn')
+        if not sender_pn and full_json:
+            sender_pn = full_json.get('sender')
+
+        clean_number = None
+        is_lid = incoming_jid.endswith('@lid') or (incoming_jid.startswith('7') and len(incoming_jid) > 15)
+
+        if sender_pn and '@' in sender_pn:
+            clean_number = sender_pn.split('@')[0]
+            if is_lid:
+                try:
+                    contatos_repo.salvar_lid(incoming_jid, clean_number)
+                except Exception as e:
+                    print(f"⚠️ [Analista] Erro ao salvar LID: {e}")
+        elif is_lid:
+            clean_number = contatos_repo.resolver_lid(incoming_jid)
+            if not clean_number:
+                print(f"❌ [Analista] LID {incoming_jid} desconhecido. Mensagem não salva.")
+                return
+        elif incoming_jid and '@s.whatsapp.net' in incoming_jid:
+            clean_number = incoming_jid.split('@')[0]
+
+        if not clean_number:
+            return
+
+        message = message_data.get('message', {})
+        ts_real = _ts_da_mensagem(message_data)
+
+        # Áudio vai para thread própria (transcrição demora alguns segundos)
+        if message.get('audioMessage'):
+            if AUDITOR_TRANSCREVER_AUDIO and GEMINI_API_KEY and message.get('base64'):
+                threading.Thread(
+                    target=_capturar_audio_auditor,
+                    args=(clean_number, message_data, 'user', 'cliente')
+                ).start()
+            else:
+                _salvar_mensagem_auditor(
+                    clean_number, 'user', "[Áudio do cliente — não transcrito]",
+                    key_info.get('id'), message_data.get('pushName'), origem='cliente', ts=ts_real
+                )
+            return
+
+        texto = _extrair_conteudo_mensagem(message, origem="cliente")
+        if not texto:
+            return
+
+        _salvar_mensagem_auditor(
+            clean_number, 'user', texto,
+            key_info.get('id'), message_data.get('pushName'), origem='cliente', ts=ts_real
+        )
+
+    except Exception as e:
+        print(f"❌ Erro em handle_captura_auditor: {e}")
 
 
 def handle_message_buffering(message_data):
@@ -3089,7 +3250,7 @@ def _trigger_ai_processing(clean_number, last_message_data):
 
 
 def handle_responsible_command(message_content, responsible_number):
-    if conversation_collection is None:
+    if not DB_OK:
         send_whatsapp_message(responsible_number, "❌ Erro: Comandos desabilitados (DB de Conversas indisponível).")
         return True
         
@@ -3100,11 +3261,7 @@ def handle_responsible_command(message_content, responsible_number):
 
     if command_lower == "bot off":
         try:
-            conversation_collection.update_one(
-                {'_id': 'BOT_STATUS'},
-                {'$set': {'is_active': False}},
-                upsert=True
-            )
+            config_repo.definir_bot_ativo(False)
             send_whatsapp_message(responsible_number, "✅ *Bot PAUSADO.* O bot não responderá a nenhum cliente até você enviar 'bot on'.")
             return True
         except Exception as e:
@@ -3113,11 +3270,7 @@ def handle_responsible_command(message_content, responsible_number):
 
     elif command_lower == "bot on":
         try:
-            conversation_collection.update_one(
-                {'_id': 'BOT_STATUS'},
-                {'$set': {'is_active': True}},
-                upsert=True
-            )
+            config_repo.definir_bot_ativo(True)
             send_whatsapp_message(responsible_number, "✅ *Bot REATIVADO.* O bot está respondendo aos clientes.")
             return True
         except Exception as e:
@@ -3128,18 +3281,13 @@ def handle_responsible_command(message_content, responsible_number):
         customer_number_to_reactivate = command_parts[1].replace('@s.whatsapp.net', '').strip()
         
         try:
-            customer = conversation_collection.find_one({'_id': customer_number_to_reactivate})
+            customer = contatos_repo.obter(customer_number_to_reactivate)
 
             if not customer:
                 send_whatsapp_message(responsible_number, f"⚠️ *Atenção:* O cliente com o número `{customer_number_to_reactivate}` não foi encontrado no banco de dados.")
                 return True 
 
-            result = conversation_collection.update_one(
-                {'_id': customer_number_to_reactivate},
-                {'$set': {'intervention_active': False}}
-            )
-
-            if result.modified_count > 0:
+            if contatos_repo.encerrar_intervencao(customer_number_to_reactivate):
                 send_whatsapp_message(responsible_number, f"✅ Atendimento reativado para `{customer_number_to_reactivate}`.")
                 
                 # --- AQUI ESTÁ A ALTERAÇÃO ---
@@ -3195,7 +3343,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
     lock_acquired = False
     clean_number = None
     
-    if conversation_collection is None:
+    if not DB_OK:
         print("❌ Processamento interrompido: DB de Conversas indisponível.")
         return
     if modelo_ia is None:
@@ -3220,10 +3368,6 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
         # Define se é um ID "Louco" (LID do iOS/Web que começa com 7 e é longo)
         is_lid = incoming_jid.endswith('@lid') or (incoming_jid.startswith('7') and len(incoming_jid) > 15)
 
-        # ACESSO AO BANCO DE MAPEAMENTO (Cria/Usa a coleção auxiliar)
-        # Nota: client_conversas e DB_NAME são suas variáveis globais
-        db_lids = client_conversas[DB_NAME]['lid_mappings']
-
         # --- CENÁRIO A: Veio o Número Real (Momento de Aprender) ---
         if sender_pn and '@' in sender_pn:
             real_number_clean = sender_pn.split('@')[0]
@@ -3231,11 +3375,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             # Se recebemos o número real E o ID veio estranho (LID), SALVAMOS O MAPA!
             if is_lid:
                 try:
-                    db_lids.update_one(
-                        {'_id': incoming_jid}, 
-                        {'$set': {'real_number': real_number_clean, 'last_seen': datetime.now()}},
-                        upsert=True
-                    )
+                    contatos_repo.salvar_lid(incoming_jid, real_number_clean)
                     # print(f"🔗 [LID MAP] Vínculo salvo/atualizado: {incoming_jid} -> {real_number_clean}")
                 except Exception as e:
                     print(f"⚠️ Erro ao salvar LID no banco: {e}")
@@ -3243,10 +3383,9 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
         # --- CENÁRIO B: NÃO veio o Número Real (O caso do erro "Raffael") ---
         elif is_lid:
             print(f"🔍 [LID MAP] Recebi ID Fantasma sem senderPn: {incoming_jid}. Buscando dono no banco...")
-            mapping = db_lids.find_one({'_id': incoming_jid})
-            
-            if mapping:
-                real_number_clean = mapping.get('real_number')
+            real_number_clean = contatos_repo.resolver_lid(incoming_jid)
+
+            if real_number_clean:
                 print(f"✅ [LID MAP] Dono encontrado: É o {real_number_clean}!")
             else:
                 print(f"❌ [LID MAP] ERRO CRÍTICO: Não sei quem é o LID {incoming_jid}. O usuário nunca mandou mensagem com senderPn antes.")
@@ -3273,30 +3412,15 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
         now = datetime.now(timezone.utc)
 
         # 1. Garante que o cliente existe no banco (Com o ID 55... Correto)
-        conversation_collection.update_one(
-            {'_id': clean_number},
-            {'$setOnInsert': {
-                'created_at': now, 
-                'history': [],
-                'name_transition_stage': 0  # <--- ADICIONE ESTA LINHA (Inicializa como 0)
-            }},
-            upsert=True
-        )
+        #    (name_transition_stage começa em 0 pelo default da tabela)
+        contatos_repo.garantir(clean_number)
 
         # Libera locks travados há mais de 2 minutos (evita deadlock se o processo cravar)
         dois_min_atras = now - timedelta(minutes=2)
-        conversation_collection.update_one(
-            {'_id': clean_number, 'processing': True, 'processing_started_at': {'$lt': dois_min_atras}},
-            {'$unset': {'processing': "", 'processing_started_at': ""}}
-        )
-
-        res = conversation_collection.update_one(
-            {'_id': clean_number, 'processing': {'$ne': True}},
-            {'$set': {'processing': True, 'processing_started_at': now}}
-        )
+        contatos_repo.liberar_lock_travado(clean_number, dois_min_atras)
 
         # 3. SE NÃO CONSEGUIU O CRACHÁ, ESPERA NA FILA
-        if res.matched_count == 0:
+        if not contatos_repo.adquirir_lock(clean_number):
             retry_counters[clean_number] = retry_counters.get(clean_number, 0) + 1
 
             if retry_counters[clean_number] > 5:
@@ -3331,9 +3455,10 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
         if buffered_message_text:
             user_message_content = buffered_message_text
             messages_to_save = user_message_content.split(". ")
+            ts_real = _ts_da_mensagem(message_data)
             for msg_text in messages_to_save:
                 if msg_text and msg_text.strip():
-                    append_message_to_db(clean_number, 'user', msg_text)
+                    append_message_to_db(clean_number, 'user', msg_text, origem='cliente', ts=ts_real)
         
         # --- CENÁRIO 2: MENSAGEM NOVA (Áudio ou Texto direto) ---
         else:
@@ -3371,7 +3496,8 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             
             # Salva no histórico
             if user_message_content:
-                append_message_to_db(clean_number, 'user', user_message_content)
+                append_message_to_db(clean_number, 'user', user_message_content,
+                                     origem='cliente', ts=_ts_da_mensagem(message_data))
 
         print(f"🧠 [{clean_number}] Processando para IA...")
         
@@ -3382,14 +3508,13 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
 
         # --- Checagem Bot On/Off ---
         try:
-            bot_status = conversation_collection.find_one({'_id': 'BOT_STATUS'})
-            if bot_status and not bot_status.get('is_active', True):
+            if not config_repo.bot_ativo():
                 print(f"🤖 Bot desligado. Ignorando {clean_number}.")
-                return 
+                return
         except: pass
 
- 
-        convo_status = conversation_collection.find_one({'_id': clean_number})
+
+        convo_status = contatos_repo.obter(clean_number)
         if convo_status and convo_status.get('intervention_active', False):
             print(f"⏸️  Conversa com {sender_name_from_wpp} ({clean_number}) pausada para atendimento humano.")
             return 
@@ -3401,7 +3526,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
 
         # Pega o nome para passar pra IA
         known_customer_name = convo_status.get('customer_name') if convo_status else None
-        current_stage = convo_status.get('name_transition_stage', 0)
+        current_stage = (convo_status.get('name_transition_stage') or 0) if convo_status else 0
 
         # --- NOVA LÓGICA DE CAPTURA COM AGENTE DE IA (PUSHNAME) ---
         if not known_customer_name and current_stage == 0 and sender_name_from_wpp:
@@ -3410,13 +3535,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             if nome_aprovado_ia:
                 known_customer_name = nome_aprovado_ia
                 # Atualiza o banco e já pula a fase de perguntar o nome (gatekeeper)
-                conversation_collection.update_one(
-                    {'_id': clean_number},
-                    {'$set': {
-                        'customer_name': known_customer_name,
-                        'name_transition_stage': 1
-                    }}
-                )
+                contatos_repo.atualizar(clean_number, customer_name=known_customer_name, name_transition_stage=1)
                 current_stage = 1
                 print(f"🪄 [Auto-Name IA] Agente aprovou o nome: '{known_customer_name}' (Original: {sender_name_from_wpp})")
             else:
@@ -3424,10 +3543,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
         # ---------------------------------------------------------------
 
         if known_customer_name and current_stage == 0:
-            conversation_collection.update_one(
-                {'_id': clean_number},
-                {'$set': {'name_transition_stage': 1}}
-            )
+            contatos_repo.atualizar(clean_number, name_transition_stage=1)
             print(f"🔒 [ESTÁGIO] Cliente {clean_number} respondeu após capturar nome. Evoluindo para Estágio 1 (Manutenção).")
 
 
@@ -3450,7 +3566,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
             # Lógica de Intervenção vinda da IA
             if ai_reply.strip().startswith("[HUMAN_INTERVENTION]"):
                 print(f"‼️ INTERVENÇÃO HUMANA SOLICITADA para {sender_name_from_wpp} ({clean_number})")
-                conversation_collection.update_one({'_id': clean_number}, {'$set': {'intervention_active': True}}, upsert=True)
+                contatos_repo.atualizar(clean_number, intervention_active=True)
                 msg_aviso_espera = "Já avisei o Aylla, um momento por favor!"
                 send_whatsapp_message(sender_number_full, msg_aviso_espera, delay_ms=3000)
                 append_message_to_db(clean_number, 'assistant', msg_aviso_espera)
@@ -3524,16 +3640,19 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
     except Exception as e:
         print(f"❌ Erro fatal ao processar mensagem: {e}")
     finally:
-        if clean_number and lock_acquired and conversation_collection is not None:
-            conversation_collection.update_one(
-                {'_id': clean_number},
-                {'$unset': {'processing': "", 'processing_started_at': ""}}
-            )
+        if clean_number and lock_acquired and DB_OK:
+            contatos_repo.liberar_lock(clean_number)
 
-if modelo_ia is not None and conversation_collection is not None and agenda_instance is not None:
+# O boot só exige o banco. Gemini e agenda não derrubam mais o app: no modo
+# "analista" o bot não precisa deles (só a transcrição de áudio usa o Gemini).
+if DB_OK:
     print("\n=============================================")
-    print("    CHATBOT WHATSAPP COM IA INICIADO COM AGENDA)")
+    print("    BROOKLYN - ANALISTA + CHATBOT WHATSAPP")
     print(f"    CLIENTE: {CLIENT_NAME}")
+    try:
+        print(f"    MODO ATUAL: {config_repo.obter_modo().upper()} (troque pelo app)")
+    except Exception as e:
+        print(f"    MODO ATUAL: não consegui ler ({e})")
     if not RESPONSIBLE_NUMBER:
         print("    AVISO: 'RESPONSIBLE_NUMBER' não configurado.")
     else:
@@ -3541,19 +3660,46 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
     print("=============================================")
     print("Servidor aguardando mensagens no webhook...")
 
-    # --- ALTERE AS DUAS LINHAS ABAIXO ---
+    # ==========================================================================
+    # Todos os jobs ficam SEMPRE registrados. Cada um confere o modo na hora de
+    # rodar, então trocar o modo pelo app vale na hora, sem reiniciar:
+    #   - follow-up, lembretes, pós-agendamento, relatório de tokens: só com o Chat
+    #   - resumo do analista (12h/18h/22h): só com o Analista
+    # Além disso, send_whatsapp_message bloqueia qualquer envio a cliente
+    # quando o Chat está desligado.
+    # ==========================================================================
     scheduler.add_job(gerar_e_enviar_relatorio_diario, 'cron', hour=8, minute=0)
-    print("⏰ Agendador de relatórios iniciado. O relatório será enviado DIARIAMENTE às 08:00.")
-    
+    print("⏰ [Chat] Relatório de tokens agendado para 08:00.")
+
     scheduler.add_job(verificar_followup_automatico, 'interval', minutes=1)
-    print(f"⏰ Agendador de Follow-up iniciado (Estágios ativos: {TEMPO_FOLLOWUP_1}, {TEMPO_FOLLOWUP_2}, {TEMPO_FOLLOWUP_3} min).")
+    print(f"⏰ [Chat] Follow-up automático (estágios: {TEMPO_FOLLOWUP_1}, {TEMPO_FOLLOWUP_2}, {TEMPO_FOLLOWUP_3} min).")
 
     scheduler.add_job(verificar_lembretes_agendados, 'interval', minutes=60)
-    print("⏰ Agendador de Lembretes (24h antes) iniciado.")
-    
-    scheduler.add_job(verificar_followup_pos_agendamento, 'interval', minutes=30)
-    print("⏰ Agendador de Follow-up Pós-Agendamento (24h depois) iniciado.")
+    print("⏰ [Chat] Lembretes de agendamento (24h antes).")
 
+    scheduler.add_job(verificar_followup_pos_agendamento, 'interval', minutes=30)
+    print("⏰ [Chat] Follow-up pós-agendamento (24h depois).")
+
+    # max_instances=1 + coalesce: a rodada com IA pode demorar; nunca roda duas ao mesmo tempo.
+    # misfire_grace_time: se o servidor estava ocupado na hora, ainda roda em até 15 min.
+    opcoes_rodada = dict(max_instances=1, coalesce=True, misfire_grace_time=900)
+    for hora_resumo in config.HORARIOS_RESUMO:
+        scheduler.add_job(enviar_resumo_analista, 'cron', hour=hora_resumo, minute=0,
+                          args=[hora_resumo], **opcoes_rodada)
+    print(f"⏰ [Analista] Resumo pro dono às {', '.join(f'{h}h' for h in config.HORARIOS_RESUMO)}.")
+    if config.RESUMO_SEMANAL_HORA not in config.HORARIOS_RESUMO:
+        scheduler.add_job(enviar_resumo_analista, 'cron', day_of_week=config.RESUMO_SEMANAL_DIA,
+                          hour=config.RESUMO_SEMANAL_HORA, minute=0,
+                          args=[config.RESUMO_SEMANAL_HORA], **opcoes_rodada)
+    print(f"⏰ [Analista] Resumo da semana + planilha: {['segunda', 'terça', 'quarta', 'quinta', 'sexta', 'sábado', 'domingo'][config.RESUMO_SEMANAL_DIA]} "
+          f"às {config.RESUMO_SEMANAL_HORA}h.")
+    if ia_cliente.ia_ligada():
+        print(f"🧠 [Analista IA] LIGADA: {config.ANALISTA_IA_PROVEDOR} / {config.ANALISTA_IA_MODELO} "
+              f"(método: {config.METODO_FONTE}).")
+    else:
+        print("🧠 [Analista IA] desligada (sem ANALISTA_IA_API_KEY): o resumo sai só com números.")
+
+    # Estes dois mantêm o gateway de pé e valem em TODOS os modos.
     scheduler.add_job(evolution_api.verificar_e_reconfigurar_webhook, 'interval', minutes=15)
     print("⏰ Agendador de Webhook Auto-Heal iniciado (verificação a cada 15 min).")
 
@@ -3573,25 +3719,88 @@ if modelo_ia is not None and conversation_collection is not None and agenda_inst
     except Exception as e:
         print(f"⚠️ Erro ao registrar webhook no boot: {e}")
 
-    print("⚡️ [Boot] Executando verificação de lembretes inicial...")
-    try:
-        verificar_lembretes_agendados()
-    except Exception as e:
-        print(f"⚠️ Erro na verificação inicial de boot: {e}")
+    # Esta verificação dispara lembretes reais para clientes: só com o Chat ligado.
+    if config_repo.chat_ligado():
+        print("⚡️ [Boot] Executando verificação de lembretes inicial...")
+        try:
+            verificar_lembretes_agendados()
+        except Exception as e:
+            print(f"⚠️ Erro na verificação inicial de boot: {e}")
 
     import atexit
     atexit.register(lambda: scheduler.shutdown())
     
 else:
-    print("\nEncerrando o programa devido a erros na inicialização (Verifique APIs e DBs).")
+    print("\nEncerrando: banco indisponível. Confira a SUPABASE_DB_URL.")
     # (O programa não deve continuar se os componentes principais falharem)
     exit() # Encerra se o modelo ou DBs falharem
+
+# ==============================================================================
+# API DO APP (neuroup_mobile)
+# Todas as rotas /api/* exigem o token devolvido pelo /api/login, no cabeçalho:
+#     Authorization: Bearer <token>
+# ==============================================================================
+_assinador_token = URLSafeTimedSerializer(config.API_SECRET, salt="brooklyn-app-admin")
+
+
+def _gerar_token(usuario):
+    return _assinador_token.dumps({"usuario": usuario})
+
+
+def requer_token(rota):
+    @wraps(rota)
+    def protegida(*args, **kwargs):
+        cabecalho = request.headers.get("Authorization", "")
+        token = cabecalho[7:].strip() if cabecalho.lower().startswith("bearer ") else ""
+        if not token:
+            return jsonify({"erro": "Não autenticado. Faça login novamente."}), 401
+        try:
+            _assinador_token.loads(token, max_age=config.API_TOKEN_VALIDADE_DIAS * 24 * 3600)
+        except SignatureExpired:
+            return jsonify({"erro": "Sessão expirada. Faça login novamente."}), 401
+        except BadSignature:
+            return jsonify({"erro": "Sessão inválida. Faça login novamente."}), 401
+        return rota(*args, **kwargs)
+    return protegida
+
+
+def _numero_12_digitos(numero):
+    """55 + DDD + 8 dígitos (tira o 9 do celular), igual ao is_numero_travado."""
+    num_str = re.sub(r'\D', '', str(numero or ''))
+    if len(num_str) == 13 and num_str.startswith('55'):
+        return num_str[:4] + num_str[5:]
+    return num_str
+
+
+def _periodo_da_requisicao():
+    """
+    Lê ?data_inicio=YYYY-MM-DD&data_fim=YYYY-MM-DD como dias de São Paulo.
+    Devolve (inicio, fim) com fuso: de 00h do 1º dia até 00h do dia seguinte ao último.
+    Sem datas: hoje. Datas inválidas: None.
+    """
+    data_inicio = request.args.get('data_inicio')
+    data_fim = request.args.get('data_fim') or data_inicio
+    try:
+        if data_inicio:
+            d_ini = datetime.strptime(data_inicio, "%Y-%m-%d")
+            d_fim = datetime.strptime(data_fim, "%Y-%m-%d")
+        else:
+            hoje = datetime.now(FUSO_HORARIO)
+            d_ini = d_fim = datetime(hoje.year, hoje.month, hoje.day)
+    except ValueError:
+        return None
+    if d_fim < d_ini:
+        d_ini, d_fim = d_fim, d_ini
+    inicio = FUSO_HORARIO.localize(d_ini)
+    fim = FUSO_HORARIO.localize(d_fim + timedelta(days=1))
+    return inicio, fim
+
 
 @app.route('/api/login', methods=['POST'])
 def api_login():
     """
     Login Administrativo.
-    Verifica se usuário e senha batem com as variáveis do código.
+    Confere usuário e senha e devolve o token que o app manda nas outras rotas.
     """
     data = request.json
     if not data:
@@ -3604,6 +3813,7 @@ def api_login():
     if usuario == ADMIN_USER and senha == ADMIN_PASS:
         return jsonify({
             "sucesso": True,
+            "token": _gerar_token(usuario),
             "usuario": {
                 "nome": "Administrador Neuro'Up",
                 "nivel": "master"
@@ -3612,7 +3822,74 @@ def api_login():
     else:
         return jsonify({"erro": "Usuário ou senha incorretos."}), 401
 
+
+# ------------------------------------------------------------------------------
+# Modo do robô: analista / chat / ambos
+# ------------------------------------------------------------------------------
+@app.route('/api/config/modo', methods=['GET'])
+@requer_token
+def api_obter_modo():
+    try:
+        return jsonify({"modo": config_repo.obter_modo(), "opcoes": list(config_repo.MODOS_VALIDOS)}), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/api/config/modo', methods=['POST'])
+@requer_token
+def api_definir_modo():
+    data = request.json or {}
+    try:
+        modo = config_repo.definir_modo(data.get('modo'))
+        print(f"🔀 [Modo] Alterado pelo app para: {modo.upper()}")
+        return jsonify({"sucesso": True, "modo": modo}), 200
+    except ValueError as e:
+        return jsonify({"erro": str(e)}), 400
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+# ------------------------------------------------------------------------------
+# Relatórios do Analista
+# ------------------------------------------------------------------------------
+@app.route('/api/relatorios/resumo', methods=['GET'])
+@requer_token
+def api_relatorio_resumo():
+    periodo = _periodo_da_requisicao()
+    if periodo is None:
+        return jsonify({"erro": "Datas inválidas. Use AAAA-MM-DD."}), 400
+    try:
+        return jsonify(analista.resumo_periodo(*periodo)), 200
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+@app.route('/api/relatorios/exportar', methods=['GET'])
+@requer_token
+def api_relatorio_exportar():
+    periodo = _periodo_da_requisicao()
+    if periodo is None:
+        return jsonify({"erro": "Datas inválidas. Use AAAA-MM-DD."}), 400
+    try:
+        inicio, fim = periodo
+        conteudo = analista.gerar_excel(inicio, fim)
+        ultimo_dia = fim - timedelta(days=1)
+        nome = f"atendimento_{inicio.strftime('%d-%m-%Y')}_a_{ultimo_dia.strftime('%d-%m-%Y')}.xlsx"
+        return send_file(
+            io.BytesIO(conteudo),
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            as_attachment=True,
+            download_name=nome,
+        )
+    except Exception as e:
+        return jsonify({"erro": str(e)}), 500
+
+
+# ------------------------------------------------------------------------------
+# Agenda
+# ------------------------------------------------------------------------------
 @app.route('/api/servicos', methods=['GET'])
+@requer_token
 def api_listar_servicos():
     """
     Retorna a lista dinâmica de serviços configurada no MAPA_SERVICOS_DURACAO
@@ -3621,73 +3898,66 @@ def api_listar_servicos():
     lista_servicos = list(MAPA_SERVICOS_DURACAO.keys())
     return jsonify(lista_servicos), 200
 
+
 @app.route('/api/meus-agendamentos', methods=['GET'])
+@requer_token
 def api_meus_agendamentos():
     try:
         if agenda_instance is None:
             return jsonify([]), 500
 
         # Busca agendamentos ordenados
-        agendamentos_db = agenda_instance.collection.find({}).sort("inicio", 1)
+        agendamentos_db = agenda_repo.listar_todos()
         lista_formatada = []
-        
-        # Hora atual para saber se o agendamento já passou (para status pendente)
-        agora_utc = datetime.now(timezone.utc)
+
+        # Hora atual de SP (sem fuso, igual ao inicio salvo na agenda) para
+        # saber se o agendamento já passou (status pendente)
+        agora_sp = datetime.now(FUSO_HORARIO).replace(tzinfo=None)
 
         for ag in agendamentos_db:
             inicio_dt = ag.get("inicio")
             fim_dt = ag.get("fim")
-            
+
             if not isinstance(inicio_dt, datetime): continue
-            
-            # --- CORREÇÃO DEFINITIVA (MODO ESPELHO) ---
-            # Não fazemos mais conversão de fuso (.astimezone).
-            # Pegamos a hora exata que está salva no banco e transformamos em texto.
-            
+
+            # --- MODO ESPELHO ---
+            # Sem conversão de fuso: a hora salva no banco já é a hora de SP.
             dia_str = inicio_dt.strftime("%Y-%m-%d")   # Ex: 2025-12-04
             dia_visual = inicio_dt.strftime("%d/%m")   # Ex: 04/12
-            hora_inicio_str = inicio_dt.strftime("%H:%M") # Ex: "11:00" (Pega o número puro)
-            
+            hora_inicio_str = inicio_dt.strftime("%H:%M") # Ex: "11:00"
+
             hora_fim_str = ""
             if isinstance(fim_dt, datetime):
                 hora_fim_str = fim_dt.strftime("%H:%M")
-            # ------------------------------------------
 
             # Lógica de Status (Visual)
-            status_db = ag.get("status", "agendado")
-            
-            # Pequena garantia técnica para comparar datas se uma tiver fuso e a outra não
-            check_time = inicio_dt
-            if check_time.tzinfo is None:
-                check_time = check_time.replace(tzinfo=timezone.utc)
-            
+            status_db = ag.get("status") or "agendado"
+
             # Se o horário já passou e ainda tá "agendado", vira "pendente" (roxo)
-            if check_time < agora_utc and status_db == "agendado":
+            if inicio_dt < agora_sp and status_db == "agendado":
                 status_final = "pendente_acao"
             else:
                 status_final = status_db
 
-            # Created At (Data de criação do agendamento)
-            # Aqui mantemos a conversão apenas para saber quando o cliente chamou no Brasil
+            # Created At: convertido para o Brasil só para exibir "Criado em: dd/mm às HH:mm"
             created_at_dt = ag.get("created_at")
             created_at_str = ""
             if isinstance(created_at_dt, datetime):
                 if created_at_dt.tzinfo is None: created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
-                # Converte para Brasil só para exibir "Criado em: dd/mm às HH:mm"
                 created_at_str = created_at_dt.astimezone(FUSO_HORARIO).strftime("%d/%m/%Y %H:%M")
 
             item = {
-                 "id": str(ag.get("_id")), 
+                 "id": ag["id"],
                  "dia": dia_str,
                  "dia_visual": dia_visual,
-                 "hora_inicio": hora_inicio_str, 
+                 "hora_inicio": hora_inicio_str,
                  "hora_fim": hora_fim_str,
-                 "servico": ag.get("servico", "Atendimento").capitalize(),
+                 "servico": (ag.get("servico") or "Atendimento").capitalize(),
                  "status": status_final,
-                 "cliente_nome": ag.get("nome", "Sem Nome").title(),
-                 "cliente_telefone": ag.get("cliente_telefone") or ag.get("telefone", ""),
-                 "observacao": ag.get("observacao", ""),
-                 "owner_whatsapp_id": ag.get("owner_whatsapp_id", ""),
+                 "cliente_nome": (ag.get("nome") or "Sem Nome").title(),
+                 "cliente_telefone": ag.get("telefone") or "",
+                 "observacao": ag.get("observacao") or "",
+                 "owner_whatsapp_id": ag.get("owner_whatsapp_id") or "",
                  "created_at": created_at_str
              }
             lista_formatada.append(item)
@@ -3698,7 +3968,9 @@ def api_meus_agendamentos():
         print(f"Erro em api_meus_agendamentos: {e}")
         return jsonify({"erro": str(e)}), 500
 
+
 @app.route('/api/agendamento/atualizar-status', methods=['POST'])
+@requer_token
 def api_atualizar_status():
     """Define como 'concluido' ou 'ausencia'"""
     data = request.json
@@ -3706,31 +3978,35 @@ def api_atualizar_status():
     novo_status = data.get('status') # 'concluido' ou 'ausencia'
 
     try:
-        agenda_instance.collection.update_one(
-            {"_id": ObjectId(ag_id)},
-            {"$set": {
-                "status": novo_status,
-                "data_atualizacao_status": datetime.now(timezone.utc),
-                "post_attendance_followup_sent": False
-            }}
+        alterados = agenda_repo.atualizar(
+            ag_id,
+            status=novo_status,
+            data_atualizacao_status=datetime.now(timezone.utc),
+            post_attendance_followup_sent=False,
         )
+        if alterados == 0:
+            return jsonify({"erro": "Agendamento não encontrado."}), 404
         return jsonify({"sucesso": True}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
+
 @app.route('/api/agendamento/deletar', methods=['POST'])
+@requer_token
 def api_deletar_id():
     """Apaga o agendamento pelo ID (Cancelar)"""
     data = request.json
     ag_id = data.get('id')
 
     try:
-        agenda_instance.collection.delete_one({"_id": ObjectId(ag_id)})
+        agenda_repo.excluir(ag_id)
         return jsonify({"sucesso": True}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
+
 @app.route('/api/horarios-disponiveis', methods=['POST'])
+@requer_token
 def api_horarios_disponiveis():
     """
     Retorna os slots vagos para o App, usando a mesma regra da IA.
@@ -3739,21 +4015,23 @@ def api_horarios_disponiveis():
     data = request.json
     data_str = data.get('data') # Ex: "28/11/2025"
     servico = data.get('servico', 'reunião')
-    
+
     if not agenda_instance:
         return jsonify({"erro": "Agenda não conectada"}), 500
-        
+
     # Reutiliza a lógica robusta da classe Agenda
     resultado = agenda_instance.listar_horarios_disponiveis(data_str, servico)
     return jsonify(resultado), 200
 
+
 @app.route('/api/agendamento/criar', methods=['POST'])
+@requer_token
 def api_criar_agendamento():
     """
     Cria um agendamento manual via App.
     """
     data = request.json
-    
+
     # Extrai dados do formulário do App
     nome = data.get('nome')
     telefone = data.get('telefone')
@@ -3761,7 +4039,7 @@ def api_criar_agendamento():
     data_str = data.get('data') # DD/MM/YYYY
     hora_str = data.get('hora') # HH:MM
     observacao = data.get('observacao', '')
-    
+
     # Se o admin estiver criando, o owner_whatsapp_id pode ser o telefone limpo
     # para que os lembretes funcionem.
     telefone_limpo = re.sub(r'\D', '', str(telefone))
@@ -3780,63 +4058,63 @@ def api_criar_agendamento():
         hora_str=hora_str,
         owner_id=owner_id
     )
-    
+
     if "erro" in resultado:
         return jsonify(resultado), 400 # Retorna erro 400 se falhar (ex: horário ocupado)
-        
+
     return jsonify(resultado), 200
+
+
 @app.route('/api/folga/gerenciar', methods=['POST'])
+@requer_token
 def api_gerenciar_folga():
     data = request.json
     data_str = data.get('data')
     acao = data.get('acao') # 'criar' ou 'remover'
 
     if not agenda_instance: return jsonify({"erro": "Agenda offline"}), 500
-    
+
     # Parse da data
     dt = parse_data(data_str)
     if not dt: return jsonify({"erro": "Data inválida"}), 400
-    
+
     # --- CONSISTÊNCIA COM AGENDA (DATETIME NAIVE) ---
     inicio_naive = datetime.combine(dt.date(), dt_time.min)
     fim_naive = datetime.combine(dt.date(), dt_time.max)
-    
+
     if acao == 'criar':
         # Verifica conflitos usando as mesmas datas Naive da Agenda
-        conflitos = agenda_instance.collection.count_documents({
-            "inicio": {"$gte": inicio_naive, "$lte": fim_naive},
-            "servico": {"$ne": "Folga"}, 
-            "status": {"$nin": ["cancelado", "ausencia", "bloqueado"]}
-        })
+        conflitos = agenda_repo.contar_atendimentos_ativos(inicio_naive, fim_naive)
 
         if conflitos > 0:
             return jsonify({"erro": f"Dia com {conflitos} atendimentos. Cancele-os antes."}), 400
 
-        agenda_instance.collection.insert_one({
-            "nome": "BLOQUEIO ADMINISTRATIVO",
-            "servico": "Folga",
-            "status": "bloqueado",
-            "inicio": inicio_naive, 
-            "fim": fim_naive,      
-            "created_at": datetime.now(timezone.utc),
-            "owner_whatsapp_id": "admin",
-            "cliente_telefone": ""
-        })
+        agenda_repo.inserir(
+            nome="BLOQUEIO ADMINISTRATIVO",
+            telefone="",
+            servico="Folga",
+            inicio=inicio_naive,
+            fim=fim_naive,
+            owner_whatsapp_id="admin",
+            status="bloqueado",
+        )
         return jsonify({"sucesso": True}), 200
 
     elif acao == 'remover':
-        resultado = agenda_instance.collection.delete_many({
-            "inicio": {"$gte": inicio_naive, "$lte": fim_naive},
-            "$or": [{"servico": "Folga"}, {"status": "bloqueado"}]
-        })
+        agenda_repo.excluir_bloqueios_no_intervalo(inicio_naive, fim_naive)
         return jsonify({"sucesso": True}), 200
 
     return jsonify({"erro": "Ação inválida"}), 400
 
+
+# ------------------------------------------------------------------------------
+# Conversas
+# ------------------------------------------------------------------------------
 @app.route('/api/conversas/travar', methods=['POST'])
+@requer_token
 def api_travar_numero():
     """Trava ou destrava o bot para um cliente específico."""
-    if conversation_collection is None:
+    if not DB_OK:
         return jsonify({"erro": "Banco offline"}), 500
 
     data = request.json
@@ -3847,44 +4125,35 @@ def api_travar_numero():
         return jsonify({"erro": "Telefone não informado"}), 400
 
     # Higieniza o número igual a função is_numero_travado
-    num_str = re.sub(r'\D', '', str(numero))
-    if len(num_str) == 13 and num_str.startswith('55'):
-        num_formatado = num_str[:4] + num_str[5:]
-    else:
-        num_formatado = num_str
+    num_formatado = _numero_12_digitos(numero)
 
     try:
         if acao == 'travar':
-            conversation_collection.update_one(
-                {'_id': 'numeros_travados'},
-                {'$addToSet': {'lista': num_formatado}}, # Adiciona sem duplicar
-                upsert=True
-            )
+            contatos_repo.travar(num_formatado)
         elif acao == 'destravar':
-            conversation_collection.update_one(
-                {'_id': 'numeros_travados'},
-                {'$pull': {'lista': num_formatado}} # Remove da lista
-            )
+            contatos_repo.destravar(num_formatado)
         return jsonify({"sucesso": True, "numero": num_formatado, "acao": acao}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
+
 @app.route('/api/conversas/travados', methods=['GET'])
+@requer_token
 def api_listar_travados():
     """Retorna a lista de todos os números travados manualmente para exibição no App."""
-    if conversation_collection is None:
+    if not DB_OK:
         return jsonify({"erro": "Banco offline"}), 500
     try:
-        doc = conversation_collection.find_one({'_id': 'numeros_travados'})
-        lista = doc.get('lista', []) if doc else []
-        return jsonify({"sucesso": True, "lista": lista}), 200
+        return jsonify({"sucesso": True, "lista": contatos_repo.listar_travados()}), 200
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
+
 @app.route('/api/conversas/historico/<telefone>', methods=['GET'])
+@requer_token
 def api_historico_conversa(telefone):
-    """Retorna o history completo de uma conversa (espelho do MongoDB) para exibição estilo WhatsApp no app."""
-    if conversation_collection is None:
+    """Retorna o histórico completo de uma conversa para exibição estilo WhatsApp no app."""
+    if not DB_OK:
         return jsonify({"erro": "Banco de conversas offline"}), 500
 
     num_str = re.sub(r'\D', '', str(telefone or ''))
@@ -3892,40 +4161,27 @@ def api_historico_conversa(telefone):
         return jsonify({"erro": "Telefone inválido"}), 400
 
     try:
-        doc = conversation_collection.find_one({"_id": num_str})
+        doc = contatos_repo.obter(num_str)
         if not doc:
             return jsonify({"erro": "Conversa não encontrada"}), 404
 
-        history_raw = doc.get("history", []) or []
-        mensagens = []
-        for msg in history_raw:
-            role = msg.get("role", "")
-            texto = msg.get("text", "") or ""
-            ts_raw = msg.get("ts", "")
-
-            ts_iso = ""
-            if isinstance(ts_raw, datetime):
-                ts_iso = ts_raw.isoformat()
-            elif isinstance(ts_raw, str):
-                ts_iso = ts_raw
-
-            tipo = "texto"
-            if texto.startswith("Chamando função:"):
-                tipo = "ferramenta"
-            elif "[Áudio transcrito]" in texto or "[Transcrição de áudio]" in texto or "[AUDIO]" in texto.upper():
-                tipo = "audio"
-
-            mensagens.append({
-                "role": role,
-                "text": texto,
-                "ts": ts_iso,
-                "tipo": tipo,
-            })
+        mensagens = [
+            {
+                "role": msg["role"],
+                "text": msg["text"] or "",
+                "ts": msg["ts"],
+                # O app conhece texto/audio/ferramenta. Notas internas do sistema
+                # aparecem como 'ferramenta' (pílula no meio); mídia, como texto.
+                "tipo": {"sistema": "ferramenta", "midia": "texto"}.get(msg["tipo"], msg["tipo"]),
+                "origem": msg["origem"],
+            }
+            for msg in mensagens_repo.historico(num_str)
+        ]
 
         return jsonify({
-            "telefone": str(doc.get("_id")),
+            "telefone": num_str,
             "nome": doc.get("customer_name") or doc.get("sender_name") or "Sem Nome",
-            "status": doc.get("conversation_status", "andamento"),
+            "status": doc.get("conversation_status") or "andamento",
             "mensagens": mensagens,
         }), 200
 
@@ -3933,104 +4189,67 @@ def api_historico_conversa(telefone):
         return jsonify({"erro": str(e)}), 500
 
 
+def _buscar_contatos_filtrados():
+    """Filtros ?status= e ?data_inicio=&data_fim= (na última interação)."""
+    status_filter = request.args.get('status')
+    status = status_filter if status_filter and status_filter != 'todos' else None
+
+    desde = ate = None
+    if request.args.get('data_inicio') and request.args.get('data_fim'):
+        periodo = _periodo_da_requisicao()
+        if periodo:
+            desde, ate = periodo
+    return contatos_repo.listar(status=status, desde=desde, ate=ate)
+
+
 @app.route('/api/conversas', methods=['GET'])
+@requer_token
 def api_listar_conversas():
-    if conversation_collection is None:
+    if not DB_OK:
         return jsonify({"erro": "Banco de conversas offline"}), 500
 
-    # Pegando os filtros da URL
-    status_filter = request.args.get('status')
-    data_inicio = request.args.get('data_inicio')
-    data_fim = request.args.get('data_fim')
-
-    query = {"_id": {"$ne": "BOT_STATUS"}}
-
-    # Filtro de status
-    if status_filter and status_filter != 'todos':
-        query['conversation_status'] = status_filter
-
-    # Filtro de data (Agora é um PERÍODO)
-    if data_inicio and data_fim:
-        try:
-            dt_ini = datetime.strptime(data_inicio, "%Y-%m-%d")
-            dt_fim = datetime.strptime(data_fim, "%Y-%m-%d")
-            query['last_interaction'] = {
-                "$gte": dt_ini,
-                "$lt": dt_fim + timedelta(days=1) # Pega até às 23:59 do último dia
-            }
-        except:
-            pass
-
     try:
-        doc_travados = conversation_collection.find_one({'_id': 'numeros_travados'})
-        lista_travados = doc_travados.get('lista', []) if doc_travados else []
+        travados = set(contatos_repo.listar_travados())
 
-        # Busca ordenando da mais recente para a mais antiga
-        resultados = list(conversation_collection.find(query).sort("last_interaction", -1))
-        
         conversas = []
-        for r in resultados:
+        for r in _buscar_contatos_filtrados():
             last_int = r.get("last_interaction")
             dt_str = last_int.isoformat() if isinstance(last_int, datetime) else ""
-            
-            # Verifica se o telefone está na lista de travados
-            telefone_id = str(r.get("_id"))
-            is_travado = telefone_id in lista_travados
 
+            telefone_id = r["telefone"]
             conversas.append({
                 "telefone": telefone_id,
                 "nome": r.get("customer_name") or r.get("sender_name") or "Sem Nome",
-                "status": r.get("conversation_status", "andamento"),
+                "status": r.get("conversation_status") or "andamento",
                 "data_contato": dt_str,
-                "perfil": r.get("client_profile", {}),
-                "is_travado": is_travado # <--- NOVA FLAG AQUI
+                "perfil": r.get("client_profile") or {},
+                "is_travado": _numero_12_digitos(telefone_id) in travados,
             })
-            
+
         return jsonify(conversas), 200
-    
+
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
 
+
 @app.route('/api/conversas/exportar', methods=['GET'])
+@requer_token
 def api_exportar_conversas_excel():
-    if conversation_collection is None:
+    """Excel do CRM (perfil de cada cliente). O relatório do Analista é /api/relatorios/exportar."""
+    if not DB_OK:
         return jsonify({"erro": "Banco de conversas offline"}), 500
 
-    status_filter = request.args.get('status')
-    data_inicio = request.args.get('data_inicio')
-    data_fim = request.args.get('data_fim')
-
-    query = {"_id": {"$ne": "BOT_STATUS"}}
-
-    # Trata o filtro de status, permitindo "stand_by"
-    if status_filter and status_filter != 'todos':
-        query['conversation_status'] = status_filter
-
-    if data_inicio and data_fim:
-        try:
-            dt_ini = datetime.strptime(data_inicio, "%Y-%m-%d")
-            dt_fim = datetime.strptime(data_fim, "%Y-%m-%d")
-            query['last_interaction'] = {
-                "$gte": dt_ini,
-                "$lt": dt_fim + timedelta(days=1)
-            }
-        except:
-            pass
-
     try:
-        doc_travados = conversation_collection.find_one({'_id': 'numeros_travados'})
-        lista_travados = doc_travados.get('lista', []) if doc_travados else []
-
-        resultados = list(conversation_collection.find(query).sort("last_interaction", -1))
+        travados = set(contatos_repo.listar_travados())
+        resultados = _buscar_contatos_filtrados()
 
         # Cria a planilha
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Conversas"
 
-        # Define cabeçalhos e estilos (UX Senior - Full Profile)
         headers = [
-            "Telefone", "Nome", "Status", "Data Contato", 
+            "Telefone", "Nome", "Status", "Data Contato",
             "Gênero", "Idade Faixa", "Estrutura Familiar", "Ocupação",
             "Histórico Esportivo", "Objetivo Principal", "Dor/Problema",
             "Perfil Comportamental", "Estilo Comunicação", "Fatores Decisão",
@@ -4049,66 +4268,53 @@ def api_exportar_conversas_excel():
             cell.font = header_font
             cell.alignment = center_align
 
-        # Preenche os dados
         for r in resultados:
             last_int = r.get("last_interaction")
             dt_str = last_int.astimezone(FUSO_HORARIO).strftime("%d/%m/%Y %H:%M") if isinstance(last_int, datetime) else ""
-            
-            telefone_id = str(r.get("_id"))
-            is_travado = "Sim" if telefone_id in lista_travados else "Não"
-            nome = r.get("customer_name") or r.get("sender_name") or "Sem Nome"
-            status = r.get("conversation_status", "andamento")
 
-            perfil = r.get("client_profile", {}) or {}
-            
-            # Extraindo todos os campos do MongoDB de forma segura
-            genero = perfil.get("genero") or perfil.get("gender") or "-"
-            idade = perfil.get("idade_faixa") or "-"
-            familiar = perfil.get("estrutura_familiar") or "-"
-            ocupacao = perfil.get("ocupacao_principal") or "-"
-            esportivo = perfil.get("historico_esportivo") or "-"
-            objetivo = perfil.get("objetivo_principal") or perfil.get("objetivo_treino") or perfil.get("goal") or "-"
-            dor = perfil.get("principal_dor_problema") or "-"
-            comportamental = perfil.get("perfil_comportamental") or "-"
-            estilo_com = perfil.get("estilo_de_comunicacao") or "-"
-            fatores = perfil.get("fatores_de_decisao") or "-"
-            origem = perfil.get("origem_contato") or "-"
-            objecoes = perfil.get("objecoes") or perfil.get("objecoes:") or "-"
-            relacionamento = perfil.get("nivel_de_relacionamento") or "-"
-            desejos = perfil.get("desejos") or "-"
-            medos = perfil.get("medos") or "-"
-            agrados = perfil.get("agrados") or perfil.get("preferencias") or "-"
-            obs_imp = perfil.get("observacoes_importantes") or "-"
-            historico = perfil.get("historico_converssa") or perfil.get("resumo_conversa") or perfil.get("historico") or "-"
+            telefone_id = r["telefone"]
+            is_travado = "Sim" if _numero_12_digitos(telefone_id) in travados else "Não"
+            nome = r.get("customer_name") or r.get("sender_name") or "Sem Nome"
+            status = r.get("conversation_status") or "andamento"
+
+            perfil = r.get("client_profile") or {}
 
             row_data = [
                 telefone_id, nome, status, dt_str,
-                genero, idade, familiar, ocupacao, esportivo, objetivo, dor,
-                comportamental, estilo_com, fatores, origem, objecoes, 
-                relacionamento, desejos, medos, agrados, obs_imp, historico, is_travado
+                perfil.get("genero") or perfil.get("gender") or "-",
+                perfil.get("idade_faixa") or "-",
+                perfil.get("estrutura_familiar") or "-",
+                perfil.get("ocupacao_principal") or "-",
+                perfil.get("historico_esportivo") or "-",
+                perfil.get("objetivo_principal") or perfil.get("objetivo_treino") or perfil.get("goal") or "-",
+                perfil.get("principal_dor_problema") or "-",
+                perfil.get("perfil_comportamental") or "-",
+                perfil.get("estilo_de_comunicacao") or "-",
+                perfil.get("fatores_de_decisao") or "-",
+                perfil.get("origem_contato") or "-",
+                perfil.get("objecoes") or perfil.get("objecoes:") or "-",
+                perfil.get("nivel_de_relacionamento") or "-",
+                perfil.get("desejos") or "-",
+                perfil.get("medos") or "-",
+                perfil.get("agrados") or perfil.get("preferencias") or "-",
+                perfil.get("observacoes_importantes") or "-",
+                perfil.get("historico_converssa") or perfil.get("resumo_conversa") or perfil.get("historico") or "-",
+                is_travado,
             ]
             ws.append(row_data)
 
-        # Ajusta larguras das colunas (UX Senior - Perfil Completo)
-        # Como são muitas colunas, vamos definir uma largura padrão confortável
         for col in range(1, len(headers) + 1):
             col_letter = openpyxl.utils.get_column_letter(col)
-            if col_letter in ["H", "J", "K", "O", "P", "U", "V"]: # Colunas de texto longo
-                ws.column_dimensions[col_letter].width = 40
-            else:
-                ws.column_dimensions[col_letter].width = 20
+            ws.column_dimensions[col_letter].width = 40 if col_letter in ["H", "J", "K", "O", "P", "U", "V"] else 20
 
-        # Alinhamento vertical e horizontal para todas as células
         for row in ws.iter_rows(min_row=2, max_row=ws.max_row, min_col=1, max_col=len(headers)):
             for cell in row:
                 cell.alignment = Alignment(vertical="center", wrap_text=True)
 
-        # Salva em memória
         excel_file = io.BytesIO()
         wb.save(excel_file)
         excel_file.seek(0)
 
-        # Retorna o arquivo
         return send_file(
             excel_file,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
@@ -4117,7 +4323,8 @@ def api_exportar_conversas_excel():
         )
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
-    
+
+
 if __name__ == '__main__':
     print("Iniciando em MODO DE DESENVOLVIMENTO LOCAL (app.run)...")
     port = int(os.environ.get("PORT", 8000))

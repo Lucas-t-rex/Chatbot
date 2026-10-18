@@ -1,3 +1,4 @@
+import base64
 import requests
 import re
 import logging
@@ -166,7 +167,12 @@ class EvolutionService:
             log.warning(f"⚠️ Erro de conexão no 'Digitando': {e}")
             return False
 
-    def send_whatsapp_message(self, number: str, text_message: str, delay_ms: int = 3000) -> bool:
+    def send_whatsapp_message(self, number: str, text_message: str, delay_ms: int = 3000,
+                              manter_emojis: bool = False) -> bool:
+        """
+        manter_emojis=False (padr\u00e3o): o bot fala com clientes sem emoji.
+        manter_emojis=True: usado nos relat\u00f3rios do dono, que usam \ud83d\udcca \u26a0\ufe0f \u2705 de prop\u00f3sito.
+        """
         clean_number = number.split('@')[0]
 
         # I didn't put remove_emojis in helpers.py yet. I will define it here for encapsulation.
@@ -179,7 +185,7 @@ class EvolutionService:
                 r'\ufe0f]'
                 , '', text).strip()
 
-        mensagem_limpa = remove_emojis_func(text_message)
+        mensagem_limpa = (text_message or "").strip() if manter_emojis else remove_emojis_func(text_message)
         if not mensagem_limpa:
             return False
 
@@ -224,6 +230,36 @@ class EvolutionService:
             log.error(f"❌ Erro de CONEXÃO ao enviar mensagem para {clean_number}: {e}")
             return False
 
+    def send_whatsapp_document(self, number: str, conteudo: bytes, nome_arquivo: str, legenda: str = "") -> bool:
+        """Envia um arquivo (ex.: a planilha .xlsx) como documento do WhatsApp."""
+        clean_number = number.split('@')[0]
+        payload = {
+            "number": clean_number,
+            "mediaMessage": {
+                "mediatype": "document",
+                "fileName": nome_arquivo,
+                "caption": legenda,
+                "media": base64.b64encode(conteudo).decode("ascii"),
+            },
+        }
+        url = f"{self.base_url}/message/sendMedia/chatbot"
+        try:
+            response = self._session.post(url, json=payload, timeout=90)
+            if response.status_code < 400:
+                log.info(f"✅ Documento '{nome_arquivo}' enviado para {clean_number}")
+                try:
+                    msg_id = response.json().get('key', {}).get('id')
+                    if msg_id and self._sent_ids_callback:
+                        self._sent_ids_callback(msg_id)
+                except Exception:
+                    pass
+                return True
+            log.error(f"❌ ERRO DA API EVOLUTION ao enviar documento para {clean_number}: {response.status_code}")
+            return False
+        except requests.exceptions.RequestException as e:
+            log.error(f"❌ Erro de CONEXÃO ao enviar documento para {clean_number}: {e}")
+            return False
+
     def send_whatsapp_contact(self, number: str, contact_name: str, contact_number: str) -> bool:
         clean_number = number.split('@')[0]
         payload = {
@@ -241,6 +277,14 @@ class EvolutionService:
             response = self._session.post(url, json=payload, timeout=20)
             if response.status_code < 400:
                 print(f"✅ Contato ({contact_name}) enviado com sucesso para {clean_number}")
+                # Igual ao sendText: sem isso o eco do VCard volta pelo webhook
+                # e é gravado como se o atendente tivesse mandado.
+                try:
+                    msg_id = response.json().get('key', {}).get('id')
+                    if msg_id and self._sent_ids_callback:
+                        self._sent_ids_callback(msg_id)
+                except Exception:
+                    pass
                 return True
             else:
                 print(f"❌ ERRO API EVOLUTION VCard ({response.status_code}): {response.text}")

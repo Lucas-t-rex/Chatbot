@@ -3,6 +3,7 @@ from datetime import datetime, time as dt_time, timedelta, timezone
 from typing import Optional, List, Dict, Any
 from app.core.config import config
 from app.core.db import db
+from app.repositories import agenda_repo
 from app.utils.helpers import parse_data, validar_hora, str_to_time, gerar_slots_de_trabalho
 import logging
 
@@ -65,27 +66,19 @@ def agrupar_horarios_em_faixas(lista_horarios, step=15):
 
 class Agenda:
     def __init__(self):
-        # Using connection pooled singleton from app.core.db
-        if db.client_agenda:
-            self.collection = db.client_agenda[config.DB_NAME][config.MONGO_AGENDA_COLLECTION]
-            self.is_connected = True
-            log.info("✅ [App/Models/Agenda] Usando conexão singleton com DB_AGENDA.")
+        # Usa o pool único do Supabase (app.core.db) através do agenda_repo.
+        self.is_connected = db.disponivel
+        if self.is_connected:
+            log.info("✅ [App/Models/Agenda] Usando o Supabase.")
         else:
-            self.collection = None
-            self.is_connected = False
             log.warning("⚠️ [App/Models/Agenda] Sem conexão com BD. Agendamentos falharão.")
-            
-    # As demais funções usam self.collection, já estão prontas no original.
+
     def _is_dia_bloqueado_admin(self, dt: datetime) -> bool:
         if not self.is_connected: return False
         try:
             inicio_dia = datetime.combine(dt.date(), dt_time.min)
             fim_dia = datetime.combine(dt.date(), dt_time.max)
-            bloqueio = self.collection.find_one({
-                "inicio": {"$gte": inicio_dia, "$lte": fim_dia},
-                "$or": [{"servico": "Folga"}, {"status": "bloqueado"}]
-            })
-            return bloqueio is not None
+            return agenda_repo.existe_bloqueio_no_dia(inicio_dia, fim_dia)
         except Exception as e:
             log.error(f"Erro ao checar bloqueio administrativo: {e}")
             return False
@@ -133,20 +126,17 @@ class Agenda:
             return False
 
     def _contar_conflitos_no_banco(self, novo_inicio_dt: datetime, novo_fim_dt: datetime, excluir_id: Optional[Any] = None) -> int:
-        query = {"inicio": {"$lt": novo_fim_dt}, "fim": {"$gt": novo_inicio_dt}}
-        if excluir_id: query["_id"] = {"$ne": excluir_id}
         try:
-            return self.collection.count_documents(query)
+            return agenda_repo.contar_conflitos(novo_inicio_dt, novo_fim_dt, excluir_id)
         except Exception as e:
-            log.error(f"❌ Erro ao contar conflitos no Mongo: {e}")
+            log.error(f"❌ Erro ao contar conflitos no banco: {e}")
             return 999 
 
     def _buscar_agendamentos_do_dia(self, dt: datetime) -> List[Dict[str, Any]]:
         try:
             inicio_dia = datetime.combine(dt.date(), dt_time.min)
             fim_dia = inicio_dia + timedelta(days=1)
-            query = {"inicio": {"$gte": inicio_dia, "$lt": fim_dia}}
-            return list(self.collection.find(query))
+            return agenda_repo.do_intervalo(inicio_dia, fim_dia)
         except Exception as e:
             log.error(f"❌ Erro ao buscar agendamentos do dia: {e}")
             return []
@@ -164,8 +154,7 @@ class Agenda:
         if not tel_limpo: return {"erro": "Telefone inválido."}
         try:
             agora_sp = datetime.now(config.FUSO_HORARIO).replace(tzinfo=None)
-            query = {"telefone": tel_limpo, "inicio": {"$gte": agora_sp}}
-            resultados_db = self.collection.find(query).sort("inicio", 1)
+            resultados_db = agenda_repo.futuros_do_telefone(tel_limpo, agora_sp)
             resultados = []
             for ag in resultados_db:
                 inicio_dt_local = ag["inicio"]
@@ -217,11 +206,7 @@ class Agenda:
         try:
             inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
             fim_dt = inicio_dt + timedelta(minutes=duracao_minutos)
-            already_booked = self.collection.find_one({
-                "telefone": tel_limpo, 
-                "inicio": inicio_dt,
-                "nome": {"$regex": f"^{re.escape(nome.strip())}$", "$options": "i"}
-            })
+            already_booked = agenda_repo.existe_mesmo_nome_horario(tel_limpo, inicio_dt, nome.strip())
             if already_booked:
                 return {"sucesso": False, "msg": f"Atenção: A pessoa informada ({nome.strip()}) já possui um agendamento EXATAMENTE neste dia e horário ({data_str} às {hora}) sob este número de telefone. Se quiser agendar para uma segunda pessoa no mesmo celular e horário, por favor cadastre com o NOME COMPLETO dessa outra pessoa."}
 
@@ -230,21 +215,18 @@ class Agenda:
                 return {"erro": f"Horário {hora} indisponível (Lotação máxima atingida)."}
             
             obs_limpa = str(observacao).strip()[:200] if observacao else ""
-            novo_documento = {
-                "owner_whatsapp_id": owner_id,  
-                "nome": nome.strip(),
-                "telefone": tel_limpo,
-                "servico": servico.strip(),
-                "observacao": obs_limpa,
-                "duracao_minutos": duracao_minutos,
-                "inicio": inicio_dt, 
-                "fim": fim_dt,
-                "reminder_sent": False, 
-                "created_at": datetime.now(timezone.utc)
-            }
-            result = self.collection.insert_one(novo_documento)
-            if result.inserted_id:
-                log.info(f"💾 [DB SALVO COM SUCESSO] ID: {result.inserted_id} | Cliente: {nome} | Serviço: {servico}")
+            novo_id = agenda_repo.inserir(
+                nome=nome.strip(),
+                telefone=tel_limpo,
+                servico=servico.strip(),
+                inicio=inicio_dt,
+                fim=fim_dt,
+                duracao_minutos=duracao_minutos,
+                observacao=obs_limpa,
+                owner_whatsapp_id=owner_id,
+            )
+            if novo_id:
+                log.info(f"💾 [DB SALVO COM SUCESSO] ID: {novo_id} | Cliente: {nome} | Serviço: {servico}")
                 return {"sucesso": True, "msg": f"Agendamento salvo com sucesso para {nome} em {data_str} às {hora}."}
             else:
                 return {"erro": "Erro crítico: O banco de dados não retornou o ID de confirmação."}
@@ -264,10 +246,10 @@ class Agenda:
 
         try:
             inicio_dt = datetime.combine(dt.date(), str_to_time(hora))
-            documento_removido = self.collection.find_one_and_delete({"telefone": tel_limpo, "inicio": inicio_dt})
+            documento_removido = agenda_repo.excluir_por_telefone_inicio(tel_limpo, inicio_dt)
             if not documento_removido:
                 return {"erro": "Agendamento não encontrado com os dados fornecidos."}
-            nome_cliente = documento_removido.get('nome', 'Cliente')
+            nome_cliente = documento_removido.get('nome') or 'Cliente'
             return {"sucesso": True, "msg": f"Agendamento de {nome_cliente} em {data_str} às {hora} removido."}
         except Exception as e:
             return {"erro": f"Falha ao excluir do banco de dados: {e}"}
@@ -277,11 +259,11 @@ class Agenda:
         tel_limpo = re.sub(r'\D', '', str(telefone)) if telefone else ""
         if not tel_limpo: return {"erro": "Telefone inválido."}
         try:
-            query = {"telefone": tel_limpo, "inicio": {"$gte": datetime.now()}}
-            resultado = self.collection.delete_many(query)
-            if resultado.deleted_count == 0:
+            agora_sp = datetime.now(config.FUSO_HORARIO).replace(tzinfo=None)
+            removidos = agenda_repo.excluir_futuros_do_telefone(tel_limpo, agora_sp)
+            if removidos == 0:
                 return {"erro": "Nenhum agendamento futuro encontrado para este telefone."}
-            return {"sucesso": True, "msg": f"{resultado.deleted_count} agendamento(s) futuros foram removidos com sucesso."}
+            return {"sucesso": True, "msg": f"{removidos} agendamento(s) futuros foram removidos com sucesso."}
         except Exception as e:
             return {"erro": f"Falha ao excluir agendamentos do banco de dados: {e}"}
 
@@ -303,10 +285,10 @@ class Agenda:
 
         try:
             inicio_antigo_dt = datetime.combine(dt_old.date(), str_to_time(h_old))
-            item = self.collection.find_one({"telefone": tel_limpo, "inicio": inicio_antigo_dt})
+            item = agenda_repo.obter_por_telefone_inicio(tel_limpo, inicio_antigo_dt)
             if not item: return {"erro": "Agendamento antigo não encontrado."}
 
-            duracao_minutos = item.get("duracao_minutos", self._get_duracao_servico(item.get("servico", "")))
+            duracao_minutos = item.get("duracao_minutos") or self._get_duracao_servico(item.get("servico") or "")
             if duracao_minutos is None: return {"erro": f"O serviço original não é mais válido."}
             if not self._cabe_no_bloco(dt_new, h_new, duracao_minutos):
                 return {"erro": f"O novo horário {h_new} ultrapassa o horário de atendimento."}
@@ -317,14 +299,14 @@ class Agenda:
             if self._contar_conflitos_no_banco(novo_inicio_dt, novo_fim_dt, excluir_id=item["_id"]) >= config.NUM_ATENDENTES:
                 return {"erro": f"Novo horário {h_new} indisponível."}
 
-            resultado = self.collection.update_one({"_id": item["_id"]}, {"$set": {"inicio": novo_inicio_dt, "fim": novo_fim_dt}})
-            if resultado.matched_count == 0: return {"erro": "Falha ao encontrar o documento para atualizar."}
+            if agenda_repo.atualizar(item["id"], inicio=novo_inicio_dt, fim=novo_fim_dt) == 0:
+                return {"erro": "Falha ao encontrar o documento para atualizar."}
 
             return {
                 "sucesso": True, 
                 "msg": f"Agendamento alterado para {dt_new.strftime('%d/%m/%Y')} às {h_new}.",
-                "nome_cliente": item.get("nome", "Cliente"),
-                "telefone_cliente": item.get("telefone", "Não informado")
+                "nome_cliente": item.get("nome") or "Cliente",
+                "telefone_cliente": item.get("telefone") or "Não informado"
             }
         except Exception as e:
             return {"erro": f"Falha ao alterar no banco de dados: {e}"}
@@ -371,5 +353,3 @@ class Agenda:
             "resumo_humanizado": resumo_humanizado,
             "horarios_disponiveis": horarios_disponiveis
         }
-
-agenda_instance = Agenda()

@@ -1,47 +1,80 @@
 import logging
-from pymongo import MongoClient
+from contextlib import contextmanager
+
+from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
+from psycopg_pool import ConnectionPool
+
 from app.core.config import config
-import time
 
 log = logging.getLogger(__name__)
 
-class DatabaseConnections:
+
+class Database:
+    """
+    Pool único de conexões com o Postgres do Supabase.
+    Todo acesso ao banco passa pelos repositórios em app/repositories/,
+    que usam os atalhos um() / todos() / executar() daqui.
+    """
     _instance = None
-    
+
     def __new__(cls):
         if cls._instance is None:
-            cls._instance = super(DatabaseConnections, cls).__new__(cls)
-            cls._instance.client_conversas = None
-            cls._instance.client_agenda = None
+            cls._instance = super().__new__(cls)
+            cls._instance.pool = None
             cls._instance._connect()
         return cls._instance
 
     def _connect(self):
+        if not config.SUPABASE_DB_URL:
+            log.error("❌ [DB] SUPABASE_DB_URL não definida. Banco indisponível.")
+            print("❌ [DB] SUPABASE_DB_URL não definida. Banco indisponível.")
+            return
         try:
-            # Added maxPoolSize for better network concurrency
-            self.client_conversas = MongoClient(config.MONGO_DB_URI, maxPoolSize=50, socketTimeoutMS=10000)
-            db_conversas = self.client_conversas[config.DB_NAME]
-            self.conversation_collection = db_conversas.conversations
-            
-            # Create indexes
-            self.conversation_collection.create_index([
-                ("conversation_status", 1), 
-                ("last_interaction", 1), 
-                ("followup_stage", 1)
-            ])
-            log.info("🚀 [Performance] Índices de busca rápida garantidos no DB Conversas.")
-            
+            self.pool = ConnectionPool(
+                conninfo=config.SUPABASE_DB_URL,
+                min_size=1,
+                max_size=10,
+                timeout=15,
+                # autocommit: cada comando é sua própria transação (igual era no Mongo).
+                # prepare_threshold=None: compatível com o pooler do Supabase.
+                kwargs={"row_factory": dict_row, "autocommit": True, "prepare_threshold": None},
+                open=True,
+            )
+            print("✅ [DB] Pool de conexões com o Supabase criado.")
         except Exception as e:
-            log.error(f"❌ ERRO: [DB Conversas] Não foi possível conectar ao MongoDB. Erro: {e}")
-            self.conversation_collection = None
-            
-        try:
-            self.client_agenda = MongoClient(config.MONGO_AGENDA_URI, maxPoolSize=50, socketTimeoutMS=10000)
-            log.info("✅ [DB Agenda] Conectado com sucesso.")
-        except Exception as e:
-            log.error(f"❌ ERRO: [DB Agenda] DB: {e}")
-            self.client_agenda = None
+            log.error(f"❌ [DB] Não foi possível criar o pool do Supabase: {e}")
+            print(f"❌ [DB] Não foi possível criar o pool do Supabase: {e}")
+            self.pool = None
 
-db = DatabaseConnections()
-conversation_collection = db.conversation_collection
-client_agenda = db.client_agenda
+    @property
+    def disponivel(self) -> bool:
+        return self.pool is not None
+
+    @contextmanager
+    def conexao(self):
+        with self.pool.connection() as conn:
+            yield conn
+
+    def um(self, sql, params=None):
+        """Primeira linha (dict) ou None."""
+        with self.conexao() as conn:
+            return conn.execute(sql, params).fetchone()
+
+    def todos(self, sql, params=None):
+        """Lista de linhas (dicts)."""
+        with self.conexao() as conn:
+            return conn.execute(sql, params).fetchall()
+
+    def executar(self, sql, params=None) -> int:
+        """Executa um comando e devolve quantas linhas foram afetadas."""
+        with self.conexao() as conn:
+            return conn.execute(sql, params).rowcount
+
+
+def json_param(valor):
+    """Envolve um dict/list para gravar em coluna jsonb."""
+    return Jsonb(valor)
+
+
+db = Database()
