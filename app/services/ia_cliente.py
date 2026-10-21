@@ -5,6 +5,7 @@ Cliente de IA do Analista: UMA função, gerar_json(), que funciona com Gemini
 Usa só "requests" (já instalado): nada de biblioteca nova. A chave nunca vai
 para o log. Erros temporários (429, 5xx, timeout) tentam de novo com espera.
 """
+import base64
 import json
 import re
 import time
@@ -193,3 +194,54 @@ def gerar_json(sistema, usuario, max_tokens=4096, temperatura=0.2):
         if tentativa < TENTATIVAS - 1:
             _dormir(ESPERAS_SEG[tentativa])
     raise IAErro(f"IA indisponível após {TENTATIVAS} tentativas ({ultimo_erro})")
+
+
+# ---------------------------------------------------------------------------
+# Transcrição de áudio (cliente e atendente), com a chave do bot (GEMINI_API_KEY)
+# ---------------------------------------------------------------------------
+PROMPT_TRANSCRICAO = "Transcreva este áudio exatamente como foi falado, em português. Apenas o texto, sem comentários."
+
+
+def transcrever_audio(caminho, mime="audio/ogg"):
+    """
+    Texto falado no áudio ('' se não houver fala). Usa o Gemini do AI Studio ou da
+    Vertex AI conforme GEMINI_PROVEDOR. Levanta IAIndisponivel (sem chave) ou IAErro.
+    """
+    if not config.GEMINI_API_KEY:
+        raise IAIndisponivel("GEMINI_API_KEY não configurada")
+    with open(caminho, "rb") as f:
+        dados = base64.b64encode(f.read()).decode("ascii")
+    if config.GEMINI_PROVEDOR == "vertex":
+        base = "https://aiplatform.googleapis.com/v1/publishers/google/models/"
+    else:
+        base = "https://generativelanguage.googleapis.com/v1beta/models/"
+    url = f"{base}{config.MODEL_NAME}:generateContent"
+    corpo = {
+        "contents": [{"role": "user", "parts": [
+            {"text": PROMPT_TRANSCRICAO},
+            {"inlineData": {"mimeType": mime, "data": dados}},
+        ]}],
+        "generationConfig": {"temperature": 0},
+    }
+    ultimo_erro = None
+    for tentativa in range(TENTATIVAS):
+        try:
+            resp = requests.post(
+                url, json=corpo, timeout=120,
+                headers={"x-goog-api-key": config.GEMINI_API_KEY, "Content-Type": "application/json"},
+            )
+        except (requests.Timeout, requests.ConnectionError) as e:
+            ultimo_erro = f"rede: {type(e).__name__}"
+        else:
+            if resp.status_code == 200:
+                try:
+                    texto, _ = _ler_gemini(resp.json())
+                except ValueError:
+                    raise IAErro("resposta da IA não é JSON")
+                return texto.strip()
+            ultimo_erro = f"HTTP {resp.status_code}: {resp.text[:300]}"
+            if resp.status_code not in _STATUS_TEMPORARIOS:
+                raise IAErro(ultimo_erro)
+        if tentativa < TENTATIVAS - 1:
+            _dormir(ESPERAS_SEG[tentativa])
+    raise IAErro(f"transcrição indisponível após {TENTATIVAS} tentativas ({ultimo_erro})")

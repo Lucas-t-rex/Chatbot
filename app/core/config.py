@@ -38,6 +38,9 @@ class Config:
     EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234")
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
     MODEL_NAME = "gemini-3-flash-preview"
+    # Por onde o bot chama o Gemini na transcrição de áudio: "gemini" (AI Studio, créditos
+    # pré-pagos) ou "vertex" (Vertex AI / Agent Platform, cobrado pelo Google Cloud).
+    GEMINI_PROVEDOR = os.environ.get("GEMINI_PROVEDOR", "gemini").lower()
 
     # Database (Supabase / Postgres). Use a URL do "Session pooler" do Supabase:
     # Project Settings > Database > Connection string > Session pooler

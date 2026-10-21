@@ -2457,56 +2457,24 @@ def gerar_resposta_ia_com_tools(contact_id, sender_name, user_message, known_cus
     return "Erro crítico de comunicação."
 
 def transcrever_audio_gemini(caminho_do_audio, contact_id=None):
+    """
+    Transcreve um áudio (do cliente OU do atendente). Quem chama trata um retorno que
+    começa com "[" como falha. O caminho (AI Studio ou Vertex) vem de GEMINI_PROVEDOR.
+    """
     if not GEMINI_API_KEY:
         print("❌ Erro: API Key não definida para transcrição.")
         return "[Erro: Sem chave de IA]"
 
     print(f"🎤 Enviando áudio '{caminho_do_audio}' para transcrição...")
-
     try:
-        # --- TENTATIVA 1 ---
-        audio_file = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
-        modelo_transcritor = genai.GenerativeModel(MODEL_NAME) 
-        prompt_transcricao = "Transcreva este áudio exatamente como foi falado. Apenas o texto, sem comentários."
-        
-        response = modelo_transcritor.generate_content([prompt_transcricao, audio_file])
-        
-        # Limpeza do arquivo na nuvem
-        try:
-            genai.delete_file(audio_file.name)
-        except:
-            pass
-
-        if response.text:
-            texto = response.text.strip()
-            print(f"✅ Transcrição: '{texto}'")
-            return texto
-        else:
-            return "[Áudio sem fala ou inaudível]"
-
+        texto = ia_cliente.transcrever_audio(caminho_do_audio)
     except Exception as e:
-        print(f"❌ Erro 1ª tentativa: {e}")
-        
-        # --- TENTATIVA 2 (RETRY) ---
-        # Se falhou a primeira, tenta mais uma vez antes de desistir
-        try:
-            print("🔄 Tentando transcrição novamente (Retry)...")
-            time.sleep(2) # Espera 2 segundinhos
-            
-            modelo_retry = genai.GenerativeModel(MODEL_NAME)
-            audio_file_retry = genai.upload_file(path=caminho_do_audio, mime_type="audio/ogg")
-            response_retry = modelo_retry.generate_content(["Transcreva o áudio.", audio_file_retry])
-            
-            try:
-                genai.delete_file(audio_file_retry.name)
-            except:
-                pass
-                
-            return response_retry.text.strip()
-            
-        except Exception as e2:
-             print(f"❌ Falha total na transcrição: {e2}")
-             return "[Erro técnico ao ler áudio]"
+        print(f"❌ Falha na transcrição: {e}")
+        return "[Erro técnico ao ler áudio]"
+    if texto:
+        print(f"✅ Transcrição: '{texto}'")
+        return texto
+    return "[Áudio sem fala ou inaudível]"
 
 def remove_emojis(text):
     if not text: return ""

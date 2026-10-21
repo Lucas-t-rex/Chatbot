@@ -168,3 +168,57 @@ def test_json_quebrado_vira_erro(monkeypatch):
     _simular(monkeypatch, [RespostaFalsa(200, {"choices": [{"message": {"content": "isso não é json"}}]})])
     with pytest.raises(IAErro):
         gerar_json("a", "b")
+
+
+# ---------------------------------------------------------------------------
+# Transcrição de áudio
+# ---------------------------------------------------------------------------
+def _audio(tmp_path):
+    f = tmp_path / "a.ogg"
+    f.write_bytes(b"OggS-audio-falso")
+    return str(f)
+
+
+def test_transcricao_pela_vertex_manda_o_audio_em_base64(monkeypatch, tmp_path):
+    import base64
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "chave-bot-teste")
+    monkeypatch.setattr(config, "GEMINI_PROVEDOR", "vertex")
+    chamadas = _simular(monkeypatch, [RespostaFalsa(200, {
+        "candidates": [{"content": {"parts": [{"text": "  Oi, tudo bem?  "}]}}], "usageMetadata": {}})])
+    assert ia_cliente.transcrever_audio(_audio(tmp_path)) == "Oi, tudo bem?"
+    c = chamadas[0]
+    assert c["url"].startswith("https://aiplatform.googleapis.com/v1/publishers/google/models/")
+    assert c["url"].endswith(f"{config.MODEL_NAME}:generateContent")
+    assert c["headers"]["x-goog-api-key"] == "chave-bot-teste"
+    partes = c["json"]["contents"][0]["parts"]
+    assert partes[1]["inlineData"]["mimeType"] == "audio/ogg"
+    assert base64.b64decode(partes[1]["inlineData"]["data"]) == b"OggS-audio-falso"
+
+
+def test_transcricao_pelo_ai_studio_quando_o_provedor_e_gemini(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "chave-bot-teste")
+    monkeypatch.setattr(config, "GEMINI_PROVEDOR", "gemini")
+    chamadas = _simular(monkeypatch, [RespostaFalsa(200, {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})])
+    assert ia_cliente.transcrever_audio(_audio(tmp_path)) == "ok"
+    assert chamadas[0]["url"].startswith("https://generativelanguage.googleapis.com/v1beta/models/")
+
+
+def test_transcricao_tenta_de_novo_e_devolve_vazio_quando_nao_ha_fala(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "chave-bot-teste")
+    monkeypatch.setattr(config, "GEMINI_PROVEDOR", "vertex")
+    chamadas = _simular(monkeypatch, [
+        RespostaFalsa(429, texto="limite"),
+        RespostaFalsa(200, {"candidates": [{"content": {"parts": [{"text": ""}]}}]}),
+    ])
+    assert ia_cliente.transcrever_audio(_audio(tmp_path)) == "" and len(chamadas) == 2
+
+
+def test_transcricao_sem_chave_e_erro_definitivo(monkeypatch, tmp_path):
+    monkeypatch.setattr(config, "GEMINI_API_KEY", None)
+    with pytest.raises(IAIndisponivel):
+        ia_cliente.transcrever_audio(_audio(tmp_path))
+    monkeypatch.setattr(config, "GEMINI_API_KEY", "chave-bot-teste")
+    _simular(monkeypatch, [RespostaFalsa(402, texto="sem crédito")])
+    with pytest.raises(IAErro) as e:
+        ia_cliente.transcrever_audio(_audio(tmp_path))
+    assert "chave-bot-teste" not in str(e.value) and "402" in str(e.value)
