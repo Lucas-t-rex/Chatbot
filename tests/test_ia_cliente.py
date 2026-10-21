@@ -74,6 +74,38 @@ def test_gemini_monta_o_pedido_e_le_a_resposta(monkeypatch):
     assert c["json"]["generationConfig"]["responseMimeType"] == "application/json"
 
 
+def test_vertex_monta_o_pedido_e_le_a_resposta(monkeypatch):
+    monkeypatch.setattr(config, "ANALISTA_IA_PROVEDOR", "vertex")
+    chamadas = _simular(monkeypatch, [RespostaFalsa(200, {
+        "candidates": [{"content": {"parts": [
+            {"text": "pensando...", "thought": True}, {"text": '{"nota": 6}'},
+        ]}}],
+        "usageMetadata": {"promptTokenCount": 80, "candidatesTokenCount": 15, "thoughtsTokenCount": 3},
+    })])
+    dado, uso = gerar_json("SIS", "USU", max_tokens=1234, temperatura=0.3)
+    assert dado == {"nota": 6}
+    assert uso == {"entrada": 80, "saida": 18}
+    c = chamadas[0]
+    assert c["url"] == ("https://aiplatform.googleapis.com/v1/publishers/google/models/"
+                        "modelo-x:generateContent")
+    assert c["headers"]["x-goog-api-key"] == "chave-secreta-teste"
+    assert c["json"]["systemInstruction"]["parts"][0]["text"] == "SIS"
+    assert c["json"]["contents"] == [{"role": "user", "parts": [{"text": "USU"}]}]
+    assert c["json"]["generationConfig"] == {
+        "temperature": 0.3, "maxOutputTokens": 1234, "responseMimeType": "application/json",
+    }
+
+
+def test_vertex_erro_definitivo_nao_vaza_a_chave(monkeypatch):
+    monkeypatch.setattr(config, "ANALISTA_IA_PROVEDOR", "vertex")
+    chamadas = _simular(monkeypatch, [RespostaFalsa(403, texto="Agent Platform API has not been used")])
+    with pytest.raises(IAErro) as e:
+        gerar_json("a", "b")
+    assert len(chamadas) == 1
+    assert "403" in str(e.value)
+    assert "chave-secreta-teste" not in str(e.value)
+
+
 def test_anthropic_monta_o_pedido_com_cache_e_le_a_resposta(monkeypatch):
     monkeypatch.setattr(config, "ANALISTA_IA_PROVEDOR", "anthropic")
     chamadas = _simular(monkeypatch, [RespostaFalsa(200, {

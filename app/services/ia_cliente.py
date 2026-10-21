@@ -1,6 +1,6 @@
 """
-Cliente de IA do Analista: UMA função, gerar_json(), que funciona com Gemini,
-Claude (Anthropic) ou OpenAI. Quem escolhe é a configuração (ANALISTA_IA_PROVEDOR).
+Cliente de IA do Analista: UMA função, gerar_json(), que funciona com Gemini
+(AI Studio ou Vertex AI), Claude (Anthropic) ou OpenAI. Quem escolhe é a configuração (ANALISTA_IA_PROVEDOR).
 
 Usa só "requests" (já instalado): nada de biblioteca nova. A chave nunca vai
 para o log. Erros temporários (429, 5xx, timeout) tentam de novo com espera.
@@ -63,10 +63,9 @@ def extrair_json(texto):
 # ---------------------------------------------------------------------------
 # Um provedor = uma função que devolve (texto, {"entrada": n, "saida": n})
 # ---------------------------------------------------------------------------
-def _gemini(sistema, usuario, max_tokens, temperatura):
-    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
-           f"{config.ANALISTA_IA_MODELO}:generateContent")
-    corpo = {
+def _corpo_gemini(sistema, usuario, max_tokens, temperatura):
+    """Mesmo corpo para o Gemini do AI Studio e para o da Vertex AI."""
+    return {
         "systemInstruction": {"parts": [{"text": sistema}]},
         "contents": [{"role": "user", "parts": [{"text": usuario}]}],
         "generationConfig": {
@@ -75,11 +74,29 @@ def _gemini(sistema, usuario, max_tokens, temperatura):
             "responseMimeType": "application/json",
         },
     }
+
+
+def _gemini(sistema, usuario, max_tokens, temperatura):
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{config.ANALISTA_IA_MODELO}:generateContent")
     resp = requests.post(
-        url, json=corpo, timeout=config.ANALISTA_IA_TIMEOUT_SEG,
+        url, json=_corpo_gemini(sistema, usuario, max_tokens, temperatura),
+        timeout=config.ANALISTA_IA_TIMEOUT_SEG,
         headers={"x-goog-api-key": config.ANALISTA_IA_API_KEY, "Content-Type": "application/json"},
     )
     return resp, _ler_gemini
+
+
+def _vertex(sistema, usuario, max_tokens, temperatura):
+    """Gemini pela Vertex AI ("Agent Platform"): usa os créditos do Google Cloud."""
+    url = (f"https://aiplatform.googleapis.com/v1/publishers/google/models/"
+           f"{config.ANALISTA_IA_MODELO}:generateContent")
+    resp = requests.post(
+        url, json=_corpo_gemini(sistema, usuario, max_tokens, temperatura),
+        timeout=config.ANALISTA_IA_TIMEOUT_SEG,
+        headers={"x-goog-api-key": config.ANALISTA_IA_API_KEY, "Content-Type": "application/json"},
+    )
+    return resp, _ler_gemini  # a resposta tem o mesmo formato do Gemini
 
 
 def _ler_gemini(dado):
@@ -141,7 +158,7 @@ def _ler_openai(dado):
     return texto, {"entrada": uso.get("prompt_tokens") or 0, "saida": uso.get("completion_tokens") or 0}
 
 
-_PROVEDORES = {"gemini": _gemini, "anthropic": _anthropic, "openai": _openai}
+_PROVEDORES = {"gemini": _gemini, "vertex": _vertex, "anthropic": _anthropic, "openai": _openai}
 
 
 def gerar_json(sistema, usuario, max_tokens=4096, temperatura=0.2):

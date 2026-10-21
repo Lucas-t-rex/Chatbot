@@ -61,7 +61,7 @@ class Config:
     # ANALISTA COM IA — lê cada conversa e dá notas. Fica DESLIGADO enquanto não
     # houver ANALISTA_IA_API_KEY (de propósito não reaproveita a GEMINI_API_KEY
     # do bot). Para ligar: fly secrets set ANALISTA_IA_API_KEY=...
-    # Provedores: "gemini" | "anthropic" | "openai".
+    # Provedores: "gemini" (AI Studio) | "vertex" (Vertex AI) | "anthropic" | "openai".
     # ==========================================================================
     ANALISTA_IA_PROVEDOR = os.environ.get("ANALISTA_IA_PROVEDOR", "gemini").lower()
     ANALISTA_IA_MODELO = os.environ.get("ANALISTA_IA_MODELO", "gemini-3-flash-preview")
