@@ -51,8 +51,9 @@ class Config:
     # A partir de quantos minutos esperando o cliente conta como "sem resposta".
     LIMITE_SEM_RESPOSTA_MIN = 15
     # Horários (hora cheia) em que o dono recebe o resumo no WhatsApp.
-    # 12h = só a manhã; os demais = o dia todo acumulado.
-    HORARIOS_RESUMO = [12, 18, 22]
+    # Um único resumo por dia, às 22h (o dia todo), comparado com o de ontem.
+    # O semanal (sábado 18h, abaixo) ganha um job próprio quando 18 não está aqui.
+    HORARIOS_RESUMO = [22]
     # Quantos clientes sem resposta listar na mensagem do dono.
     MAX_SEM_RESPOSTA_NO_RESUMO = 10
 
@@ -66,14 +67,16 @@ class Config:
     ANALISTA_IA_MODELO = os.environ.get("ANALISTA_IA_MODELO", "gemini-3-flash-preview")
     ANALISTA_IA_API_KEY = os.environ.get("ANALISTA_IA_API_KEY")
     ANALISTA_IA_TIMEOUT_SEG = 90
-    # Limites de uma rodada de análise (12h/18h/22h).
+    # Limites de uma rodada de análise (22h e sábado 18h).
     ANALISTA_IA_MAX_CONVERSAS_RODADA = 80
     ANALISTA_IA_MAX_MINUTOS_RODADA = 20
     ANALISTA_IA_DIAS_PARA_TRAS = 2          # só analisa conversas com atividade nos últimos N dias
     ANALISTA_IA_MAX_CHARS_CONVERSA = 15000  # conversa maior: fica o começo e o fim
-    # De onde vêm as técnicas de venda: "geral" (boas práticas, provisório) ou
-    # "curso" (extraídas do PDF do curso da academia). Veja app/prompts/metodo_vendas.md
-    METODO_FONTE = os.environ.get("METODO_FONTE", "geral")
+    # De onde vêm as técnicas de venda: "curso" (o script da academia, do PDF
+    # "Scripts para academias - CRM": app/prompts/metodo_vendas_curso.md) ou
+    # "geral" (boas práticas de reserva: metodo_vendas_geral.md). Se o arquivo
+    # pedido faltar, cai no "geral".
+    METODO_FONTE = os.environ.get("METODO_FONTE", "curso")
     # Dia e hora do resumo semanal (0 = segunda ... 5 = sábado).
     RESUMO_SEMANAL_DIA = 5
     RESUMO_SEMANAL_HORA = 18

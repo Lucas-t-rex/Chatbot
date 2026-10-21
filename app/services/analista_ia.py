@@ -54,12 +54,19 @@ TODOS_CRITERIOS = {**CRITERIOS_TEMPO, **CRITERIOS_IA}
 DESFECHOS = ("sucesso", "em_andamento", "perdido", "nao_lead")
 TIPOS_CONTATO = ("lead", "aluno", "fornecedor", "engano", "outro")
 MOTIVOS_PERDA = ("preco", "horario", "distancia", "sumiu", "outro")
-TEMPERATURAS = ("quente", "morno", "frio")
+# Termômetro do lead (script da academia), do mais frio ao mais quente.
+TEMPERATURAS = ("tranquilo", "incomodado", "pesquisador", "comparador", "comprador")
+# Valores antigos (quente/morno/frio) viram o termômetro novo.
+_SINONIMOS_TEMPERATURA = {"quente": "comprador", "morno": "comparador", "frio": "tranquilo"}
+# Até onde a conversa chegou no script (a etapa mais avançada).
+ETAPAS_SCRIPT = ("acolhimento", "descoberta", "foco", "agendamento", "nenhuma")
+MAX_MOMENTOS = 3
 
 LIMITES_TEXTO = {
     "interesse": 120, "detalhe_desfecho": 200, "motivo_atencao": 200, "resumo": 300,
     "ponto_forte": 400, "pode_melhorar": 400, "proxima_acao": 250, "mensagem_sugerida": 500,
     "como_poderia_ser": 600, "trecho_ligacao": 200,
+    "cliente_disse": 250, "equipe_respondeu": 250, "pelo_script": 400,
 }
 MAX_MSG_CHARS = 1000
 SEMANA = ["seg", "ter", "qua", "qui", "sex", "sáb", "dom"]
@@ -73,36 +80,60 @@ class RespostaInvalida(Exception):
 # ---------------------------------------------------------------------------
 # Método de vendas (técnicas do curso)
 # ---------------------------------------------------------------------------
+_RE_TITULO = re.compile(r"^TITULO\s*\|\s*(.+)$")
+_RE_MODELO = re.compile(r"^MODELO\s*\|\s*([^|]+?)\s*\|\s*(.+)$")
+# ID | nome | como reconhecer [| rótulo curto do resumo diário]
+_RE_TECNICA = re.compile(r"^([A-Z]\d+)\s*\|\s*([^|]+?)\s*\|\s*([^|]+?)\s*(?:\|\s*([^|]*?)\s*)?$")
+
+
+def ler_metodo(texto, fonte="curso"):
+    """
+    Interpreta o texto de um metodo_vendas_<fonte>.md. Devolve
+    {"fonte", "titulo", "tecnicas": {"S01": {"nome", "como", "rotulo_diario"}},
+     "modelos": [{"situacao", "texto"}]}.
+    """
+    titulo, tecnicas, modelos = "Boas práticas de venda", {}, []
+    for linha in texto.splitlines():
+        linha = linha.strip()
+        m = _RE_TITULO.match(linha)
+        if m:
+            titulo = m.group(1).strip()
+            continue
+        m = _RE_MODELO.match(linha)
+        if m:
+            modelos.append({"situacao": m.group(1).strip(), "texto": m.group(2).strip()})
+            continue
+        m = _RE_TECNICA.match(linha)
+        if m:
+            tecnicas[m.group(1)] = {"nome": m.group(2).strip(), "como": m.group(3).strip(),
+                                    "rotulo_diario": (m.group(4) or "").strip() or None}
+    return {"fonte": fonte, "titulo": titulo, "tecnicas": tecnicas, "modelos": modelos}
+
+
 def carregar_metodo():
     """
-    Lê as técnicas de app/prompts/metodo_vendas_<fonte>.md. Se a fonte "curso"
-    for pedida mas o arquivo ainda não existir, cai nas boas práticas gerais.
-    Devolve {"fonte", "titulo", "tecnicas": {"T01": {"nome", "como"}}}.
+    Lê as técnicas de app/prompts/metodo_vendas_<fonte>.md (padrão: "curso", o
+    script da academia). Se o arquivo pedido não existir, cai nas boas práticas
+    gerais. Formato devolvido: veja ler_metodo().
     """
     fonte = config.METODO_FONTE
     arquivo = PASTA_PROMPTS / f"metodo_vendas_{fonte}.md"
     if not arquivo.exists():
         fonte, arquivo = "geral", PASTA_PROMPTS / "metodo_vendas_geral.md"
-    titulo, tecnicas = "Boas práticas de venda", {}
-    for linha in arquivo.read_text(encoding="utf-8").splitlines():
-        m_titulo = re.match(r"^TITULO\s*\|\s*(.+)$", linha.strip())
-        if m_titulo:
-            titulo = m_titulo.group(1).strip()
-            continue
-        m = re.match(r"^(T\d+)\s*\|\s*([^|]+?)\s*\|\s*(.+)$", linha.strip())
-        if m:
-            tecnicas[m.group(1)] = {"nome": m.group(2).strip(), "como": m.group(3).strip()}
-    return {"fonte": fonte, "titulo": titulo, "tecnicas": tecnicas}
+    return ler_metodo(arquivo.read_text(encoding="utf-8"), fonte)
 
 
 def montar_instrucoes(metodo=None):
-    """O texto fixo que vai como 'sistema' em toda chamada (com as técnicas no lugar)."""
+    """O texto fixo que vai como 'sistema' em toda chamada (com as técnicas e os modelos no lugar)."""
     metodo = metodo or carregar_metodo()
     texto = (PASTA_PROMPTS / "analista_conversa.md").read_text(encoding="utf-8")
     tecnicas = "\n".join(
         f"- {tid} — {t['nome']}: {t['como']}" for tid, t in metodo["tecnicas"].items()
     ) or "(nenhuma técnica cadastrada)"
-    return texto.replace("{{TECNICAS}}", tecnicas)
+    modelos = "\n".join(
+        f"- {m['situacao']}: {m['texto']}" for m in metodo.get("modelos") or []
+    ) or "(sem modelos cadastrados: escreva uma mensagem curta, pessoal e com um convite concreto)"
+    return texto.replace("{{TECNICAS}}", tecnicas).replace("{{MODELOS}}", modelos)
 
 
 # ---------------------------------------------------------------------------
@@ -199,6 +230,8 @@ def _resumo_anterior(analise):
     return json.dumps({
         "desfecho": analise.get("desfecho"), "detalhe_desfecho": analise.get("detalhe_desfecho"),
         "interesse": analise.get("interesse"), "resumo": analise.get("resumo"),
+        "temperatura": analise.get("temperatura"),
+        "etapa_script": (analise.get("dados") or {}).get("etapa_script"),
         "nota_final": float(analise["nota_final"]) if analise.get("nota_final") is not None else None,
     }, ensure_ascii=False)
 
@@ -274,6 +307,45 @@ def _genero(valor):
     return "Indefinido"
 
 
+def _temperatura(valor):
+    """Normaliza o termômetro: aceita maiúsculas, plural e os valores antigos (quente/morno/frio)."""
+    t = str(valor or "").strip().lower()
+    t = _SINONIMOS_TEMPERATURA.get(t, t)
+    for sufixo in ("es", "s"):                       # "compradores", "tranquilos"
+        if t not in TEMPERATURAS and t.endswith(sufixo) and t[: -len(sufixo)] in TEMPERATURAS:
+            t = t[: -len(sufixo)]
+    return t if t in TEMPERATURAS else None
+
+
+def _etapa(valor):
+    t = str(valor or "").strip().lower()
+    return t if t in ETAPAS_SCRIPT else None
+
+
+def _momentos(valor, conhecidas):
+    """
+    Até MAX_MOMENTOS itens {tecnica, cliente_disse, equipe_respondeu, pelo_script}.
+    Fica de fora o que vem torto: técnica desconhecida, sem "pelo_script" ou sem
+    nenhum trecho real (nem do cliente nem da equipe).
+    """
+    momentos = []
+    for item in (valor if isinstance(valor, list) else []):
+        if not isinstance(item, dict):
+            continue
+        tecnica = str(item.get("tecnica") or "").strip().upper()
+        if tecnica not in conhecidas:
+            continue
+        m = {"tecnica": tecnica}
+        for chave in ("cliente_disse", "equipe_respondeu", "pelo_script"):
+            m[chave] = _texto(item.get(chave), LIMITES_TEXTO[chave])
+        if not m["pelo_script"] or not (m["cliente_disse"] or m["equipe_respondeu"]):
+            continue
+        momentos.append(m)
+        if len(momentos) >= MAX_MOMENTOS:
+            break
+    return momentos
+
+
 def validar_resposta(bruto, metodo, notas_tempo):
     """
     Transforma o JSON da IA em (campos, dados) prontos para gravar. Corrige o que
@@ -304,8 +376,7 @@ def validar_resposta(bruto, metodo, notas_tempo):
     motivo_perda = str(bruto.get("motivo_perda") or "").strip().lower()
     motivo_perda = motivo_perda if (desfecho == "perdido" and motivo_perda in MOTIVOS_PERDA) else (
         "outro" if desfecho == "perdido" else None)
-    temperatura = str(bruto.get("temperatura") or "").strip().lower()
-    temperatura = temperatura if (eh_lead and temperatura in TEMPERATURAS) else None
+    temperatura = _temperatura(bruto.get("temperatura")) if eh_lead else None
 
     precisa = bool(_booleano(bruto.get("precisa_atencao"))) and eh_lead and desfecho != "sucesso"
     propos = _booleano(bruto.get("propos_ligacao")) if eh_lead else None
@@ -334,6 +405,10 @@ def validar_resposta(bruto, metodo, notas_tempo):
         itens = valor if isinstance(valor, list) else []
         return [i for i in dict.fromkeys(str(x).strip().upper() for x in itens) if i in conhecidas]
 
+    # feitas x faltaram: o que foi feito não pode aparecer também em "faltou"
+    aplicadas = _ids(bruto.get("tecnicas_aplicadas")) if eh_lead else []
+    reforcar = [t for t in _ids(bruto.get("tecnicas_a_reforcar")) if t not in aplicadas] if eh_lead else []
+
     objecoes = []
     for o in (bruto.get("objecoes") if isinstance(bruto.get("objecoes"), list) else [])[:5]:
         if isinstance(o, dict) and _texto(o.get("tipo"), 40):
@@ -342,8 +417,10 @@ def validar_resposta(bruto, metodo, notas_tempo):
     dados = {
         "notas": notas,
         "objecoes": objecoes if eh_lead else [],
-        "tecnicas_aplicadas": _ids(bruto.get("tecnicas_aplicadas")) if eh_lead else [],
-        "tecnicas_a_reforcar": _ids(bruto.get("tecnicas_a_reforcar")) if eh_lead else [],
+        "tecnicas_aplicadas": aplicadas,
+        "tecnicas_a_reforcar": reforcar,
+        "etapa_script": _etapa(bruto.get("etapa_script")) if eh_lead else None,
+        "momentos": _momentos(bruto.get("momentos"), conhecidas) if eh_lead else [],
         "como_poderia_ser": _texto(bruto.get("como_poderia_ser"), LIMITES_TEXTO["como_poderia_ser"]) if eh_lead else None,
         "trecho_ligacao": _texto(bruto.get("trecho_ligacao"), LIMITES_TEXTO["trecho_ligacao"]) if eh_lead else None,
         "metodo_fonte": metodo["fonte"],
@@ -370,7 +447,7 @@ def analisar_sessao(sessao, instrucoes, metodo, agora=None, ia=None):
     anterior = analises_repo.anterior_do_contato(telefone, inicio) if not sessao.get("nova") else None
 
     entrada = montar_entrada(sessao, mensagens, mesma, anterior, agora)
-    bruto, uso = ia.gerar_json(instrucoes, entrada, max_tokens=3000)
+    bruto, uso = ia.gerar_json(instrucoes, entrada, max_tokens=4096)
     campos, dados = validar_resposta(bruto, metodo, notas_de_tempo(sessao, agora))
     analises_repo.salvar(
         telefone, inicio, mensagens[-1]["ts"], campos, dados,

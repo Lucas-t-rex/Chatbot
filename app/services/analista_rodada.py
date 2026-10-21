@@ -1,8 +1,8 @@
 """
-RODADA DO ANALISTA — o que acontece quando dá 12h, 18h ou 22h:
+RODADA DO ANALISTA — o que acontece às 22h (resumo do dia) e no sábado às 18h (semanal):
 
   1. a IA lê as conversas pendentes (uma de cada vez) e grava as análises;
-  2. monta o resumo (do dia, ou da semana no sábado às 18h);
+  2. monta o resumo (do dia às 22h, ou da semana no sábado às 18h);
   3. manda para o dono (no sábado, junto com a planilha) e registra o que foi enviado.
 
 Os envios chegam como funções (enviar_texto / enviar_documento), assim a trava de
@@ -89,7 +89,7 @@ def executar_semanal(destino, enviar_texto, enviar_documento, agora=None, ia=Non
 
 
 def executar(hora, destino, enviar_texto, enviar_documento, agora=None, ia=None):
-    """Ponto de entrada do job das 12h/18h/22h. Nunca levanta exceção."""
+    """Ponto de entrada do job do resumo (22h e sábado 18h). Nunca levanta exceção."""
     agora = agora or datetime.now(timezone.utc)
     if not _trava.acquire(blocking=False):
         print(f"⏳ [Analista] Já há uma rodada em andamento; a das {hora}h foi pulada.")

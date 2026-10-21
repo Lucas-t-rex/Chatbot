@@ -2678,8 +2678,8 @@ def gerar_e_enviar_relatorio_diario():
 
 def enviar_resumo_analista(hora):
     """
-    Resumo do atendimento no WhatsApp do dono (12h = manhã; 18h e 22h = dia todo).
-    Só roda com o Analista ligado (modos "analista" ou "ambos").
+    Resumo do atendimento no WhatsApp do dono: um por dia às 22h (config.HORARIOS_RESUMO),
+    e o semanal no sábado às 18h. Só roda com o Analista ligado (modos "analista" ou "ambos").
     """
     if not DB_OK or not RESPONSIBLE_NUMBER:
         return

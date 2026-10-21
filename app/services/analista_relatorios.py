@@ -1,8 +1,13 @@
 """
 RELATÓRIOS DO DONO — juntam os números do sistema (analista.py) com o que a IA
 concluiu de cada conversa (analises_conversa) e viram:
-  - o resumo do dia (12h / 18h / 22h)       -> montar_diario()
-  - o resumo da semana (sábado 18h)         -> montar_semanal()
+  - o resumo do dia (um só, às 22h; compara com o de ontem) -> montar_diario()
+  - o resumo da semana (sábado 18h)                         -> montar_semanal()
+
+O bloco "📘 Script da academia" (aderência, "X de Y" por passo, termômetro,
+funil) é calculado aqui em agregar_script(), a partir do que a IA marcou em
+cada conversa (tecnicas_aplicadas = fez; tecnicas_a_reforcar = tinha a chance
+e faltou; o que não teve chance não entra na conta).
 
 Regras de ouro:
   - o dono NUNCA fica sem mensagem: se a IA falhar ou estiver desligada, sai o
@@ -13,18 +18,33 @@ Regras de ouro:
 """
 import json
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from app.core.config import config
 from app.repositories import analises_repo, relatorios_repo, sessoes_repo
 from app.services import analista, ia_cliente
-from app.services.analista_ia import PASTA_PROMPTS, _texto, carregar_metodo
+from app.services.analista_ia import ETAPAS_SCRIPT, PASTA_PROMPTS, _temperatura, _texto, carregar_metodo
 
 TZ = config.FUSO_HORARIO
 DIAS = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
 MOTIVOS_PT = {"preco": "preço", "horario": "horário", "distancia": "distância", "sumiu": "sumiu", "outro": "outro motivo"}
 OBJECOES_PT = {"preco": "Preço", "horario": "Horário", "distancia": "Distância", "tempo": "Falta de tempo",
                "saude": "Receio com a saúde", "vou_pensar": "\"Vou pensar\"", "outro": "Outras"}
+
+# Termômetro do lead, do mais quente ao mais frio (é a ordem de "pedem atenção").
+TERMOMETRO = ("comprador", "comparador", "pesquisador", "incomodado", "tranquilo")
+TERMOMETRO_PLURAL = {"comprador": "compradores", "comparador": "comparadores", "pesquisador": "pesquisadores",
+                     "incomodado": "incomodados", "tranquilo": "tranquilos"}
+# Faixas de aderência ao script de UMA conversa (feitas / oportunidades).
+FAIXA_SEGUIU, FAIXA_EM_PARTE = 0.70, 0.40
+# Funil do script: quem chegou a uma etapa também passou pelas anteriores.
+FUNIL = (
+    ("acolhidos", ("acolhimento", "descoberta", "foco", "agendamento"), "acolhido", "acolhidos"),
+    ("descobriram", ("descoberta", "foco", "agendamento"), "descobriu o objetivo", "descobriram o objetivo"),
+    ("proximo_passo", ("foco", "agendamento"), "com próximo passo", "com próximo passo"),
+    ("agendaram", ("agendamento",), "agendou", "agendaram"),
+)
+MIN_OPORTUNIDADES_RANKING = 2
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +79,107 @@ def _primeiro_nome(nome):
     return partes[0] if partes else "cliente"
 
 
+def _minusculo(texto):
+    return texto[:1].lower() + texto[1:] if texto else texto
+
+
+def _pct(parte, total):
+    return round(100 * parte / total) if total else None
+
+
+# ---------------------------------------------------------------------------
+# Script da academia (aderência, X de Y, termômetro, funil)
+# ---------------------------------------------------------------------------
+def aderencia_da_conversa(dados, conhecidas=None):
+    """
+    (feitas, faltaram) de UMA conversa, como conjuntos de IDs. Oportunidades =
+    feitas + faltaram; o passo que não teve chance não está em nenhuma das duas.
+    """
+    dados = dados or {}
+    feitas = set(dados.get("tecnicas_aplicadas") or [])
+    faltaram = set(dados.get("tecnicas_a_reforcar") or []) - feitas
+    if conhecidas is not None:
+        feitas &= set(conhecidas)
+        faltaram &= set(conhecidas)
+    return feitas, faltaram
+
+
+def faixa_aderencia(feitas, oportunidades):
+    """'seguiu' (70% ou mais), 'em_parte' (40% a 69%), 'normal' (abaixo de 40%) ou None (sem oportunidade)."""
+    if not oportunidades:
+        return None
+    proporcao = feitas / oportunidades
+    if proporcao >= FAIXA_SEGUIU:
+        return "seguiu"
+    return "em_parte" if proporcao >= FAIXA_EM_PARTE else "normal"
+
+
+def texto_termometro(termometro):
+    """[{"perfil", "qtd"}] -> '2 compradores · 1 incomodado'."""
+    return " · ".join(f"{t['qtd']} {t['perfil'] if t['qtd'] == 1 else TERMOMETRO_PLURAL[t['perfil']]}"
+                      for t in termometro)
+
+
+def agregar_script(leads, metodo):
+    """Números do script num período (tudo em tipos JSON, para guardar em relatorios_dono)."""
+    tecnicas = metodo["tecnicas"]
+    feitas_t, oport_t, faixas, termometro, etapas = Counter(), Counter(), Counter(), Counter(), Counter()
+    soma_feitas = soma_oport = conversas = 0
+    momentos = []
+    for a in leads:
+        dados = a.get("dados") or {}
+        feitas, faltaram = aderencia_da_conversa(dados, tecnicas)
+        oport = len(feitas) + len(faltaram)
+        if oport:
+            conversas += 1
+            soma_feitas += len(feitas)
+            soma_oport += oport
+            faixas[faixa_aderencia(len(feitas), oport)] += 1
+            feitas_t.update(feitas)
+            oport_t.update(feitas | faltaram)
+        temp = _temperatura(a.get("temperatura"))
+        if temp:
+            termometro[temp] += 1
+        if dados.get("etapa_script") in ETAPAS_SCRIPT:
+            etapas[dados["etapa_script"]] += 1
+        for m in dados.get("momentos") or []:
+            if isinstance(m, dict) and m.get("tecnica") in tecnicas and m.get("pelo_script"):
+                momentos.append(({**m, "cliente": _primeiro_nome(a.get("nome"))}, a.get("desfecho") == "sucesso"))
+
+    passos = [{"id": tid, "rotulo": t["rotulo_diario"], "feitas": feitas_t[tid], "oportunidades": oport_t[tid]}
+              for tid, t in tecnicas.items() if t.get("rotulo_diario") and oport_t[tid]]
+    candidatos = [tid for tid in tecnicas if oport_t[tid] >= MIN_OPORTUNIDADES_RANKING]
+    proporcao = lambda tid: feitas_t[tid] / oport_t[tid]
+    seguidos = [tid for tid in candidatos if feitas_t[tid]]
+    seguido = max(seguidos, key=lambda tid: (proporcao(tid), oport_t[tid]), default=None)
+    esquecidos = [tid for tid in candidatos if feitas_t[tid] < oport_t[tid] and tid != seguido]
+    esquecido = min(esquecidos, key=lambda tid: (proporcao(tid), -oport_t[tid]), default=None)
+    resumo_tecnica = lambda tid: ({"id": tid, "nome": tecnicas[tid]["nome"], "feitas": feitas_t[tid],
+                                   "oportunidades": oport_t[tid]} if tid else None)
+
+    # um exemplo real: de preferência do passo mais esquecido, de uma venda que ainda não fechou
+    # (é onde o script mais teria ajudado) e com a fala do cliente e da equipe
+    def _ordem_exemplo(item):
+        m, sucesso = item
+        return (m["tecnica"] != esquecido, sucesso, not (m.get("cliente_disse") and m.get("equipe_respondeu")))
+    escolhido = min(momentos, key=_ordem_exemplo, default=None)
+    exemplo = {**escolhido[0], "nome_tecnica": tecnicas[escolhido[0]["tecnica"]]["nome"]} if escolhido else None
+
+    funil = {chave: sum(etapas[e] for e in incluidas) for chave, incluidas, _, _ in FUNIL}
+    funil["com_etapa"] = sum(etapas.values())
+    return {
+        "titulo": metodo["titulo"], "fonte": metodo["fonte"],
+        "conversas": conversas, "aderencia": _pct(soma_feitas, soma_oport),
+        "feitas": soma_feitas, "oportunidades": soma_oport,
+        "seguiram": faixas["seguiu"], "em_parte": faixas["em_parte"], "normal": faixas["normal"],
+        "passos": passos,
+        "mais_seguido": resumo_tecnica(seguido), "mais_esquecido": resumo_tecnica(esquecido),
+        "termometro": [{"perfil": p, "qtd": termometro[p]} for p in TERMOMETRO if termometro[p]],
+        "funil": funil,
+        "exemplo": exemplo,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Agregação (banco -> números)
 # ---------------------------------------------------------------------------
@@ -79,28 +200,19 @@ def agregar(inicio, fim, agora=None, metodo=None):
     por_desfecho = Counter(a["desfecho"] for a in leads)
     perdidos_motivo = Counter(a["motivo_perda"] or "outro" for a in leads if a["desfecho"] == "perdido")
 
-    # técnicas do método
-    aplicadas, reforcar = Counter(), Counter()
     objecoes = Counter()
     for a in leads:
         dados = a["dados"] or {}
-        aplicadas.update(dados.get("tecnicas_aplicadas") or [])
-        reforcar.update(dados.get("tecnicas_a_reforcar") or [])
         objecoes.update(o.get("tipo") for o in (dados.get("objecoes") or []) if o.get("tipo"))
-    nome_tecnica = lambda tid: metodo["tecnicas"].get(tid, {}).get("nome")
-    tecnicas = {
-        "titulo": metodo["titulo"],
-        "fonte": metodo["fonte"],
-        "mais_usadas": [{"id": t, "nome": nome_tecnica(t), "qtd": q} for t, q in aplicadas.most_common(3) if nome_tecnica(t)],
-        "a_reforcar": [{"id": t, "nome": nome_tecnica(t), "qtd": q} for t, q in reforcar.most_common(2) if nome_tecnica(t)],
-    }
+    script = agregar_script(leads, metodo)
 
-    # quem pede atenção (sem repetir quem já está na lista "esperando resposta")
+    # quem pede atenção (sem repetir quem já está na lista "esperando resposta"),
+    # do mais quente no termômetro (comprador) ao mais frio
     esperando = {p["telefone"] for p in r["sem_resposta"]}
-    ordem_temp = {"quente": 0, "morno": 1, "frio": 2, None: 3}
+    ordem_temp = {t: i for i, t in enumerate(TERMOMETRO)}
     atencao = sorted(
         (a for a in leads if a["precisa_atencao"] and a["telefone"] not in esperando),
-        key=lambda a: ordem_temp.get(a["temperatura"], 3),
+        key=lambda a: ordem_temp.get(_temperatura(a["temperatura"]), len(TERMOMETRO)),
     )
 
     # dia a dia
@@ -143,11 +255,11 @@ def agregar(inicio, fim, agora=None, metodo=None):
         "nota_media": _media(a["nota_final"] for a in leads),
         "nota_venda": _media(a["nota_intuito_venda"] for a in leads),
         "propos_ligacao": sum(1 for a in leads if a["propos_ligacao"]),
-        "tecnicas": tecnicas,
+        "script": script,
         "atencao_total": len(atencao),
         "pedem_atencao": [
             {"nome": a["nome"] or "Sem nome", "telefone": a["telefone"], "motivo": a["motivo_atencao"],
-             "temperatura": a["temperatura"]}
+             "temperatura": _temperatura(a["temperatura"])}
             for a in atencao[: config.MAX_SEM_RESPOSTA_NO_RESUMO]
         ],
         "objecoes": [{"tipo": t, "qtd": q} for t, q in objecoes.most_common(5)],
@@ -195,6 +307,21 @@ def sintetizar_dia(analises, ia=None):
     return sintese if any(sintese.values()) else None
 
 
+def _script_para_ia(script):
+    """O que a narrativa da semana precisa saber do script (números já calculados aqui)."""
+    if not script or not script.get("conversas"):
+        return None
+    nome = lambda t: t["nome"] if t else None
+    return {
+        "titulo": script["titulo"], "aderencia_pct": script["aderencia"],
+        "conversas_de_venda": script["conversas"],
+        "seguiram": script["seguiram"], "em_parte": script["em_parte"], "atendimento_normal": script["normal"],
+        "passos": [f"{p['rotulo']}: {p['feitas']} de {p['oportunidades']}" for p in script["passos"]],
+        "mais_seguido": nome(script["mais_seguido"]), "mais_esquecido": nome(script["mais_esquecido"]),
+        "funil": script["funil"],
+    }
+
+
 def sintetizar_semana(agg, analises, ia=None):
     """Narrativa da semana (destaques, treino, objeções, método) ou None."""
     ia = ia or ia_cliente
@@ -207,8 +334,7 @@ def sintetizar_semana(agg, analises, ia=None):
         "numeros": numeros,
         "objecoes_mais_ouvidas": [{"tipo": OBJECOES_PT.get(o["tipo"], o["tipo"]), "id": o["tipo"], "qtd": o["qtd"]}
                                   for o in agg["objecoes"][:3]],
-        "tecnicas": {"mais_usadas": [t["nome"] for t in agg["tecnicas"]["mais_usadas"]],
-                     "a_reforcar": [t["nome"] for t in agg["tecnicas"]["a_reforcar"]]},
+        "script": _script_para_ia(agg.get("script")),
         "conversas": itens,
     }
     try:
@@ -251,16 +377,61 @@ def _linhas_resultados(agg):
     return linhas
 
 
-def _linhas_tecnicas(agg, sufixo_titulo=""):
-    t = agg["tecnicas"]
-    if not t["mais_usadas"] and not t["a_reforcar"]:
+def _linhas_script(agg, quando, antes=None):
+    """
+    Bloco "📘 Script da academia hoje / na semana".
+    antes: (rótulo, aderência anterior em %) para comparar, ex.: ("ontem", 55).
+    """
+    sc = agg.get("script") or {}
+    if not sc or not (sc.get("conversas") or sc.get("termometro")):
         return []
-    linhas = [f"📘 *{t['titulo']}{sufixo_titulo}*"]
-    if t["mais_usadas"]:
-        linhas.append("✔️ Mais usadas: " + " · ".join(f"{x['nome']} ({x['qtd']}×)" for x in t["mais_usadas"]))
-    if t["a_reforcar"]:
-        linhas.append("🔸 Pode reforçar: " + " · ".join(
-            f"{x['nome']} (em {x['qtd']} {_pl(x['qtd'], 'conversa', 'conversas')})" for x in t["a_reforcar"]))
+    titulo = f"📘 *{sc['titulo']} {quando}*"
+    if sc["conversas"]:
+        titulo += f" ({sc['conversas']} {_pl(sc['conversas'], 'conversa de venda', 'conversas de venda')})"
+    linhas = [titulo]
+    if sc["aderencia"] is not None:
+        ader = f"Aderência: {sc['aderencia']}%"
+        if antes and antes[1] is not None:
+            ader += f" ({antes[0]} {antes[1]}%)"
+        partes = [ader]
+        if sc["seguiram"]:
+            partes.append(f"{sc['seguiram']} {_pl(sc['seguiram'], 'seguiu o script', 'seguiram o script')}")
+        if sc["em_parte"]:
+            partes.append(f"{sc['em_parte']} em parte")
+        if sc["normal"]:
+            partes.append(f"{sc['normal']} atendimento normal")
+        linhas.append("• " + " · ".join(partes))
+    for p in sc["passos"]:
+        linhas.append(f"• {p['rotulo']}: {p['feitas']} de {p['oportunidades']}")
+    destaques = []
+    if sc.get("mais_seguido"):
+        destaques.append(f"✔️ Mais seguido: {_minusculo(sc['mais_seguido']['nome'])}")
+    if sc.get("mais_esquecido"):
+        destaques.append(f"🔸 Mais esquecido: {_minusculo(sc['mais_esquecido']['nome'])}")
+    if destaques:
+        linhas.append(" · ".join(destaques))
+    if sc["termometro"]:
+        linhas.append(f"🌡️ Termômetro: {texto_termometro(sc['termometro'])}")
+    return linhas
+
+
+def texto_funil(funil):
+    """'12 acolhidos → 8 descobriram o objetivo → 5 com próximo passo → 4 agendaram' (ou '' sem dados)."""
+    if not funil or not funil.get("com_etapa"):
+        return ""
+    return " → ".join(f"{funil[chave]} {_pl(funil[chave], um, varios)}" for chave, _, um, varios in FUNIL)
+
+
+def _linhas_exemplo(exemplo):
+    """O 'dito × ideal' de um momento real, em 3 linhas."""
+    if not exemplo:
+        return []
+    linhas = [f"🔎 *Um exemplo da semana* ({exemplo['nome_tecnica']} · {exemplo.get('cliente') or 'cliente'})"]
+    if exemplo.get("cliente_disse"):
+        linhas.append(f"Cliente: \"{exemplo['cliente_disse']}\"")
+    linhas.append(f"Foi respondido: \"{exemplo['equipe_respondeu']}\"" if exemplo.get("equipe_respondeu")
+                  else "Foi respondido: (ficou sem resposta)")
+    linhas.append(f"Pelo script: \"{exemplo['pelo_script']}\"")
     return linhas
 
 
@@ -269,7 +440,7 @@ def _linhas_atencao(agg):
         return []
     linhas = [f"⚠️ *Pedem atenção ({agg['atencao_total']})*"]
     for p in agg["pedem_atencao"]:
-        fogo = "🔥 " if p.get("temperatura") == "quente" else ""
+        fogo = "🔥 " if _temperatura(p.get("temperatura")) == "comprador" else ""
         motivo = f" — {p['motivo']}" if p.get("motivo") else ""
         linhas.append(f"• {fogo}{p['nome']} {analista._telefone_legivel(p['telefone'])}{motivo}")
     if agg["atencao_total"] > len(agg["pedem_atencao"]):
@@ -278,14 +449,18 @@ def _linhas_atencao(agg):
 
 
 def texto_diario(agg, rotulo):
-    """Mensagem do dono (versão com IA). Seções vazias não aparecem."""
+    """
+    Mensagem do dono (versão com IA). Seções vazias não aparecem.
+    agg["anterior"] (opcional) = o último diário: {"rotulo": "ontem"|"sexta"..., "conversas",
+    "nota_media", "aderencia"}; vira "(ontem 10)", "(ontem 7,2) 📈" e "(ontem 55%)".
+    """
     blocos = [[f"📊 *Atendimento - {rotulo}*"]]
     ant = agg.get("anterior")
 
     mov = ["*Movimento*"]
     total = f"• {agg['conversas']} {_pl(agg['conversas'], 'conversa', 'conversas')}"
-    if ant and agg["conversas"] > ant["conversas"]:
-        total += f" (+{agg['conversas'] - ant['conversas']} desde as {ant['hora']}h)"
+    if ant and ant.get("conversas") is not None:
+        total += f" ({ant['rotulo']} {ant['conversas']})"
     mov.append(total)
     mov.append(f"• {agg['novas']} {_pl(agg['novas'], 'cliente novo', 'clientes novos')} · "
                f"{agg['retomadas']} {_pl(agg['retomadas'], 'cliente que voltou', 'clientes que voltaram')}")
@@ -305,7 +480,7 @@ def texto_diario(agg, rotulo):
     if agg["nota_media"] is not None:
         nota = f"• Nota média: {_n(agg['nota_media'])}"
         if ant and ant.get("nota_media") is not None:
-            nota += f" (às {ant['hora']}h: {_n(ant['nota_media'])}){_tendencia(agg['nota_media'], ant['nota_media'])}"
+            nota += f" ({ant['rotulo']} {_n(ant['nota_media'])}){_tendencia(agg['nota_media'], ant['nota_media'])}"
         qualidade.append(nota)
         extra = []
         if agg["nota_venda"] is not None:
@@ -322,9 +497,9 @@ def texto_diario(agg, rotulo):
     if qualidade:
         blocos.append(["*Qualidade do atendimento*"] + qualidade)
 
-    tecnicas = _linhas_tecnicas(agg, " hoje")
-    if tecnicas:
-        blocos.append(tecnicas)
+    script = _linhas_script(agg, "hoje", (ant["rotulo"], ant.get("aderencia")) if ant else None)
+    if script:
+        blocos.append(script)
     atencao = _linhas_atencao(agg)
     if atencao:
         blocos.append(atencao)
@@ -413,13 +588,20 @@ def texto_semanal(agg, primeiro_dia, ultimo_dia, anterior=None):
                 linha += f" - {como[o['tipo']]}"
             linhas.append(linha)
         blocos.append(linhas)
-    tecnicas = _linhas_tecnicas(agg)
-    if sintese.get("metodo"):
+    ader_antes = ((anterior or {}).get("script") or {}).get("aderencia")
+    script = _linhas_script(agg, "na semana", ("semana passada", ader_antes) if ader_antes is not None else None)
+    funil = texto_funil((agg.get("script") or {}).get("funil"))
+    if script and funil:
+        script.append(f"🪜 Funil: {funil}")
+    if script and sintese.get("metodo"):
         m = sintese["metodo"]
-        tecnicas += [f"• {m['ja_faz']}"] if m.get("ja_faz") else []
-        tecnicas += [f"• {m['reforcar']}"] if m.get("reforcar") else []
-    if tecnicas:
-        blocos.append(tecnicas)
+        script += [f"• {m['ja_faz']}"] if m.get("ja_faz") else []
+        script += [f"• {m['reforcar']}"] if m.get("reforcar") else []
+    if script:
+        blocos.append(script)
+    exemplo = _linhas_exemplo((agg.get("script") or {}).get("exemplo"))
+    if exemplo:
+        blocos.append(exemplo)
     atencao = _linhas_atencao(agg)
     if atencao:
         blocos.append(atencao)
@@ -441,6 +623,28 @@ def janela_da_semana(agora=None):
     return TZ.localize(datetime(segunda.year, segunda.month, segunda.day)), agora
 
 
+def _comparacao_com_ontem(referencia):
+    """
+    Os números do último diário enviado antes de hoje, para "(ontem 7,2)". Depois
+    de um fim de semana sem resumo vira "(sexta 7,2)"; mais de 7 dias atrás, não compara.
+    """
+    anterior = relatorios_repo.diario_anterior(referencia)
+    if not anterior:
+        return None
+    ref = anterior["referencia"]
+    if isinstance(ref, datetime):
+        ref = ref.date()
+    elif isinstance(ref, str):
+        ref = date.fromisoformat(ref[:10])
+    dias = (referencia - ref).days
+    if not 1 <= dias <= 7:
+        return None
+    d = anterior["dados"] or {}
+    return {"referencia": ref.isoformat(), "rotulo": "ontem" if dias == 1 else DIAS[ref.weekday()],
+            "conversas": d.get("conversas"), "nota_media": d.get("nota_media"),
+            "aderencia": (d.get("script") or {}).get("aderencia")}
+
+
 def montar_diario(hora, agora=None, ia=None):
     """
     Devolve {"texto", "dados", "referencia", "hora", "conversas"}. Se não há nenhuma
@@ -455,11 +659,7 @@ def montar_diario(hora, agora=None, ia=None):
     if agg["analisadas"] == 0:
         texto = analista.texto_resumo(agg, rotulo)
     else:
-        anterior = relatorios_repo.diario_anterior(referencia, hora)
-        if anterior:
-            d = anterior["dados"] or {}
-            agg["anterior"] = {"hora": anterior["hora"], "conversas": d.get("conversas", 0),
-                               "nota_media": d.get("nota_media")}
+        agg["anterior"] = _comparacao_com_ontem(referencia)
         agg["sintese"] = sintetizar_dia(analises, ia)
         texto = texto_diario(agg, rotulo)
     return {"texto": texto, "dados": agg, "referencia": referencia, "hora": hora, "conversas": agg["conversas"]}

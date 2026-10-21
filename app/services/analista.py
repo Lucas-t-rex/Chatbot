@@ -5,7 +5,7 @@ ANALISTA — junta as métricas (analista_metricas.py) com o banco:
   - texto_resumo():       a mensagem que vai pro WhatsApp do dono
   - gerar_excel():        a planilha do período (é ela que vai pro agente externo)
 
-Os nomes das colunas do Excel estão documentados em AGENTE_ANALISTA.md.
+Os nomes das colunas do Excel estão documentados em docs/AGENTE_ANALISTA.md (na raiz do projeto).
 Se mudar aqui, mude lá também.
 """
 from datetime import datetime, timedelta, timezone

@@ -1,6 +1,6 @@
-Boas práticas gerais de venda consultiva para academia. Esta lista é PROVISÓRIA: quando o PDF do curso da academia chegar, as técnicas dele entram em `metodo_vendas_curso.md` (mesmo formato) e `METODO_FONTE=curso` passa a usá-lo.
+Boas práticas gerais de venda consultiva para academia. Lista de RESERVA: o padrão agora é o script da academia (`metodo_vendas_curso.md`, `METODO_FONTE=curso`). Esta só é usada com `METODO_FONTE=geral` ou se o arquivo do curso faltar.
 
-Formato das linhas (o código lê estas duas): `TITULO | nome da seção no relatório` e `T00 | Nome da técnica | como reconhecer na conversa`.
+Formato das linhas (o código lê estas): `TITULO | nome da seção no relatório` e `T00 | Nome da técnica | como reconhecer na conversa` (uma 4ª coluna opcional dá o rótulo curto do resumo diário; linhas `MODELO | situação | texto` dão modelos de mensagem).
 
 TITULO | Boas práticas de venda
 

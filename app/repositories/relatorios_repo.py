@@ -1,6 +1,6 @@
 """
 Relatórios enviados ao dono (tabela relatorios_dono): registro do que foi mandado
-e base para comparar ("+4 desde as 12h", "vs. semana passada").
+e base para comparar ("ontem 7,2", "vs. semana passada").
 """
 from app.core.db import db, json_param
 
@@ -15,15 +15,18 @@ def salvar(tipo, referencia, hora, dados, texto, enviado):
     )
 
 
-def diario_anterior(referencia, antes_da_hora):
-    """O último diário enviado nesse dia com hora anterior à informada (ou None)."""
+def diario_anterior(referencia):
+    """
+    O último diário enviado ANTES do dia 'referencia' (normalmente o de ontem;
+    depois de um fim de semana sem resumo, o da sexta). None se não houver.
+    """
     return db.um(
         """
         select * from relatorios_dono
-        where tipo = 'diario' and referencia = %s and enviado and hora < %s
-        order by hora desc, criado_em desc limit 1
+        where tipo = 'diario' and referencia < %s and enviado
+        order by referencia desc, hora desc, criado_em desc limit 1
         """,
-        (referencia, antes_da_hora),
+        (referencia,),
     )
 
 

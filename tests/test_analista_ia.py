@@ -22,8 +22,9 @@ def msg(dia, hora, minuto, origem, text, tipo="texto"):
     return {"ts": ts(dia, hora, minuto), "origem": origem, "tipo": tipo, "text": text}
 
 
-METODO = {"fonte": "geral", "titulo": "Boas práticas de venda",
-          "tecnicas": {"T03": {"nome": "x", "como": "y"}, "T05": {"nome": "x", "como": "y"}}}
+METODO = {"fonte": "curso", "titulo": "Script da academia", "modelos": [],
+          "tecnicas": {"S04": {"nome": "x", "como": "y", "rotulo_diario": "Descobriu"},
+                       "S09": {"nome": "x", "como": "y", "rotulo_diario": None}}}
 
 NOTAS_BOAS = {k: 8 for k in aia.CRITERIOS_IA}
 
@@ -31,12 +32,15 @@ NOTAS_BOAS = {k: 8 for k in aia.CRITERIOS_IA}
 def bruto(**extra):
     base = {
         "eh_lead": True, "tipo_contato": "lead", "genero": "feminino", "interesse": "muay thai",
-        "desfecho": "em_andamento", "temperatura": "morno", "precisa_atencao": True,
+        "desfecho": "em_andamento", "temperatura": "comparador", "precisa_atencao": True,
         "motivo_atencao": "Sem data marcada", "notas": dict(NOTAS_BOAS), "propos_ligacao": False,
         "resumo": "Maria quer muay thai", "ponto_forte": "Foi simpática", "pode_melhorar": "Convidar com dia e hora",
         "proxima_acao": "Mandar mensagem", "mensagem_sugerida": "Oi Maria!",
         "objecoes": [{"tipo": "preco", "trecho": "ta caro"}],
-        "tecnicas_aplicadas": ["t03", "T99"], "tecnicas_a_reforcar": ["T05"],
+        "tecnicas_aplicadas": ["s04", "S99"], "tecnicas_a_reforcar": ["S09"],
+        "etapa_script": "foco",
+        "momentos": [{"tecnica": "S09", "cliente_disse": "Posso fazer uma aula teste?",
+                      "equipe_respondeu": "Pode sim, quando quiser", "pelo_script": "Amanhã às 18h fica bom?"}],
     }
     base.update(extra)
     return base
@@ -79,8 +83,12 @@ def test_validacao_caminho_feliz_e_nota_final_do_codigo():
     # 15 notas 8 + 10 + 6 -> (120 + 16) / 17 = 8.0
     assert campos["nota_final"] == 8.0
     assert dados["notas"]["primeira_resposta"] == 10.0
-    assert dados["tecnicas_aplicadas"] == ["T03"]          # T99 não existe: descartada; "t03" normalizada
-    assert dados["tecnicas_a_reforcar"] == ["T05"]
+    assert dados["tecnicas_aplicadas"] == ["S04"]          # S99 não existe: descartada; "s04" normalizada
+    assert dados["tecnicas_a_reforcar"] == ["S09"]
+    assert campos["temperatura"] == "comparador" and dados["etapa_script"] == "foco"
+    assert dados["momentos"] == [{"tecnica": "S09", "cliente_disse": "Posso fazer uma aula teste?",
+                                  "equipe_respondeu": "Pode sim, quando quiser",
+                                  "pelo_script": "Amanhã às 18h fica bom?"}]
     assert campos["precisa_atencao"] is True and campos["nota_intuito_venda"] == 8.0
 
 
@@ -107,7 +115,50 @@ def test_quem_nao_e_lead_fica_fora_das_medias():
     assert campos["desfecho"] == "nao_lead"
     assert campos["nota_final"] is None and campos["nota_ligacao"] is None
     assert campos["precisa_atencao"] is False and campos["temperatura"] is None
-    assert dados["tecnicas_aplicadas"] == []
+    assert dados["tecnicas_aplicadas"] == [] and dados["momentos"] == [] and dados["etapa_script"] is None
+
+
+def test_termometro_normaliza_e_aceita_os_valores_antigos():
+    temperatura = lambda valor: validar_resposta(bruto(temperatura=valor), METODO, {})[0]["temperatura"]
+    assert [temperatura(v) for v in ("Comprador", " pesquisador ", "compradores", "tranquilos")] == \
+           ["comprador", "pesquisador", "comprador", "tranquilo"]
+    assert [temperatura(v) for v in ("quente", "morno", "frio")] == ["comprador", "comparador", "tranquilo"]
+    assert temperatura("fervendo") is None and temperatura(None) is None
+    assert set(aia.TEMPERATURAS) == {"tranquilo", "incomodado", "pesquisador", "comparador", "comprador"}
+
+
+def test_etapa_do_script_so_aceita_os_valores_combinados():
+    etapa = lambda valor: validar_resposta(bruto(etapa_script=valor), METODO, {})[1]["etapa_script"]
+    assert [etapa(v) for v in ("acolhimento", "Descoberta", "foco", "AGENDAMENTO", "nenhuma")] == \
+           ["acolhimento", "descoberta", "foco", "agendamento", "nenhuma"]
+    assert etapa("fechamento") is None and etapa(None) is None
+
+
+def test_momentos_sao_validados_e_cortados():
+    bom = {"tecnica": "s09", "cliente_disse": "Posso fazer uma aula teste?", "equipe_respondeu": None,
+           "pelo_script": "Pode sim! Amanhã às 18h ou quinta às 9h?"}
+    momentos = [
+        "lixo",                                                                   # não é dict
+        {"tecnica": "S99", "cliente_disse": "oi", "pelo_script": "x"},           # técnica desconhecida
+        {"tecnica": "S04", "cliente_disse": "oi", "pelo_script": None},          # sem o "pelo script"
+        {"tecnica": "S04", "cliente_disse": None, "equipe_respondeu": " ", "pelo_script": "x"},   # sem trecho real
+        bom,
+        {"tecnica": "S04", "cliente_disse": "y" * 900, "equipe_respondeu": "ok", "pelo_script": "z" * 900},
+        dict(bom), dict(bom),                                                     # passou de 3: corta
+    ]
+    _, dados = validar_resposta(bruto(momentos=momentos), METODO, {})
+    assert len(dados["momentos"]) == aia.MAX_MOMENTOS == 3
+    assert dados["momentos"][0] == {**bom, "tecnica": "S09"}                 # ID normalizado, sem resposta = None
+    longo = dados["momentos"][1]
+    assert len(longo["cliente_disse"]) <= aia.LIMITES_TEXTO["cliente_disse"] and longo["cliente_disse"].endswith("...")
+    assert len(longo["pelo_script"]) <= aia.LIMITES_TEXTO["pelo_script"]
+    assert validar_resposta(bruto(momentos="texto solto"), METODO, {})[1]["momentos"] == []
+
+
+def test_passo_feito_nao_entra_tambem_como_faltou():
+    _, dados = validar_resposta(bruto(tecnicas_aplicadas=["S04"], tecnicas_a_reforcar=["S04", "S09", "s09"]),
+                                METODO, {})
+    assert dados["tecnicas_aplicadas"] == ["S04"] and dados["tecnicas_a_reforcar"] == ["S09"]
 
 
 def test_perdido_sempre_tem_motivo_e_sucesso_nao_precisa_atencao():
@@ -174,14 +225,55 @@ def test_conversa_gigante_fica_com_comeco_e_fim():
     assert cortar_transcricao(linhas[:3], 3000) == linhas[:3]
 
 
-def test_instrucoes_trazem_as_tecnicas_e_o_metodo_carrega():
+def test_parser_le_ids_s_a_quarta_coluna_os_modelos_e_o_titulo():
+    texto = "\n".join([
+        "Texto explicativo | com barra | que não é técnica",
+        "- `S00 | Nome | como | rótulo` (linha de documentação)",
+        "TITULO | Script da academia",
+        "S01 | Acolhimento | Diz o nome e o da academia. | Apresentação",
+        "S05 | Entender o momento | Pergunta o que atrapalhou.",
+        "T07 | Técnica antiga | Formato de 3 colunas continua valendo.",
+        "S09 | Convite | Propõe dia e hora. |   ",
+        "MODELO | Tentativa 1 (dia seguinte) | Oi, [nome]! Qual o melhor horário?",
+    ])
+    m = aia.ler_metodo(texto, "curso")
+    assert m["titulo"] == "Script da academia" and list(m["tecnicas"]) == ["S01", "S05", "T07", "S09"]
+    assert m["tecnicas"]["S01"] == {"nome": "Acolhimento", "como": "Diz o nome e o da academia.",
+                                    "rotulo_diario": "Apresentação"}
+    assert m["tecnicas"]["S05"]["rotulo_diario"] is None and m["tecnicas"]["S09"]["rotulo_diario"] is None
+    assert m["modelos"] == [{"situacao": "Tentativa 1 (dia seguinte)", "texto": "Oi, [nome]! Qual o melhor horário?"}]
+
+
+def test_o_padrao_e_o_script_da_academia_e_as_instrucoes_trazem_passos_e_modelos():
+    assert config.METODO_FONTE == "curso"
+    metodo = aia.carregar_metodo()
+    assert metodo["fonte"] == "curso" and metodo["titulo"] == "Script da academia"
+    assert list(metodo["tecnicas"]) == [f"S{i:02d}" for i in range(1, 12)]
+    rotulos = {tid: t["rotulo_diario"] for tid, t in metodo["tecnicas"].items() if t["rotulo_diario"]}
+    assert rotulos == {"S01": "Apresentação", "S02": "Propôs ligar", "S04": "Descobriu objetivo e dor",
+                       "S07": "Preço com valor", "S09": "Convite com dia e hora"}
+    situacoes = [m["situacao"] for m in metodo["modelos"]]
+    assert all(any(s.startswith(f"Tentativa {n}") for s in situacoes) for n in range(1, 9))
+    assert any("Pós-visita" in s for s in situacoes) and any("não pode falar" in s for s in situacoes)
+    instrucoes = aia.montar_instrucoes(metodo)
+    assert "{{" not in instrucoes
+    assert "S09 — Convite com dia e hora" in instrucoes and "- Tentativa 8: " in instrucoes
+    assert "comprador" in instrucoes and "etapa_script" in instrucoes and "momentos" in instrucoes
+
+
+def test_boas_praticas_gerais_continuam_compativeis(monkeypatch):
+    monkeypatch.setattr(config, "METODO_FONTE", "geral")
     metodo = aia.carregar_metodo()
     assert metodo["fonte"] == "geral" and "T03" in metodo["tecnicas"] and len(metodo["tecnicas"]) >= 9
+    assert metodo["modelos"] == [] and all(t["rotulo_diario"] is None for t in metodo["tecnicas"].values())
     instrucoes = aia.montar_instrucoes(metodo)
-    assert "{{TECNICAS}}" not in instrucoes and "T05 — Convite com dia e hora" in instrucoes
+    assert "{{" not in instrucoes and "T05 — Convite com dia e hora" in instrucoes
 
 
-def test_fonte_curso_sem_arquivo_cai_nas_boas_praticas(monkeypatch):
+def test_fonte_sem_arquivo_cai_nas_boas_praticas(monkeypatch, tmp_path):
+    (tmp_path / "metodo_vendas_geral.md").write_text(
+        (aia.PASTA_PROMPTS / "metodo_vendas_geral.md").read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setattr(aia, "PASTA_PROMPTS", tmp_path)          # sem o metodo_vendas_curso.md
     monkeypatch.setattr(config, "METODO_FONTE", "curso")
     assert aia.carregar_metodo()["fonte"] == "geral"
 

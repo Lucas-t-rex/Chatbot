@@ -4,6 +4,7 @@ from datetime import date, datetime
 import pytest
 import pytz
 
+from app.core.config import config
 from app.services import analista_rodada as rod
 from app.services.evolution_service import EvolutionService
 
@@ -63,16 +64,16 @@ def enviadores(reg, texto_ok=True, doc_ok=True):
 
 def test_diario_le_as_conversas_antes_de_montar_e_enviar(reg):
     texto, doc = enviadores(reg)
-    out = rod.executar(18, DONO, texto, doc, agora=ts(14, 18))               # quarta 18h
+    out = rod.executar(22, DONO, texto, doc, agora=ts(14, 22))               # quarta 22h
     assert [e[0] for e in reg.eventos] == ["analisar", "montar_diario", "texto"]
-    assert reg.eventos[2][1:] == (DONO, "DIARIO 18h")
+    assert reg.eventos[2][1:] == (DONO, "DIARIO 22h")
     assert out["enviado"] is True
-    assert reg.salvos == [("diario", 18, "DIARIO 18h", True)]
+    assert reg.salvos == [("diario", 22, "DIARIO 22h", True)]
 
 
 def test_envio_que_falha_fica_registrado_como_nao_enviado(reg):
     texto, doc = enviadores(reg, texto_ok=False)
-    out = rod.executar(12, DONO, texto, doc, agora=ts(14, 12))
+    out = rod.executar(22, DONO, texto, doc, agora=ts(14, 22))
     assert out["enviado"] is False and reg.salvos[0][3] is False
 
 
@@ -117,7 +118,7 @@ def test_dia_de_semana_sem_conversa_manda_mesmo_assim(reg, monkeypatch):
     monkeypatch.setattr(rod.analista_relatorios, "montar_diario", lambda hora, agora=None, ia=None: {
         "texto": "nenhuma conversa", "dados": {}, "referencia": date(2026, 10, 14), "hora": hora, "conversas": 0})
     texto, doc = enviadores(reg)
-    assert rod.executar(12, DONO, texto, doc, agora=ts(14, 12))["enviado"] is True
+    assert rod.executar(22, DONO, texto, doc, agora=ts(14, 22))["enviado"] is True
 
 
 def test_relatorio_novo_quebrado_cai_no_resumo_so_com_numeros(reg, monkeypatch):
@@ -125,7 +126,7 @@ def test_relatorio_novo_quebrado_cai_no_resumo_so_com_numeros(reg, monkeypatch):
                         lambda hora, agora=None, ia=None: (_ for _ in ()).throw(RuntimeError("bug")))
     monkeypatch.setattr(rod, "_resumo_so_com_numeros", lambda hora, agora: ("RESUMO ANTIGO", 4))
     texto, doc = enviadores(reg)
-    out = rod.executar(18, DONO, texto, doc, agora=ts(14, 18))
+    out = rod.executar(22, DONO, texto, doc, agora=ts(14, 22))
     assert out["enviado"] is True and [e for e in reg.eventos if e[0] == "texto"][0][2] == "RESUMO ANTIGO"
 
 
@@ -133,18 +134,25 @@ def test_erro_no_registro_do_banco_nao_impede_o_envio(reg, monkeypatch):
     monkeypatch.setattr(rod.relatorios_repo, "salvar",
                         lambda *a: (_ for _ in ()).throw(RuntimeError("banco caiu")))
     texto, doc = enviadores(reg)
-    assert rod.executar(12, DONO, texto, doc, agora=ts(14, 12))["enviado"] is True
+    assert rod.executar(22, DONO, texto, doc, agora=ts(14, 22))["enviado"] is True
 
 
 def test_duas_rodadas_nao_andam_juntas(reg):
     texto, doc = enviadores(reg)
     assert rod._trava.acquire(blocking=False)
     try:
-        out = rod.executar(12, DONO, texto, doc, agora=ts(14, 12))
+        out = rod.executar(22, DONO, texto, doc, agora=ts(14, 22))
     finally:
         rod._trava.release()
     assert out["enviado"] is False and out["motivo"] == "rodada em andamento" and reg.eventos == []
-    assert rod.executar(12, DONO, texto, doc, agora=ts(14, 12))["enviado"] is True      # liberou
+    assert rod.executar(22, DONO, texto, doc, agora=ts(14, 22))["enviado"] is True      # liberou
+
+
+def test_um_resumo_por_dia_as_22h_e_o_semanal_no_sabado_18h():
+    assert config.HORARIOS_RESUMO == [22]
+    # 18h fora da lista: o main.py registra o job do semanal (sábado 18h) à parte
+    assert config.RESUMO_SEMANAL_HORA not in config.HORARIOS_RESUMO
+    assert (config.RESUMO_SEMANAL_DIA, config.RESUMO_SEMANAL_HORA) == (5, 18)
 
 
 def test_regras_de_horario():
