@@ -36,6 +36,7 @@ AUDITOR_TRANSCREVER_AUDIO = config.AUDITOR_TRANSCREVER_AUDIO
 FUSO_HORARIO = config.FUSO_HORARIO
 CLIENT_NAME = config.CLIENT_NAME
 RESPONSIBLE_NUMBER = config.RESPONSIBLE_NUMBER
+RESPONSAVEIS = config.RESPONSAVEIS
 ADMIN_USER = config.ADMIN_USER
 ADMIN_PASS = config.ADMIN_PASS
 
@@ -2066,9 +2067,8 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                         f"🔒 _Bot pausado automaticamente (Intervenção ativada) para você analisar o contato._"
                     )
 
-                    destinatario_admin = f"{RESPONSIBLE_NUMBER}@s.whatsapp.net"
-                    print(f"📢 Notificando administrador {RESPONSIBLE_NUMBER} sobre novo agendamento (intervenção ativa)...")
-                    send_whatsapp_message(destinatario_admin, msg_aviso_admin, delay_ms=500)
+                    print(f"📢 Notificando responsáveis {RESPONSAVEIS} sobre novo agendamento (intervenção ativa)...")
+                    enviar_aos_responsaveis(msg_aviso_admin, delay_ms=500)
 
             return json.dumps(resp, ensure_ascii=False)
 
@@ -2091,7 +2091,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                         f"📅 *Data:* {args.get('data')} às {args.get('hora')}\n"
                         f"⚠️ *Status:* Removido via Bot."
                     )
-                    send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin)
+                    enviar_aos_responsaveis(msg_admin)
                 
                 # Executa em paralelo para não travar a resposta do cliente
                 threading.Thread(target=enviar_aviso_exclusao).start()
@@ -2133,7 +2133,7 @@ def handle_tool_call(call_name: str, args: Dict[str, Any], contact_id: str) -> s
                         f"❌ *Era:* {args.get('data_antiga')} às {args.get('hora_antiga')}\n"
                         f"✅ *Ficou:* {args.get('data_nova')} às {args.get('hora_nova')}"
                     )
-                    send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin)
+                    enviar_aos_responsaveis(msg_admin)
 
                 threading.Thread(target=enviar_aviso_alteracao).start()
             # ------------------------------------------
@@ -2581,7 +2581,7 @@ def _envio_permitido(number):
     qualquer caminho do código que tente enviar.
     """
     destino = str(number).split('@')[0]
-    if config_repo.chat_ligado() or destino in analista.variantes_numero(RESPONSIBLE_NUMBER):
+    if config_repo.chat_ligado() or destino in analista.numeros_responsaveis():
         return True
     print(f"🔇 [Modo analista] Envio bloqueado para {destino}: o bot não fala com clientes neste modo.")
     return False
@@ -2590,6 +2590,15 @@ def send_whatsapp_message(number, text_message, delay_ms=3000, manter_emojis=Fal
     if not _envio_permitido(number):
         return False
     return evolution_api.send_whatsapp_message(number, text_message, delay_ms, manter_emojis=manter_emojis)
+
+def _para_responsaveis(enviar):
+    """Roda enviar(jid) para cada responsável (config.RESPONSAVEIS). True se chegou em pelo menos um."""
+    resultados = [bool(enviar(f"{numero}@s.whatsapp.net")) for numero in RESPONSAVEIS]
+    return any(resultados)
+
+def enviar_aos_responsaveis(texto, **kwargs):
+    """Mesmo aviso para todos os responsáveis (dono, dona, gestor)."""
+    return _para_responsaveis(lambda jid: send_whatsapp_message(jid, texto, **kwargs))
 
 def send_whatsapp_document(number, conteudo, nome_arquivo, legenda=""):
     """Envia um arquivo (ex.: planilha). Passa pela mesma trava de segurança do texto."""
@@ -2629,18 +2638,15 @@ def gerar_e_enviar_relatorio_diario():
         
         corpo_whatsapp_texto = "\n".join([line.strip() for line in corpo_whatsapp_texto.split('\n')])
 
-        responsible_jid = f"{RESPONSIBLE_NUMBER}@s.whatsapp.net"
+        enviar_aos_responsaveis(corpo_whatsapp_texto)
         
-        send_whatsapp_message(responsible_jid, corpo_whatsapp_texto)
-        
-        print(f"✅ Relatório diário para '{CLIENT_NAME}' enviado com sucesso para o WhatsApp ({RESPONSIBLE_NUMBER})!")
+        print(f"✅ Relatório diário para '{CLIENT_NAME}' enviado com sucesso para o WhatsApp ({RESPONSAVEIS})!")
 
     except Exception as e:
         print(f"❌ Erro ao gerar ou enviar relatório por WhatsApp para '{CLIENT_NAME}': {e}")
         # Tenta notificar o erro
         try:
-            responsible_jid = f"{RESPONSIBLE_NUMBER}@s.whatsapp.net"
-            send_whatsapp_message(responsible_jid, f"❌ Falha ao gerar o relatório diário do bot {CLIENT_NAME}. Erro: {e}")
+            enviar_aos_responsaveis(f"❌ Falha ao gerar o relatório diário do bot {CLIENT_NAME}. Erro: {e}")
         except:
             pass # Se falhar em notificar, apenas loga no console
 
@@ -2656,11 +2662,13 @@ def enviar_resumo_analista(hora):
     # A rodada lê as conversas com a IA (se estiver ligada), monta o resumo e envia.
     # No sábado às 18h sai o resumo da semana, com a planilha. Os envios passam
     # pelas funções daqui para a trava de segurança continuar valendo.
+    # Vai para todos os responsáveis (config.RESPONSAVEIS); conta como enviado se chegou em um.
     analista_rodada.executar(
         hora,
-        f"{RESPONSIBLE_NUMBER}@s.whatsapp.net",
-        lambda destino, texto: send_whatsapp_message(destino, texto, manter_emojis=True),
-        send_whatsapp_document,
+        RESPONSAVEIS,
+        lambda _, texto: enviar_aos_responsaveis(texto, manter_emojis=True),
+        lambda _, conteudo, nome, legenda: _para_responsaveis(
+            lambda jid: send_whatsapp_document(jid, conteudo, nome, legenda)),
     )
 
 scheduler = BackgroundScheduler(daemon=True, timezone=FUSO_HORARIO)
@@ -3470,7 +3478,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
         print(f"🧠 [{clean_number}] Processando para IA...")
         
         # --- Checagem de Admin ---
-        if RESPONSIBLE_NUMBER and clean_number == RESPONSIBLE_NUMBER:
+        if clean_number in analista.numeros_responsaveis():
             if handle_responsible_command(user_message_content, clean_number):
                 return 
 
@@ -3553,7 +3561,7 @@ def process_message_logic(message_data_or_full_json, buffered_message_text=None)
                         f"📝 *Resumo:*\n{resumo}\n\n"
                         f"👉 Para reativar o bot: `ok {clean_number}`"
                     )
-                    send_whatsapp_message(f"{RESPONSIBLE_NUMBER}@s.whatsapp.net", msg_admin, delay_ms=1000)
+                    enviar_aos_responsaveis(msg_admin, delay_ms=1000)
             
             else:
 
@@ -3624,7 +3632,7 @@ if DB_OK:
     if not RESPONSIBLE_NUMBER:
         print("    AVISO: 'RESPONSIBLE_NUMBER' não configurado.")
     else:
-        print(f"    Intervenção Humana notificará: {RESPONSIBLE_NUMBER}")
+        print(f"    Intervenção Humana notificará: {RESPONSAVEIS}")
     print("=============================================")
     print("Servidor aguardando mensagens no webhook...")
 

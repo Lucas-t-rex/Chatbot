@@ -39,9 +39,14 @@ def variantes_numero(numero):
     return sorted(variantes)
 
 
+def numeros_responsaveis():
+    """Todos os responsáveis (config.RESPONSAVEIS), com e sem o 9."""
+    return sorted({v for n in config.RESPONSAVEIS for v in variantes_numero(n)})
+
+
 def _ignorados():
-    """Números que não são leads (o próprio dono/responsável)."""
-    return variantes_numero(config.RESPONSIBLE_NUMBER)
+    """Números que não são leads (os donos/responsáveis)."""
+    return numeros_responsaveis()
 
 
 # ---------------------------------------------------------------------------
@@ -85,9 +90,14 @@ def _media_simples(valores):
 
 def clientes_sem_resposta(agora=None, dias=7):
     """
-    Quem está esperando resposta AGORA (cliente falou por último há mais que o
-    limite, contando só o horário de atendimento). Olha os últimos 'dias' dias,
-    independente do período — quem ficou sem resposta ontem continua na lista.
+    Quem está esperando resposta AGORA. Vale só a conversa mais recente de cada
+    contato (uma conversa antiga sem resposta não conta se ele já voltou a falar)
+    e ela sai da lista quando a IA leu até a última mensagem e viu que a conversa
+    terminou (dados.aguarda_resposta = false).
+
+    'esperando_seg' é o tempo de relógio desde a última mensagem do cliente, a
+    mesma que aparece em 'ultima_msg'. Olha os últimos 'dias' dias, independente
+    do período — quem ficou sem resposta ontem continua na lista.
     """
     agora = agora or datetime.now(timezone.utc)
     excluir = _ignorados()
@@ -95,31 +105,45 @@ def clientes_sem_resposta(agora=None, dias=7):
     params = [agora - timedelta(days=dias)] + ([excluir] if excluir else [])
     linhas = db.todos(
         f"""
-        select s.telefone, s.aguardando_desde, s.nova,
-               coalesce(c.customer_name, c.sender_name) as nome,
-               (select m.text from mensagens m
-                 where m.telefone = s.telefone and m.origem = 'cliente'
-                 order by m.ts desc, m.id desc limit 1) as ultima_msg
-        from sessoes_atendimento s join contatos c on c.telefone = s.telefone
-        where s.aguardando_desde is not null and s.aguardando_desde >= %s {filtro_excluir}
+        select u.*, coalesce(c.customer_name, c.sender_name) as nome,
+               m.text as ultima_msg, m.ts as ultima_msg_ts,
+               a.analisado_ate, a.dados ->> 'aguarda_resposta' as aguarda_resposta
+        from (
+            select distinct on (s.telefone) s.telefone, s.inicio, s.fim, s.aguardando_desde, s.nova
+            from sessoes_atendimento s
+            where s.fim >= %s {filtro_excluir}
+            order by s.telefone, s.inicio desc
+        ) u
+        join contatos c on c.telefone = u.telefone
+        left join lateral (
+            select m.text, m.ts from mensagens m
+             where m.telefone = u.telefone and m.origem = 'cliente' and m.ts >= u.inicio
+             order by m.ts desc, m.id desc limit 1
+        ) m on true
+        left join analises_conversa a on a.telefone = u.telefone and a.sessao_inicio = u.inicio
+        where u.aguardando_desde is not null
         """,
         params,
     )
     limite = config.LIMITE_SEM_RESPOSTA_MIN * 60
     pendentes = []
     for l in linhas:
-        bruto, util = esperando_ha(l["aguardando_desde"], agora, HORARIO, TZ)
-        if util >= limite:
+        if (l["aguarda_resposta"] == "false" and l["analisado_ate"] is not None
+                and l["analisado_ate"] >= l["fim"]):
+            continue   # a IA viu que a conversa acabou (despedida, recado, "vou pensar"...)
+        _, util = esperando_ha(l["aguardando_desde"], agora, HORARIO, TZ)
+        desde_ultima = int((agora - (l["ultima_msg_ts"] or l["aguardando_desde"])).total_seconds())
+        if desde_ultima >= limite:
             pendentes.append({
                 "telefone": l["telefone"],
                 "nome": l["nome"] or "Sem nome",
                 "aguardando_desde": l["aguardando_desde"].astimezone(TZ).isoformat(),
-                "esperando_seg": bruto,
+                "esperando_seg": desde_ultima,
                 "esperando_util_seg": util,
                 "nova": l["nova"],
                 "ultima_msg": (l["ultima_msg"] or "")[:120],
             })
-    pendentes.sort(key=lambda p: p["esperando_util_seg"], reverse=True)
+    pendentes.sort(key=lambda p: p["esperando_seg"], reverse=True)
     return pendentes
 
 
@@ -215,7 +239,7 @@ def linhas_esperando(pendentes):
         etiqueta = "🆕 " if p["nova"] else ""
         linhas.append(
             f"• {etiqueta}{p['nome']} {_telefone_legivel(p['telefone'])} - "
-            f"há {formatar_duracao(p['esperando_util_seg'])}"
+            f"há {formatar_duracao(p['esperando_seg'])}"
             + (f': "{trecho}"' if trecho else "")
         )
     if len(pendentes) > config.MAX_SEM_RESPOSTA_NO_RESUMO:

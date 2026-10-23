@@ -4,6 +4,24 @@ import pytz
 
 load_dotenv()
 
+
+def _lista_de_numeros(*textos):
+    """
+    "5544999059174, 554498314311" -> ["554499059174", "554498314311"]. Celular com
+    13 dígitos perde o 9 (a Evolution aceita os dois) para o mesmo número não
+    aparecer duas vezes.
+    """
+    numeros = []
+    for texto in textos:
+        for parte in str(texto or "").split(","):
+            n = "".join(c for c in parte if c.isdigit())
+            if len(n) == 13 and n.startswith("55"):
+                n = n[:4] + n[5:]
+            if n and n not in numeros:
+                numeros.append(n)
+    return numeros
+
+
 class Config:
     # ==========================================================================
     # MODO DE OPERAÇÃO — a chave geral do sistema
@@ -24,9 +42,12 @@ class Config:
 
     FUSO_HORARIO = pytz.timezone('America/Sao_Paulo')
     CLIENT_NAME = "Brooklyn Academia"
-    # Quem recebe os resumos e avisos. Em teste: fly secrets set RESPONSIBLE_NUMBER=...
-    # Para voltar ao dono: fly secrets unset RESPONSIBLE_NUMBER (cai neste padrão).
-    RESPONSIBLE_NUMBER = os.environ.get("RESPONSIBLE_NUMBER", "554491216103")
+    # Quem recebe os resumos e avisos: o RESPONSIBLE_NUMBER (secret do Fly; aceita
+    # vários separados por vírgula; sem ele cai em "554491216103") MAIS os donos.
+    # Ninguém desta lista conta como lead.
+    DONOS = ["554499059174", "554498314311"]
+    RESPONSAVEIS = _lista_de_numeros(os.environ.get("RESPONSIBLE_NUMBER", "554491216103"), ",".join(DONOS))
+    RESPONSIBLE_NUMBER = RESPONSAVEIS[0]   # o principal (comandos "bot on/off" etc.)
     ADMIN_USER = "brooklyn"
     ADMIN_PASS = "brooklyn2025"
 

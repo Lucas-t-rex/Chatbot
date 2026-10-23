@@ -423,6 +423,8 @@ def validar_resposta(bruto, metodo, notas_tempo):
         "momentos": _momentos(bruto.get("momentos"), conhecidas) if eh_lead else [],
         "como_poderia_ser": _texto(bruto.get("como_poderia_ser"), LIMITES_TEXTO["como_poderia_ser"]) if eh_lead else None,
         "trecho_ligacao": _texto(bruto.get("trecho_ligacao"), LIMITES_TEXTO["trecho_ligacao"]) if eh_lead else None,
+        # false = a conversa acabou: sai de "Esperando resposta agora" (vale para qualquer contato)
+        "aguarda_resposta": _booleano(bruto.get("aguarda_resposta")),
         "metodo_fonte": metodo["fonte"],
     }
     return campos, dados

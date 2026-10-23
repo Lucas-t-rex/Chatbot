@@ -23,6 +23,7 @@ Você é um COACH de vendas gentil, não um fiscal. O objetivo é ajudar a equip
 - "perdido": disse que não vai, escolheu outro lugar, ou sumiu depois de objeção sem resposta da equipe. Preencha "motivo_perda": preco | horario | distancia | sumiu | outro.
 - "em_andamento": a conversa segue viva (cliente aguardando, ou combinando detalhes) ou terminou sem decisão clara.
 - "nao_lead": veja acima.
+"aguarda_resposta" = true quando a ÚLTIMA fala do contato ainda espera uma resposta da equipe (pergunta, pedido, dúvida, cliente chamando de novo). Marque false quando a conversa ACABOU: a equipe falou por último, ou o contato só se despediu, agradeceu, confirmou ("ok", "combinado", "Deus abençoe", "valeu"), deixou um recado que não pede retorno, disse que vai pensar/avisar, ou foi conversa pessoal já resolvida. Na dúvida, true.
 "precisa_atencao" = true quando a equipe deveria agir HOJE (cliente esperando, pediu algo e não teve retorno, está "comprador" ou "comparador" e sem data marcada). Explique em "motivo_atencao" em uma frase curta.
 
 === TERMÔMETRO DO LEAD ("temperatura", só para leads) ===
@@ -95,6 +96,7 @@ Responda SOMENTE com um objeto JSON, sem texto antes ou depois, neste formato (n
   "detalhe_desfecho": "uma frase: o que aconteceu / o que falta",
   "motivo_perda": "preco | horario | distancia | sumiu | outro | null",
   "temperatura": "tranquilo | incomodado | pesquisador | comparador | comprador | null",
+  "aguarda_resposta": true,
   "precisa_atencao": false,
   "motivo_atencao": "frase curta ou null",
   "notas": {
@@ -140,6 +142,7 @@ Saída:
   "desfecho": "em_andamento",
   "detalhe_desfecho": "Pediu aula teste, mas ficou sem dia e hora e disse que vai falar com o marido.",
   "motivo_perda": null, "temperatura": "comparador",
+  "aguarda_resposta": false,
   "precisa_atencao": true, "motivo_atencao": "Quer aula teste e ficou sem data marcada.",
   "notas": {
     "cordialidade": 6, "contexto": 8, "descoberta": 2, "qualificacao": 2, "clareza": 8,

@@ -128,6 +128,11 @@ def segundos_uteis(inicio, fim, horario, tz):
     return int(total)
 
 
+def _encerra(m):
+    """Mensagem de texto do cliente que só agradece/se despede (ver eh_encerramento)."""
+    return _campo(m, "tipo") == "texto" and eh_encerramento(_campo(m, "text"))
+
+
 def _media(valores):
     return int(round(sum(valores) / len(valores))) if valores else None
 
@@ -156,8 +161,7 @@ def calcular_sessao(mensagens, *, nova, horario, tz):
         origem = _campo(m, "origem")
         if origem == "cliente":
             # "obrigado", "ok", "👍" sozinhos não esperam resposta: não abrem bloco de espera
-            encerramento = _campo(m, "tipo") == "texto" and eh_encerramento(_campo(m, "text"))
-            if bloco_inicio is None and not encerramento:
+            if bloco_inicio is None and not _encerra(m):
                 bloco_inicio = _campo(m, "ts")
         elif origem in EQUIPE:
             quem_respondeu.add(origem)
@@ -165,6 +169,11 @@ def calcular_sessao(mensagens, *, nova, horario, tz):
                 brutos.append(int((_campo(m, "ts") - bloco_inicio).total_seconds()))
                 uteis.append(segundos_uteis(bloco_inicio, _campo(m, "ts"), horario, tz))
                 bloco_inicio = None
+
+    # Ficou sem resposta mas o cliente se despediu por último ("ok, obrigado", "👍"):
+    # a conversa acabou, ele não está mais esperando.
+    if bloco_inicio is not None and _campo(ultima, "origem") == "cliente" and _encerra(ultima):
+        bloco_inicio = None
 
     if quem_respondeu == {"atendente", "bot"}:
         respondida_por = "ambos"

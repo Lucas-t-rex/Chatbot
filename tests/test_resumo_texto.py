@@ -30,7 +30,7 @@ def test_resumo_completo():
 
 def test_resumo_lista_quem_esta_esperando():
     pendentes = [{
-        "telefone": "5544991586345", "nome": "Maria", "esperando_util_seg": 2400,
+        "telefone": "5544991586345", "nome": "Maria", "esperando_seg": 2400, "esperando_util_seg": 600,
         "nova": True, "ultima_msg": "Quanto custa a mensalidade?",
     }]
     texto = texto_resumo(_resumo(sem_resposta=pendentes), "manhã")

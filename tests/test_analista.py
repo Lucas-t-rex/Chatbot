@@ -226,3 +226,29 @@ def test_pergunta_depois_do_obrigado_continua_esperando():
         msg(5, 10, 3, "cliente", "Obrigado, e tem aula experimental?"),
     ])
     assert s["aguardando_desde"] == ts(5, 10, 3)
+
+
+def test_cliente_que_se_despede_depois_de_ficar_sem_resposta_nao_esta_esperando():
+    s = calcular([
+        msg(5, 10, 0, "cliente", "Vocês abrem sábado?"),
+        msg(5, 14, 0, "cliente", "Ok, obrigado"),
+    ])
+    assert s["aguardando_desde"] is None
+
+
+def test_despedida_por_audio_continua_para_a_ia_decidir():
+    s = calcular([
+        msg(5, 10, 0, "cliente", "Vocês abrem sábado?"),
+        msg(5, 14, 0, "cliente", "[Áudio do cliente]: valeu", tipo="audio"),
+    ])
+    assert s["aguardando_desde"] == ts(5, 10, 0)
+
+
+# ---------------------------------------------------------------------------
+# Responsáveis (quem recebe os resumos)
+# ---------------------------------------------------------------------------
+def test_lista_de_numeros_junta_e_tira_repetidos():
+    from app.core.config import _lista_de_numeros
+    assert _lista_de_numeros("5544999059174, 554491216103", "554499059174,554498314311") == [
+        "554499059174", "554491216103", "554498314311"]
+    assert _lista_de_numeros("", None) == []

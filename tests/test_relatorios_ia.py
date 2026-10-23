@@ -81,7 +81,7 @@ def test_diario_completo():
     agg = agg_base(
         anterior=dict(ONTEM),
         sintese={"destaque": "A Maria foi acolhida e saiu com aula marcada.", "dica": "Convide com dia e hora."},
-        sem_resposta=[{"telefone": "5544977772222", "nome": "Carla", "esperando_util_seg": 2400,
+        sem_resposta=[{"telefone": "5544977772222", "nome": "Carla", "esperando_seg": 2400, "esperando_util_seg": 2400,
                        "nova": True, "ultima_msg": "Tem vaga à noite?"}],
     )
     texto = rel.texto_diario(agg, "dia 20/10 (00h às 22h)")
@@ -468,7 +468,7 @@ def test_agregar_conta_tudo_certo(monkeypatch):
         _analise_db("D", 13, "nao_lead", eh_lead=False, aplicadas=["S01"]),
     ]
     _banco(monkeypatch, sessoes, analises, sem_resposta=[
-        {"telefone": "C", "nome": "C", "esperando_util_seg": 1200, "nova": False, "ultima_msg": "oi"}])
+        {"telefone": "C", "nome": "C", "esperando_seg": 1200, "esperando_util_seg": 1200, "nova": False, "ultima_msg": "oi"}])
 
     agg, _ = rel.agregar(ts(12, 0), ts(17, 18), agora=ts(17, 18))
     assert (agg["sucesso"], agg["perdido"], agg["em_andamento"], agg["nao_lead"]) == (1, 1, 1, 1)
