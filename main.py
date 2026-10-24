@@ -1,6 +1,6 @@
 
 import google.generativeai as genai
-from app.services.evolution_service import evolution_api
+from app.services.evolution_service import evolution_api, evento_da_instancia
 import requests
 import os
 import pytz 
@@ -777,56 +777,6 @@ def gerar_msg_followup_ia(contact_id, status_alvo, estagio, nome_cliente):
         print(f"⚠️ Falha na geração IA Followup: {e}")
         return None
     
-def is_evolution_online():
-    """
-    Testa se a Evolution API está respondendo e se o WhatsApp 'chatbot' está conectado.
-    """
-    try:
-        base_url = EVOLUTION_API_URL
-        if base_url.endswith('/'): 
-            base_url = base_url[:-1]
-            
-        url = f"{base_url}/instance/connectionState/chatbot"
-        headers = {"apikey": EVOLUTION_API_KEY}
-        
-        # Timeout de 5s para não travar o bot se o servidor da Evolution estiver totalmente fora do ar
-        response = requests.get(url, headers=headers, timeout=5)
-        
-        # Se retornou 200 OK e a palavra 'open' (que na Evolution indica WhatsApp conectado)
-        if response.status_code == 200 and "open" in response.text.lower():
-            return True
-        else:
-            return False
-    except Exception as e:
-        # Se der erro de conexão (Servidor desligado, fly.io caiu, etc)
-        return False
-
-def is_webhook_configurado():
-    """
-    Verifica se o webhook está ATIVO e com URL configurada na Evolution API.
-    Detecta quando o usuário remove o webhook pela UI.
-    """
-    try:
-        base_url = EVOLUTION_API_URL
-        if base_url.endswith('/'):
-            base_url = base_url[:-1]
-
-        url = f"{base_url}/webhook/find/chatbot"
-        headers = {"apikey": EVOLUTION_API_KEY}
-
-        response = requests.get(url, headers=headers, timeout=5)
-
-        if response.status_code == 200:
-            data = response.json()
-            # Suporta Evolution API v1 e v2 (estruturas diferentes)
-            webhook_info = data.get('webhook', data)
-            enabled = webhook_info.get('enabled', False)
-            url_conf = webhook_info.get('url', '')
-            return bool(enabled and url_conf)
-        return False
-    except:
-        return False
-    
 def subtrair_tempo_util(referencia, minutos):
     """Cronômetro inteligente: subtrai o tempo pausando durante a madrugada."""
     resultado = referencia
@@ -850,8 +800,8 @@ def verificar_followup_automatico():
     try:
         # 1. VERIFICA OS DOIS STATUS (O comando 'bot off' E a conexão da Evolution API)
         bot_ativo = config_repo.bot_ativo()
-        evolution_online = is_evolution_online()
-        webhook_ativo = is_webhook_configurado() 
+        evolution_online = evolution_api.is_evolution_online()
+        webhook_ativo = evolution_api.is_webhook_configurado() 
 
         regras = [
             {"status": "fracasso", "stage_atual": 0, "prox_stage": 99, "time": TEMPO_FOLLOWUP_FRACASSO, "fallback": "Se mudar de ideia, é só chamar!"},
@@ -963,12 +913,12 @@ def verificar_lembretes_agendados():
         print(f"⚠️ [Lembretes] Erro ao verificar status do bot: {e}")
 
     # ── TRAVA 3: EVOLUTION OFFLINE ──────────────────────────────────────────
-    if not is_evolution_online():
+    if not evolution_api.is_evolution_online():
         print("⚠️ [Lembretes] Evolution API offline. Nenhum lembrete enviado.")
         return
 
     # ── TRAVA 4: WEBHOOK REMOVIDO DA UI ────────────────────────────────────
-    if not is_webhook_configurado():
+    if not evolution_api.is_webhook_configurado():
         print("⚠️ [Lembretes] Webhook não configurado. Nenhum lembrete enviado.")
         return
 
@@ -1121,7 +1071,7 @@ def verificar_followup_pos_agendamento():
     if 0 <= agora_check.hour < 5:
         return
         
-    if not is_evolution_online():
+    if not evolution_api.is_evolution_online():
         return
 
     try:
@@ -2586,25 +2536,50 @@ def _envio_permitido(number):
     print(f"🔇 [Modo analista] Envio bloqueado para {destino}: o bot não fala com clientes neste modo.")
     return False
 
-def send_whatsapp_message(number, text_message, delay_ms=3000, manter_emojis=False):
+def send_whatsapp_message(number, text_message, delay_ms=3000, manter_emojis=False, instance=None):
     if not _envio_permitido(number):
         return False
-    return evolution_api.send_whatsapp_message(number, text_message, delay_ms, manter_emojis=manter_emojis)
+    return evolution_api.send_whatsapp_message(number, text_message, delay_ms,
+                                               manter_emojis=manter_emojis, instance=instance)
 
-def _para_responsaveis(enviar):
-    """Roda enviar(jid) para cada responsável (config.RESPONSAVEIS). True se chegou em pelo menos um."""
-    resultados = [bool(enviar(f"{numero}@s.whatsapp.net")) for numero in RESPONSAVEIS]
+def _para_responsaveis(enviar, instancia=None):
+    """
+    Roda enviar(jid) para cada responsável (config.RESPONSAVEIS), menos o próprio número
+    da instância que está enviando (não faz sentido mandar para si mesmo).
+    True se chegou em pelo menos um.
+    """
+    proprio = set()
+    if instancia:
+        numero = evolution_api.numero_da_instancia(instancia)
+        proprio = set(analista.variantes_numero(numero)) if numero else set()
+    resultados = [bool(enviar(f"{numero}@s.whatsapp.net")) for numero in RESPONSAVEIS
+                  if numero not in proprio]
     return any(resultados)
 
 def enviar_aos_responsaveis(texto, **kwargs):
-    """Mesmo aviso para todos os responsáveis (dono, dona, gestor)."""
-    return _para_responsaveis(lambda jid: send_whatsapp_message(jid, texto, **kwargs))
+    """
+    Mesmo aviso para todos os responsáveis (dono, dona, gestor).
+    Sai SOMENTE pela instância de relatórios; se ela estiver fora do ar, não envia.
+    """
+    instancia = evolution_api.instancia_para_relatorios()
+    if not instancia:
+        return False
+    return _para_responsaveis(lambda jid: send_whatsapp_message(jid, texto, instance=instancia, **kwargs),
+                              instancia)
 
-def send_whatsapp_document(number, conteudo, nome_arquivo, legenda=""):
+def _enviar_planilha_aos_responsaveis(conteudo, nome, legenda):
+    """Envia o arquivo aos responsáveis, só pela instância de relatórios."""
+    instancia = evolution_api.instancia_para_relatorios()
+    if not instancia:
+        return False
+    return _para_responsaveis(
+        lambda jid: send_whatsapp_document(jid, conteudo, nome, legenda, instance=instancia), instancia)
+
+def send_whatsapp_document(number, conteudo, nome_arquivo, legenda="", instance=None):
     """Envia um arquivo (ex.: planilha). Passa pela mesma trava de segurança do texto."""
     if not _envio_permitido(number):
         return False
-    return evolution_api.send_whatsapp_document(number, conteudo, nome_arquivo, legenda)
+    return evolution_api.send_whatsapp_document(number, conteudo, nome_arquivo, legenda, instance=instance)
 
 def enviar_simulacao_digitacao(number):
     if not _envio_permitido(number):
@@ -2663,12 +2638,12 @@ def enviar_resumo_analista(hora):
     # No sábado às 18h sai o resumo da semana, com a planilha. Os envios passam
     # pelas funções daqui para a trava de segurança continuar valendo.
     # Vai para todos os responsáveis (config.RESPONSAVEIS); conta como enviado se chegou em um.
+    # Texto e planilha saem pela instância de relatórios (com fallback para a principal).
     analista_rodada.executar(
         hora,
         RESPONSAVEIS,
         lambda _, texto: enviar_aos_responsaveis(texto, manter_emojis=True),
-        lambda _, conteudo, nome, legenda: _para_responsaveis(
-            lambda jid: send_whatsapp_document(jid, conteudo, nome, legenda)),
+        lambda _, conteudo, nome, legenda: _enviar_planilha_aos_responsaveis(conteudo, nome, legenda),
     )
 
 scheduler = BackgroundScheduler(daemon=True, timezone=FUSO_HORARIO)
@@ -2760,6 +2735,11 @@ def receive_webhook():
     event_type = data.get('event')
     if event_type and event_type != 'messages.upsert':
         return jsonify({"status": "ignored_event_type"}), 200
+
+    # Só a instância principal alimenta o bot/analista. Se a de relatórios (ou outra)
+    # algum dia mandar webhook, o eco do número dela não pode virar "atendente".
+    if not evento_da_instancia(data, config.EVOLUTION_INSTANCE):
+        return jsonify({"status": "ignored_other_instance"}), 200
 
     try:
         message_data = data.get('data', {}) 
@@ -3133,6 +3113,10 @@ def handle_captura_auditor(message_data, full_json=None):
             clean_number = incoming_jid.split('@')[0]
 
         if not clean_number:
+            return
+
+        # Dono/gestor falando com o número analisado não é lead nem atendimento.
+        if clean_number in analista.numeros_responsaveis():
             return
 
         message = message_data.get('message', {})
@@ -3823,6 +3807,29 @@ def api_definir_modo():
         return jsonify({"erro": str(e)}), 400
     except Exception as e:
         return jsonify({"erro": str(e)}), 500
+
+
+# ------------------------------------------------------------------------------
+# WhatsApp: estado das instâncias e QR de pareamento da instância de relatórios
+# ------------------------------------------------------------------------------
+@app.route('/api/whatsapp/status', methods=['GET'])
+@requer_token
+def api_whatsapp_status():
+    return jsonify({
+        "chatbot": {"instancia": config.EVOLUTION_INSTANCE,
+                    "estado": evolution_api.get_connection_state()},
+        "relatorio": {"instancia": config.EVOLUTION_INSTANCE_RELATORIO,
+                      "estado": evolution_api.get_connection_state(config.EVOLUTION_INSTANCE_RELATORIO)},
+    }), 200
+
+
+@app.route('/api/whatsapp/qrcode/relatorio', methods=['GET'])
+@requer_token
+def api_whatsapp_qrcode_relatorio():
+    dados = evolution_api.obter_qrcode(config.EVOLUTION_INSTANCE_RELATORIO)
+    if not dados:
+        return jsonify({"erro": "Não foi possível obter o QR code. A instância existe?"}), 502
+    return jsonify(dados), 200
 
 
 # ------------------------------------------------------------------------------

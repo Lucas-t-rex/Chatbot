@@ -57,6 +57,10 @@ class Config:
 
     EVOLUTION_API_URL = os.environ.get("EVOLUTION_API_URL")
     EVOLUTION_API_KEY = os.environ.get("EVOLUTION_API_KEY", "1234")
+    # Instância que escuta/grava as conversas e atende clientes (não renomear).
+    EVOLUTION_INSTANCE = os.environ.get("EVOLUTION_INSTANCE", "chatbot")
+    # Instância só de envio dos relatórios (sem webhook). Sem ela conectada, usa a principal.
+    EVOLUTION_INSTANCE_RELATORIO = os.environ.get("EVOLUTION_INSTANCE_RELATORIO", "relatorio")
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
     MODEL_NAME = "gemini-3-flash-preview"
     # Por onde o bot chama o Gemini na transcrição de áudio: "gemini" (AI Studio, créditos

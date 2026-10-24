@@ -3,6 +3,7 @@ import requests
 import re
 import logging
 import os
+import secrets
 from app.core.config import config
 
 log = logging.getLogger(__name__)
@@ -11,6 +12,14 @@ BOT_WEBHOOK_URL = os.environ.get(
     "BOT_WEBHOOK_URL",
     "https://chatbot-python-lucas.fly.dev/webhook"
 )
+
+def evento_da_instancia(data, instancia_esperada) -> bool:
+    """True se o evento do webhook veio da instância esperada (ou se o payload não informa a instância)."""
+    instancia = (data or {}).get('instance')
+    if isinstance(instancia, dict):
+        instancia = instancia.get('instanceName') or instancia.get('name')
+    return not instancia or instancia == instancia_esperada
+
 
 class EvolutionService:
     _instance = None
@@ -38,9 +47,13 @@ class EvolutionService:
         url = config.EVOLUTION_API_URL or ""
         return url[:-1] if url.endswith('/') else url
 
-    def is_evolution_online(self) -> bool:
+    def _inst(self, instance=None) -> str:
+        """Nome da instância: a informada ou a padrão (config.EVOLUTION_INSTANCE)."""
+        return instance or config.EVOLUTION_INSTANCE
+
+    def is_evolution_online(self, instance=None) -> bool:
         try:
-            url = f"{self.base_url}/instance/connectionState/chatbot"
+            url = f"{self.base_url}/instance/connectionState/{self._inst(instance)}"
             response = self._session.get(url, timeout=5)
             if response.status_code == 200 and "open" in response.text.lower():
                 return True
@@ -48,9 +61,9 @@ class EvolutionService:
         except Exception:
             return False
 
-    def is_webhook_configurado(self) -> bool:
+    def is_webhook_configurado(self, instance=None) -> bool:
         try:
-            url = f"{self.base_url}/webhook/find/chatbot"
+            url = f"{self.base_url}/webhook/find/{self._inst(instance)}"
             response = self._session.get(url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
@@ -62,10 +75,10 @@ class EvolutionService:
         except Exception:
             return False
 
-    def configurar_webhook(self) -> bool:
+    def configurar_webhook(self, instance=None) -> bool:
         """Registra/atualiza o webhook na Evolution API. Chamado no boot e periodicamente."""
         try:
-            url = f"{self.base_url}/webhook/set/chatbot"
+            url = f"{self.base_url}/webhook/set/{self._inst(instance)}"
             payload = {
                 "url": BOT_WEBHOOK_URL,
                 "webhook_by_events": False,
@@ -90,10 +103,10 @@ class EvolutionService:
             log.warning("⚠️ [Webhook] Não encontrado ou desativado. Tentando registrar...")
             self.configurar_webhook()
 
-    def get_connection_state(self) -> str:
+    def get_connection_state(self, instance=None) -> str:
         """Retorna o estado atual da conexão WhatsApp: 'open', 'connecting', 'close' ou 'unknown'."""
         try:
-            url = f"{self.base_url}/instance/connectionState/chatbot"
+            url = f"{self.base_url}/instance/connectionState/{self._inst(instance)}"
             response = self._session.get(url, timeout=5)
             if response.status_code == 200:
                 data = response.json()
@@ -108,14 +121,74 @@ class EvolutionService:
         except Exception:
             return "unknown"
 
-    def tentar_reconectar(self) -> bool:
+    def esta_conectada(self, instance=None) -> bool:
+        """True se a instância está com o WhatsApp vinculado (estado 'open')."""
+        return self.get_connection_state(instance) == "open"
+
+    def instancia_para_relatorios(self):
+        """
+        Instância que envia os relatórios: só a de relatórios, e só se estiver 'open'.
+        Sem fallback: a principal é o número das atendentes e não pode receber/mandar
+        relatório. Devolve None se não houver instância pronta (quem chama não envia).
+        """
+        rel = config.EVOLUTION_INSTANCE_RELATORIO
+        if rel and rel != config.EVOLUTION_INSTANCE and self.esta_conectada(rel):
+            return rel
+        log.error(f"❌ [Relatórios] Instância '{rel}' não está conectada; relatório NÃO enviado "
+                  f"(não usamos '{config.EVOLUTION_INSTANCE}' como alternativa).")
+        return None
+
+    def numero_da_instancia(self, instance=None) -> str:
+        """Número (só dígitos) vinculado à instância, ou '' se não conseguir descobrir."""
+        try:
+            nome = self._inst(instance)
+            response = self._session.get(f"{self.base_url}/instance/fetchInstances",
+                                         params={"instanceName": nome}, timeout=10)
+            if response.status_code != 200:
+                return ""
+            for item in response.json():
+                dados = item.get("instance", item)
+                if dados.get("instanceName") == nome:
+                    return re.sub(r"\D", "", str(dados.get("owner") or "").split("@")[0])
+        except Exception:
+            pass
+        return ""
+
+    def criar_instancia(self, nome: str) -> bool:
+        """Cria uma instância sem QR code e sem webhook (ex.: a de relatórios)."""
+        try:
+            # Token próprio: sem ele a Evolution v1.8.7 responde "Token already exists".
+            payload = {"instanceName": nome, "token": secrets.token_hex(16).upper(),
+                       "qrcode": False, "integration": "WHATSAPP-BAILEYS"}
+            response = self._session.post(f"{self.base_url}/instance/create", json=payload, timeout=15)
+            if response.status_code in [200, 201]:
+                log.info(f"✅ [Instância] '{nome}' criada.")
+                return True
+            log.error(f"❌ [Instância] Falha ao criar '{nome}'. Status: {response.status_code}")
+            return False
+        except Exception as e:
+            log.error(f"❌ [Instância] Erro de conexão ao criar '{nome}': {e}")
+            return False
+
+    def obter_qrcode(self, instance=None) -> dict:
+        """Pede o QR code de pareamento. Devolve o JSON da Evolution ({} se falhar)."""
+        try:
+            url = f"{self.base_url}/instance/connect/{self._inst(instance)}"
+            response = self._session.get(url, timeout=15)
+            if response.status_code in [200, 201]:
+                return response.json()
+            return {}
+        except Exception:
+            return {}
+
+    def tentar_reconectar(self, instance=None) -> bool:
         """
         Tenta reconectar a instância WhatsApp quando o estado não é 'open'.
         Chama o endpoint de connect/restart da Evolution API.
         Retorna True se a chamada foi aceita.
         """
         try:
-            url = f"{self.base_url}/instance/connect/chatbot"
+            url = f"{self.base_url}/instance/connect/{self._inst(instance)}"
             response = self._session.get(url, timeout=10)
             if response.status_code in [200, 201]:
                 log.info("🔄 [Reconexão] Solicitação de reconexão enviada com sucesso.")
@@ -134,6 +207,17 @@ class EvolutionService:
         Isso evita o problema de mensagens presas em 'Aguardando mensagem'
         após um restart da Evolution API.
         """
+        # A instância de relatórios só tem o estado registrado em log: enquanto
+        # nunca foi vinculada, não faz sentido reconectar (geraria QR codes à toa).
+        rel = config.EVOLUTION_INSTANCE_RELATORIO
+        if rel and rel != config.EVOLUTION_INSTANCE:
+            estado_rel = self.get_connection_state(rel)
+            if estado_rel == "open":
+                log.info(f"[Saúde] Instância de relatórios '{rel}' conectada.")
+            else:
+                log.warning(f"⚠️ [Saúde] Instância de relatórios '{rel}' não está 'open' "
+                            f"(estado: '{estado_rel}'). Os relatórios saem pela '{config.EVOLUTION_INSTANCE}'.")
+
         state = self.get_connection_state()
         if state == "open":
             return  # Tudo certo, nada a fazer
@@ -146,7 +230,7 @@ class EvolutionService:
         else:
             log.error("❌ [Saúde] Reconexão falhou. Será tentado novamente no próximo ciclo.")
 
-    def enviar_simulacao_digitacao(self, number: str) -> bool:
+    def enviar_simulacao_digitacao(self, number: str, instance=None) -> bool:
         clean_number = number.split('@')[0]
         payload = {
             "number": clean_number,
@@ -155,7 +239,7 @@ class EvolutionService:
                 "delay": 12000
             }
         }
-        url = f"{self.base_url}/chat/sendPresence/chatbot"
+        url = f"{self.base_url}/chat/sendPresence/{self._inst(instance)}"
         try:
             response = self._session.post(url, json=payload, timeout=20)
             if response.status_code in [200, 201]:
@@ -168,7 +252,7 @@ class EvolutionService:
             return False
 
     def send_whatsapp_message(self, number: str, text_message: str, delay_ms: int = 3000,
-                              manter_emojis: bool = False) -> bool:
+                              manter_emojis: bool = False, instance=None) -> bool:
         """
         manter_emojis=False (padr\u00e3o): o bot fala com clientes sem emoji.
         manter_emojis=True: usado nos relat\u00f3rios do dono, que usam \ud83d\udcca \u26a0\ufe0f \u2705 de prop\u00f3sito.
@@ -209,7 +293,7 @@ class EvolutionService:
             }
         }
 
-        url = f"{self.base_url}/message/sendText/chatbot"
+        url = f"{self.base_url}/message/sendText/{self._inst(instance)}"
         try:
             response = self._session.post(url, json=payload, timeout=40)
             if response.status_code < 400:
@@ -230,7 +314,7 @@ class EvolutionService:
             log.error(f"❌ Erro de CONEXÃO ao enviar mensagem para {clean_number}: {e}")
             return False
 
-    def send_whatsapp_document(self, number: str, conteudo: bytes, nome_arquivo: str, legenda: str = "") -> bool:
+    def send_whatsapp_document(self, number: str, conteudo: bytes, nome_arquivo: str, legenda: str = "", instance=None) -> bool:
         """Envia um arquivo (ex.: a planilha .xlsx) como documento do WhatsApp."""
         clean_number = number.split('@')[0]
         payload = {
@@ -242,7 +326,7 @@ class EvolutionService:
                 "media": base64.b64encode(conteudo).decode("ascii"),
             },
         }
-        url = f"{self.base_url}/message/sendMedia/chatbot"
+        url = f"{self.base_url}/message/sendMedia/{self._inst(instance)}"
         try:
             response = self._session.post(url, json=payload, timeout=90)
             if response.status_code < 400:
@@ -260,7 +344,7 @@ class EvolutionService:
             log.error(f"❌ Erro de CONEXÃO ao enviar documento para {clean_number}: {e}")
             return False
 
-    def send_whatsapp_contact(self, number: str, contact_name: str, contact_number: str) -> bool:
+    def send_whatsapp_contact(self, number: str, contact_name: str, contact_number: str, instance=None) -> bool:
         clean_number = number.split('@')[0]
         payload = {
             "number": clean_number,
@@ -272,7 +356,7 @@ class EvolutionService:
                 }
             ]
         }
-        url = f"{self.base_url}/message/sendContact/chatbot"
+        url = f"{self.base_url}/message/sendContact/{self._inst(instance)}"
         try:
             response = self._session.post(url, json=payload, timeout=20)
             if response.status_code < 400:
