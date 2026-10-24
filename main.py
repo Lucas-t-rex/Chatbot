@@ -2544,16 +2544,14 @@ def send_whatsapp_message(number, text_message, delay_ms=3000, manter_emojis=Fal
 
 def _para_responsaveis(enviar, instancia=None):
     """
-    Roda enviar(jid) para cada responsável (config.RESPONSAVEIS), menos o próprio número
-    da instância que está enviando (não faz sentido mandar para si mesmo).
+    Roda enviar(jid) para cada responsável (config.RESPONSAVEIS), menos o número da
+    instância principal ('chatbot'), que é o das atendentes e nunca recebe relatório.
     True se chegou em pelo menos um.
     """
-    proprio = set()
-    if instancia:
-        numero = evolution_api.numero_da_instancia(instancia)
-        proprio = set(analista.variantes_numero(numero)) if numero else set()
+    numero_chatbot = evolution_api.numero_da_instancia(config.EVOLUTION_INSTANCE)
+    bloqueados = set(analista.variantes_numero(numero_chatbot)) if numero_chatbot else set()
     resultados = [bool(enviar(f"{numero}@s.whatsapp.net")) for numero in RESPONSAVEIS
-                  if numero not in proprio]
+                  if numero not in bloqueados]
     return any(resultados)
 
 def enviar_aos_responsaveis(texto, **kwargs):
